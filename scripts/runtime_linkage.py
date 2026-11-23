@@ -68,9 +68,20 @@ def inspect(image):
             'sha256': hashlib.sha256(image.read_bytes()).hexdigest()}
 
 
-def verify(app, deployment='14.0'):
+def version_triple(text):
+    parts = tuple(int(part) for part in text.split('.'))
+    return parts + (0,) * (3 - len(parts))
+
+
+def verify(app, deployment):
+    """Check every code image and the property list against the locked minimum macOS."""
     app = Path(app).resolve()
     info = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
+    declared = info.get('LSMinimumSystemVersion')
+    if not isinstance(declared, str) or re.fullmatch(r'\d+(\.\d+){0,2}', declared) is None \
+            or version_triple(declared) != version_triple(deployment):
+        raise ValueError(f'Contents/Info.plist LSMinimumSystemVersion is {declared!r}; '
+                         f'the locked minimum macOS is {deployment}')
     executable = info['CFBundleExecutable']
     if executable != 'TextTank':
         raise ValueError('Unexpected application executable identity')
@@ -101,10 +112,9 @@ def verify(app, deployment='14.0'):
         raise ValueError(f'Unclassified/missing code images: extra={sorted(inventory-set(expected))}, missing={sorted(set(expected)-inventory)}')
     images = {name: {**inspect(app / name), 'role': role} for name, role in sorted(expected.items())}
     for name, value in images.items():
-        minimum = tuple(int(x) for x in value['minimum_macos'].split('.'))
-        required = tuple(int(x) for x in deployment.split('.'))
-        if minimum + (0,) * (3-len(minimum)) != required + (0,) * (3-len(required)):
-            raise ValueError(f'Actual minimum macOS differs from deployment {deployment}: {name}')
+        if version_triple(value['minimum_macos']) != version_triple(deployment):
+            raise ValueError(f'{name} is built for minimum macOS {value["minimum_macos"]}; '
+                             f'the locked minimum macOS is {deployment}')
         role = value['role']
         identity = (f'@rpath/{role}.framework/Versions/A/{role}' if role in FRAMEWORKS else
                     f'@rpath/{executable}.debug.dylib' if role in ('debug-application', 'preview-auxiliary') else None)

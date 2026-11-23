@@ -156,7 +156,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         document.externalFile.check(prioritized: true)
         metadataChanged()
         validateToolbar()
-        if focus { window?.makeFirstResponder(presentation.activeEditor) }
+        if focus { window?.makeFirstResponder(presentation.keyboardFocusView) }
     }
     func focusGroup(_ slot: GroupSlot) {
         guard !isMutatingGroups, !tabCommands.isBusy, window?.attachedSheet == nil else { return }
@@ -244,7 +244,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         syncGroups()
         if let active {
             activate(active, focus: false, explicit: false)
-            window?.makeFirstResponder(active.lastEditor ?? active.primaryEditor)
+            window?.makeFirstResponder(active.restoredKeyboardFocusView)
         } else {
             window?.makeFirstResponder(nil)
         }
@@ -401,13 +401,13 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
             groupContainer.configure(model.layout, surfaces: model.groups.compactMap { groupSurfaces[$0.slot] })
         }
         isMutatingGroups = false
-        if changedLayout { groupCommands.refreshViewMenu() }
+        if changedLayout { groupCommands.refreshMenu() }
         if let active {
             activate(active, focus: false, explicit: false, preserveSelection: true)
             if active === originalActive, let responder = originalResponder {
                 window?.makeFirstResponder(responder)
             } else {
-                window?.makeFirstResponder(active.activeEditor)
+                window?.makeFirstResponder(active.keyboardFocusView)
             }
         } else {
             syncGroups()
@@ -630,7 +630,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
             if chosen == originalActive, let originalResponder {
                 _ = window?.makeFirstResponder(originalResponder)
             } else {
-                _ = window?.makeFirstResponder(p.activeEditor)
+                _ = window?.makeFirstResponder(p.keyboardFocusView)
             }
         } else {
             syncGroups()

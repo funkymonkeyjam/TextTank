@@ -8,12 +8,14 @@ import sys
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'scripts'))
+from build_config import load_identity
 manifest = json.loads(Path(os.environ['TEXTTANK_ARTIFACT_MANIFEST']).read_text())
 evidence = ROOT / 'build/tests' / ('concurrency-guard-' + uuid.uuid4().hex)
 (evidence / 'Tests').mkdir(parents=True)
 guard = ROOT / 'scripts/compile_diagnostics.py'
 base = ['xcrun', '--sdk', 'macosx', 'swiftc', '-swift-version', '5', '-strict-concurrency=complete',
-        '-warnings-as-errors', '-target', 'arm64-apple-macos14.0', '-sdk', manifest['toolchain']['sdk'],
+        '-warnings-as-errors', '-target', 'arm64-apple-macos' + load_identity(ROOT)['deploymentTarget'], '-sdk', manifest['toolchain']['sdk'],
         '-module-cache-path', str(ROOT / 'build/ModuleCache'), '-typecheck']
 checks = 0
 
@@ -51,11 +53,7 @@ for name, actor in [('good', '@MainActor '), ('bad', '')]:
         (evidence / 'bad-log-guard.log').write_bytes(logged.stdout + logged.stderr)
         check(logged.returncode != 0, 'canonical saved-log gate rejects the same real emitted diagnostic')
 settings = manifest['target_settings']
-advisory = (os.environ.get('GITHUB_ACTIONS') == 'true'
-            and os.environ.get('TEXTTANK_WARNINGS_AS_ERRORS') == '0'
-            and os.environ.get('XCODE_VERSION') == '16.4'
-            and manifest['toolchain']['xcode'].splitlines()[0] == 'Xcode 16.4')
-expected_warnings = 'NO' if advisory else 'YES'
+expected_warnings = 'YES'
 check(all(settings[name].get('SWIFT_STRICT_CONCURRENCY') == 'complete'
           and settings[name].get('SWIFT_VERSION') == '5.0'
           and settings[name].get('SWIFT_TREAT_WARNINGS_AS_ERRORS') == expected_warnings

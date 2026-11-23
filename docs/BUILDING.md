@@ -1,6 +1,6 @@
 # Native build and evidence
 
-Only arm64 is currently built and checked. The minimum system version and canonical architecture come from `Dependencies.lock.json`, validated by `scripts/build_config.py` for the shell, generator and engine builder; it does not certify an older macOS runtime. No Developer ID identity, entitlement or notarization flow is configured. Review bundles remain ad-hoc signed, incomplete previews.
+Only arm64 is currently built and checked. The minimum system version and canonical architecture come from `Dependencies.lock.json`, validated by `scripts/build_config.py` for the shell, generator and engine builder; the minimum is macOS 27.0. `scripts/check-runtime-linkage.py` runs in every build and rejects, by name, any code image in the bundle (the app, its Debug dylib, each embedded framework and the `tt` helper) whose `LC_BUILD_VERSION` minimum differs from the lock, and an `Info.plist` whose `LSMinimumSystemVersion` differs. Testing ran on macOS 27.0.1; a separate macOS 27.0 host was not tested. No Developer ID identity, entitlement or notarization flow is configured. Review bundles remain ad-hoc signed, incomplete previews.
 
 Run `scripts/build.sh`, `scripts/test.sh` and `scripts/test-performance.sh` in that order. Debug is the default. Use `CONFIGURATION=Release` for the production build and matching packaging. Native check clients use Debug module metadata with testability; Release keeps optimization and `ENABLE_TESTABILITY=NO`. The generator and Info.plist use matching configuration paths and deployment settings. Regenerate with `python3 scripts/generate-project.py` after adding or moving sources; CI rejects project drift.
 
@@ -91,7 +91,7 @@ complete concurrency checking. `compile_diagnostics.py` also rejects emitted fir
 Swift warning/error headers when a Swift 5 compiler returns zero. The guard suite runs an
 actual good/bad AppKit actor-access compiler pair and checks the resolved producer settings;
 intentional negative compiler output is retained separately from normal build diagnostics.
-This does not certify other toolchains or macOS runtimes.
+This does not certify other toolchains or macOS runtimes. CI has one job, the required `native` check on Xcode 27.2. The advisory Xcode 16.4 job on a macOS 15 runner was retired with the macOS 27.0 minimum because it cannot launch the app; `scripts/build.sh --advisory-swift-warnings` and `TEXTTANK_WARNINGS_AS_ERRORS=0` remain only for inspecting a new toolchain by hand and never produce acceptance evidence.
 
 Before signing, canonical builds retain immutable per-image link records: the real Ld event,
 working directory, driver and expanded response arguments, exact file-list bytes/order,
@@ -119,9 +119,11 @@ actual driver/response/compiler/SDK/settings, source/output-map hashes and the i
 object. Driver file-list membership alone cannot prove that refresh. Missing primary
 evidence or changed object bytes reject reuse.
 
+`scripts/test-preview.sh` type-checks and runs the Foundation-only preview core checks (`Tests/PreviewCoreChecks.swift`, fixtures in `Tests/Fixtures/preview/`) against the built Core image. They import neither Runtime nor AppKit; `docs/preview-model.md` describes the dialect, policies and limits they pin. `scripts/test-preview-ui.sh` builds `Tests/PreviewNativeChecks.swift` against the signed frameworks and runs the Source, Preview and Both checks in an owned accessory application: mode round trips, unsaved rendering, the web view's script, network and local-file rules against a loopback listener that must see no connection, the table and tree, staleness, lifetime, limits and session records. It waits on explicit completion signals rather than on key-window state, so it runs with the screen locked. `TEXTTANK_PREVIEW_SNAPSHOTS=1` also writes pictures of each preview to `build/tests/` for a person to look at.
+
 D1 adds `scripts/test-compare.sh` using signed canonical Core/Runtime/EditorBridge images. Controller checks create owned documents/files and inject a named private pasteboard only under `TEXTTANK_TEST_PASTEBOARD=1`; they never inspect the general clipboard. Pure projection checks reconstruct both sources from side/unified/segmented mappings. Physical keyboard, wrapped reading and VoiceOver speech remain separate observations. `docs/compare-model.md` is included in the explicit packaged review documents.
 
-The D1 controller client also uses a byte-identical owned app wrapper and the actual NSApplication event loop; key-window command-routing assertions require genuine native key state. Legacy menu-tree golden bytes stay unchanged: a separate D1 additions fixture is inserted after all existing Search entries, and exact action targets are checked for the new source commands as well.
+The D1 controller client also uses a byte-identical owned app wrapper and the actual NSApplication event loop; key-window command-routing assertions require genuine native key state. The whole menu tree is one golden fixture, `Tests/Fixtures/menu-tree.json`, rewritten only with `TEXTTANK_WRITE_MENU_FIXTURE=1` for a reviewed change to the menu map; action targets are checked by command identity, not position.
 
 
 D2 adds merge-core-layering, merge-checks and merge-controller-checks, for60 named suites while retaining

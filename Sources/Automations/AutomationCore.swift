@@ -91,25 +91,11 @@ package struct AutomationDefinition: Codable, Equatable, Identifiable, Sendable 
     package var previewBeforeApply: Bool?
     package var pinToToolbar: Bool?
 
-    /// The whole-line recipe controls the built-in recipe cleanup clears.
+    /// The whole-line recipe controls the bundled recipe rule template clears.
     static package let recipeHeadingPattern =
         #"(?i)^[ \t]*(?:Ingredients|Cups|Metric|Garnish[ \t]*\(optional\))[ \t]*$"#
     /// An unmarked line that starts with a letter and ends in a colon: a section label.
     static package let colonLabelPattern = #"^[ \t]*[\p{L}][^:]*:[ \t]*$"#
-    /// The first-run preset: a strict, marker-based recipe cleanup. Its name says so, because it
-    /// refuses a list that mixes marked rows with unmarked rows instead of guessing.
-    static package var example: AutomationDefinition {
-        AutomationDefinition(
-            id: UUID(uuidString: "A931733F-310A-4EBF-9C48-38C59202D586")!, name: "Clean up recipe list",
-            input: .document,
-            steps: [
-                Step(kind: .clearLinesMatching, find: recipeHeadingPattern),
-                Step(kind: .keepMarkedListRows), Step(kind: .clearMarkdownHeadings), Step(kind: .removeListMarkers),
-                Step(kind: .removeMarkdownFormatting), Step(kind: .removeCheckboxMarkers),
-                Step(kind: .removeNoteReferences), Step(kind: .trimWhitespace), Step(kind: .removeBlankLines)
-            ],
-            output: .editor, previewBeforeApply: false, pinToToolbar: true)
-    }
     static package var remindersExample: AutomationDefinition {
         AutomationDefinition(
             id: UUID(uuidString: "AE932D35-4371-4D64-9091-95780DCD2441")!, name: "Add to Reminders", input: .document,
@@ -135,7 +121,15 @@ package struct AutomationDefinition: Codable, Equatable, Identifiable, Sendable 
         }
     }
     /// The first-run automations, in menu order. Restore Default Automations appends fresh copies.
-    static package var firstRunPresets: [AutomationDefinition] { [.example, .remindersExample] }
+    static package var firstRunPresets: [AutomationDefinition] { [.remindersExample] }
+    /// What Insert Example adds in Advanced JSON: two general rules under a new identifier each
+    /// time, so it never repeats an automation that is already saved.
+    static package func insertableExample() -> AutomationDefinition {
+        AutomationDefinition(
+            id: UUID(), name: "Trim and remove empty lines", input: .document,
+            steps: [Step(kind: .trimWhitespace), Step(kind: .removeBlankLines)], output: .editor,
+            previewBeforeApply: false, pinToToolbar: false)
+    }
     /// Test Rules: the rules alone against a sample. The automation's name, shortcut, input and
     /// output play no part, so an unfinished name in the builder cannot fail a test.
     static package func testRules(_ steps: [Step], sample: String, control: AutomationRunControl? = nil) throws
@@ -878,6 +872,39 @@ package enum AutomationError: LocalizedError {
     }
 }
 
+/// The recipe cleanup that earlier builds installed on first run. It is no longer shipped. A saved
+/// copy is retired only while it is still exactly what a build installed; a copy the user renamed,
+/// edited, gave a shortcut or removed from the favorites is theirs and is kept.
+package enum RetiredFactoryAutomation {
+    static package let id = UUID(uuidString: "A931733F-310A-4EBF-9C48-38C59202D586")!
+    /// Every definition a build installed under `id`, oldest first. Each name belongs to its own
+    /// rule list; a name with the other list is not a factory item.
+    static package let definitions: [AutomationDefinition] = {
+        typealias Step = AutomationDefinition.Step
+        let leading: [Step] = [
+            Step(kind: .clearLinesMatching, find: AutomationDefinition.recipeHeadingPattern),
+            Step(kind: .keepMarkedListRows), Step(kind: .clearMarkdownHeadings), Step(kind: .removeListMarkers),
+            Step(kind: .removeMarkdownFormatting), Step(kind: .removeCheckboxMarkers),
+            Step(kind: .removeNoteReferences)
+        ]
+        return [
+            ("Clean up text", leading + [Step(kind: .removeBlankLines)]),
+            ("Clean up recipe list", leading + [Step(kind: .trimWhitespace), Step(kind: .removeBlankLines)])
+        ].map { name, steps in
+            AutomationDefinition(
+                id: id, name: name, input: .document, steps: steps, output: .editor, previewBeforeApply: false,
+                pinToToolbar: true)
+        }
+    }()
+    /// True only for a saved automation equal in every field to an installed definition. An empty
+    /// shortcut string is how some builds stored "no shortcut", so it counts as none.
+    static package func isUntouched(_ saved: AutomationDefinition) -> Bool {
+        var candidate = saved
+        if candidate.shortcut == "" { candidate.shortcut = nil }
+        return definitions.contains(candidate)
+    }
+}
+
 /// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
 /// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
 package struct AutomationLibrary: VersionedLibrary, Equatable {
@@ -900,6 +927,14 @@ package struct AutomationLibrary: VersionedLibrary, Equatable {
             throw FileOperationFailure(errno, operation: "inspect saved automations", path: url.path)
         }
         return try decode(AutomationFileInput.readData(url, limit: maximumBytes, parent: .strict))
+    }
+
+    /// The library without the untouched retired factory automation, or nil when it holds none.
+    /// The result depends only on the content, so repeating it is harmless. Only the interactive
+    /// manager applies it, at launch; every other automation and the order are kept.
+    package func removingRetiredFactoryItems() -> Self? {
+        let kept = workflows.filter { !RetiredFactoryAutomation.isUntouched($0) }
+        return kept.count == workflows.count ? nil : Self(version: version, workflows: kept)
     }
 
     /// External text consumers do not install the presets, create a configuration, or write back decoded data.

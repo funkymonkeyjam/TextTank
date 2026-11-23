@@ -260,6 +260,8 @@ import UniformTypeIdentifiers
     func noteAppliedLanguage(_ identifier: String) {
         languageIdentifier = identifier
         deferredLargeFileLanguage = nil
+        // The language decides whether the document has a preview, and which.
+        presentations.forEach { $0.previewKindMayHaveChanged() }
     }
     func enableLargeFileEditing() {
         guard let identifier = deferredLargeFileLanguage else { return }
@@ -326,11 +328,14 @@ import UniformTypeIdentifiers
                     // Only the existing main-thread setter route clears the recovered label.
                     recoveredOrigin = nil
                     recoveredOriginalURL = nil
+                    // So does the file's extension, and its folder decides what a page may load.
+                    presentations.forEach { $0.previewKindMayHaveChanged() }
                 }
             } else {
                 DispatchQueue.main.async { [weak self] in
                     self?.recoveryBase += 1
                     self?.externalFile.invalidate()
+                    self?.presentations.forEach { $0.previewKindMayHaveChanged() }
                 }
             }
         }

@@ -4,11 +4,11 @@ This untitled document is yours to edit. Use Help → Welcome to TextTank to ope
 
 Edit, undo and find
 
-Type anywhere in this document, then choose Edit → Undo (Command-Z) to take the change back. Choose Search → Find… (Command-F), type “TextTank” and press Return to step through the matches. Escape closes the find bar. File → Save (Command-S) saves a document where you choose. Until then TextTank keeps a recovery copy of unsaved text in case it stops unexpectedly.
+Type anywhere in this document, then choose Edit → Undo (Command-Z) to take the change back. Choose Find → Find… (Command-F), type “TextTank” and press Return to step through the matches. Escape closes the find bar. File → Save (Command-S) saves a document where you choose. Until then TextTank keeps a recovery copy of unsaved text in case it stops unexpectedly.
 
 Find any command
 
-Choose Automations → Command Palette… (Shift-Command-P) and type part of a command’s name, such as “sort” or “wrap”. Press Return to run the selected command.
+Choose Help → Command Palette… (Shift-Command-P) and type part of a command’s name, such as “sort” or “wrap”. Press Return to run the selected command. Each row shows the menu that holds the command.
 
 Compare an edit with its saved file
 
@@ -17,14 +17,16 @@ Choose File → New and type the two lines below into that blank document.
 - tea
 - milk
 
-Save your sample in a folder you choose. Change “tea” to “green tea” and leave the edit unsaved. Choose File → Compare with Saved Version. Review the comparison and close its window when finished. Your unsaved edit stays in the original tab.
+Save your sample in a folder you choose. Change “tea” to “green tea” and leave the edit unsaved. Choose Compare → Compare with Saved Version. Review the comparison and close its window when finished. Your unsaved edit stays in the original tab.
 
 Use two editor groups
 
-With your sample active, choose View → Editor Group Layout → Two Columns. Choose View → Show Tab in Another Group and select the other group. Edit one view and observe the same document in the other. Choose View → Editor Group Layout → Single Group to return.
+With your sample active, choose View → Editor Groups → Editor Group Layout → Two Columns. Choose View → Editor Groups → Show Tab in Another Group and select the other group. Edit one view and observe the same document in the other. Choose View → Editor Groups → Editor Group Layout → Single Group to return.
 
-Try a saved automation
+Make your first automation
 
-With your sample active, open the Automations menu and choose the list cleanup automation. A new installation names it Clean up recipe list. It reads the whole document and removes the list markers, so the two lines read “green tea” and “milk”. Choose Edit → Undo to restore the markers. Automations → Manage Automations… lists every saved automation.
+An automation is a saved list of rules that you run on a document. Choose Tools → Automations → Manage Automations… and, in its window, choose Add…. Name the automation “Remove bullets” and choose Use Changes. With it selected, choose Edit Rules… and then Add Rule…, pick Remove bullet markers and choose Save Rule. Choose Use These Rules, then Save.
+
+With your sample active, open Tools → Automations and choose Remove bullets. It reads the whole document and removes the list markers, so the two lines read “green tea” and “milk”. Choose Edit → Undo to restore the markers.
 
 Choose Help → TextTank User Guide for more ways to open, search and review text.

@@ -43,7 +43,7 @@ This table names ownership rather than asserting full parity. Dated per-capabili
 
 ## Editor commands and shortcut repair
 
-`EditorCommand` in `Sources/Documents/EditorCommandCatalog.swift` owns stable Swift identifiers, display names, fixed menu keys, assignable defaults and explicit recordable/view-only/assignable subsets. Menu placement stays literal. The bridge derives dispatch, replay and canonical recording maps from one numeric table; replay-only `indent`/`unindent` aliases never compete with `tab`/`backTab` in recordings. The frozen pre-refactor contract retains all 84 supported identifiers, 62 replayable names, 60 canonical recording messages and the exact text-changing subset. A routed unknown identifier returns failure before text, selection-generation or notification changes. Custom menu validation disables unavailable/text-changing commands when necessary and reads actual per-view toggle states; status menus use the same command names and current keys.
+`EditorCommand` in `Sources/Documents/EditorCommandCatalog.swift` owns stable Swift identifiers, display names, fixed menu keys, assignable defaults and explicit recordable/view-only/assignable subsets. Menu placement stays literal, in one function per top-level menu in `Sources/TextTankApp/MainMenu.swift`; each controller builds its own items and the menu bar only decides where they are listed (DS-D4). The bridge derives dispatch, replay and canonical recording maps from one numeric table; replay-only `indent`/`unindent` aliases never compete with `tab`/`backTab` in recordings. The frozen pre-refactor contract retains all 84 supported identifiers, 62 replayable names, 60 canonical recording messages and the exact text-changing subset. A routed unknown identifier returns failure before text, selection-generation or notification changes. Custom menu validation disables unavailable/text-changing commands when necessary and reads actual per-view toggle states; status menus use the same command names and current keys.
 
 Editor Settings keeps version 1 and `shortcuts: [String: String]`. The optional Boolean `autoIndent` controls indentation on Return in all editor views. The optional Boolean `braceHighlight` controls live brace feedback at each view’s primary caret. Automatic feedback examines up to 4,096 bytes in each candidate’s search direction and clears its cue when the result is indeterminate. Matching Brace and Select to Matching Brace search the full document. The optional Booleans `currentLineHighlight` and `indentGuides` control a frame around the focused editor's caret line and native dotted indentation guides. Existing files without these four keys default to enabled. Comparison panes suppress both the frame and guides. The guides use the current profile's indentation-guide style, including explicit style 37 colors. Optional fontName, fontSize (6–72 fractional points) and defaultZoom (−10 through 60) default to Menlo, 14 and zero. An unavailable saved face uses Menlo and preserves the preference. Base metrics apply to all document views; a pane already zoomed away from the previous default retains its zoom. Language style face and size inherit independently. Comparison snapshot panes share effective metrics and retain their local zoom adjustment within their existing 6–96 point display range. Missing required keys, wrong JSON types, unsupported schema/minimum-reader metadata and unsafe/unreadable files still fail closed. Shortcut-only problems are handled separately on load: unknown, unsupported, reserved or duplicate string bindings are ignored individually, valid shortcuts and unrelated settings remain usable, and the ignored entries are reported. The original file is unchanged until explicit repair. That repair validates strictly, keeps the original as a unique sibling and retains the existing rollback behavior. This is not automatic repair or universal detection of later external rewrites.
 
@@ -92,7 +92,7 @@ The original full recovered-copy and error wording is retained in the model.
 
 The visible-only 0.2-second polling timer remains under DB-R8. A lexer change now
 schedules a coalesced editor-state notification so that brace feedback and Language
-status reflect the new profile. The native check observes the first Language menu
+status reflect the new profile. The native check observes the first language menu
 action with the timer disabled, then invokes a second action and runs one real
 polling tick before that action’s queued notification. Both paths update the field.
 Existing
@@ -147,6 +147,10 @@ Search preferences use `JSONFileStore` and the common `StoreLoadState`: an unrea
 Every file and defaults value the app writes is a versioned Codable value type: editor settings, Find options, Find-in-Folder settings, the workspace browser state, the Run library, session snapshots, recovery snapshots, the Reminders journal, the macro library, the language catalog and the automation library. Most decoders are synthesized, so every non-optional property is a required key, including properties that have a default value. `RecordedMacro.Step` is an associated-value enum with custom Codable retaining the existing `kind` and payload keys: irrelevant nil payloads stay omitted, null optionals and unknown extra keys remain readable, and malformed or incompatible known payloads are rejected. Its encoder still reproduces the golden version-1 bytes.
 
 A field added to a version-1 type must therefore be one of two things. Either it is Optional, as the later fields of `AutomationDefinition` are, or it is decoded with `decodeIfPresent(...) ?? default` in an `init(from:)` written in an extension for that field only. An `init(from:)` in the struct body removes the memberwise and default initializers that the sources and checks use. Never default a missing `version` or `schemaVersion`, a document's text, format, selection, dirty flag or revision, or a Run item's `shellMode` or `extensionMode`: those stay required. A change in what an existing field means needs a new `version` or `schemaVersion` and an explicit migration.
+
+The automation library has one content migration, applied by `AutomationController` when it starts and has read an existing `Automations.json`: `AutomationLibrary.removingRetiredFactoryItems()` drops the recipe automation earlier builds installed, only while it still equals one of the definitions in `RetiredFactoryAutomation`. It keeps format version 1, records no marker, is not part of decoding, and is never applied by the read-only Services and App Intents reader. A failed rewrite leaves the file as it was. The matching rule and failure behaviour are in [AUTOMATION-RULES](AUTOMATION-RULES.md).
+
+The session tab record (`WorkspaceLayoutState.Tab`) gained two Optional fields this way, `viewMode` and `previewSourceFraction`, for the per-tab Source, Preview and Both views. They are omitted for a tab that shows Source. The preview itself (`Sources/Preview/`: a pure Core that parses and renders, and Runtime files for the coordinator, the presenters and the tab adapter's mode logic) is described in [preview-model](preview-model.md). It persists nothing else; its compiled content rule list is a cache under `AppStorage.supportDirectory/PreviewRules`.
 
 `PersistedFormat` additionally checks optional envelope metadata `minimumReaderVersion` before model decoding. Absent means reader 1; present must be a positive integer no greater than this build's reader version (1). Null, a string, zero and a newer reader requirement are failures, and app-owned stores retain their original bytes behind the load latch. The Run format is still an array: this gate applies to each command object. Other formats gate their envelope, never arbitrary nested user dictionaries. Current unchanged version-1 writers omit the metadata, so their schema and the committed golden fixtures remain unchanged. Existing older builds cannot retroactively honor this gate: a future incompatible meaning or schema must also bump its existing required version and supply an explicit migration; setting this optional key alone cannot make it safe for an older build. No format migration is performed by this audit.
 
@@ -257,7 +261,7 @@ First-party Swift under `Sources/` and `Tests/` is laid out by the `swift-format
 
 Both formats are JSON written by `JSONEncoder` with its default date strategy, so a date is a number of seconds since 1 January 2001 00:00 UTC (`784000000` is 5 November 2025). Key names and the date encoding are fixed for version 1; a new format should use ISO 8601 dates and `schemaVersion`. "Required" means the decoder rejects a file without the key.
 
-Session snapshot (`WorkspaceSession`, written by File > Save Session Snapshot; proposed extension `.texttanksession`, exported as `app.texttank.session`). A snapshot loads under any file name. Opening a `.texttanksession` file from Finder or File > Open goes to the restore prompt instead of showing the JSON as an editable document.
+Session snapshot (`WorkspaceSession`, written by File > Workspace > Save Session Snapshot…; proposed extension `.texttanksession`, exported as `app.texttank.session`). A snapshot loads under any file name. Opening a `.texttanksession` file from Finder or File > Open goes to the restore prompt instead of showing the JSON as an editable document.
 
 | Key | Type | Required | Meaning |
 | --- | --- | --- | --- |
@@ -375,7 +379,11 @@ grapheme count and Unicode normalization are not substituted for this documented
 
 App entry, composition, documents, encoding recovery, tabs, recent documents, status items and
 editor windows live in separate files under `Sources/TextTankApp/`. The first split preserves
-the declarations, menu tree and lifecycle; subsequent changes have their own focused checks.
+the declarations and lifecycle; subsequent changes have their own focused checks. The menu tree
+is the nine-menu map of DS-D4, pinned by `Tests/Fixtures/menu-tree.json`; the commands of the
+earlier fourteen-menu bar are accounted for by `menu-command-identities-before-nine-menus.json`.
+The Command Palette matches a command by its menu path or by its former one
+(`CommandDiscovery.legacyLocations`).
 `TextDocumentController` is still constructed before `NSApplication.shared`, before constructing
 the application delegate. The intended shared document controller must win that bootstrap order.
 The Objective-C document name and Info.plist document class remain unchanged.
@@ -436,8 +444,10 @@ EditorBridge is now a separate AppKit Objective-C++ framework owning TTEditor an
 ported user lexer. It links Scintilla and Lexilla; it has no dependency on NativeSearch
 or the remaining Swift application target. The application embeds both native frameworks.
 
-TextTankCore owns the36 Foundation model/codec/storage/search-planning sources listed once
-in scripts/core_sources.py. It depends on NativeSearch and system Foundation/Darwin/CryptoKit/
+TextTankCore owns the Foundation model/codec/storage/search-planning sources listed once
+in scripts/core_sources.py, including the preview core in `Sources/Preview/` (Markdown
+rendering, the static HTML policy, the local resource resolver, delimited-text and JSON models and
+the SVG scan; see `docs/preview-model.md`). It depends on NativeSearch and system Foundation/Darwin/CryptoKit/
 zlib interfaces, with no EditorBridge, AppKit or executable dependency. Package access and
 explicit value constructors form the cross-target API; fields retain setter restrictions,
 version decoding requirements and existing defaults. UUID/Date defaults evaluate once per

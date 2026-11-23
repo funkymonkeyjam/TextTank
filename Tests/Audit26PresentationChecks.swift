@@ -102,7 +102,7 @@ enum Audit26PresentationChecks {
         let automationURL = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TEXTTANK_SUPPORT_DIRECTORY"]!)
             .appendingPathComponent("Automations.json")
         let originalLibrary = try AutomationLibrary.decode(Data(contentsOf: automationURL))
-        var ordinary = AutomationDefinition.example, favorite = AutomationDefinition.remindersExample
+        var ordinary = AutomationDefinition.recipeFixture, favorite = AutomationDefinition.remindersExample
         ordinary.name = "First saved"
         ordinary.pinToToolbar = false
         favorite.name = "Second saved favorite"

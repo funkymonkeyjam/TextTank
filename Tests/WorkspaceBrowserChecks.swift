@@ -262,9 +262,17 @@ import Darwin
             check(
                 !controller.outline.isItemExpanded(try rootNode()), "a collapsed folder stays collapsed across Refresh")
             controller.select(mode: 0)
-            let menu = controller.menu()
-            controller.menuNeedsUpdate(menu)
-            check((menu.items.last?.submenu?.items.count ?? 0) > 0, "recent native menu populated")
+            let recentFiles = try requireValue(controller.recentFilesMenuItem().submenu, "fixture: recent files menu")
+            controller.menuNeedsUpdate(recentFiles)
+            check(
+                recentFiles.delegate === controller && !recentFiles.items.isEmpty
+                    && recentFiles.items.allSatisfy { $0.target === controller && $0.representedObject is URL },
+                "recent native menu populated")
+            let monitorItem = controller.menuItem(.monitor)
+            check(
+                controller.validateMenuItem(monitorItem) && monitorItem.state == .off
+                    && monitorItem.title == "Monitor Current File",
+                "DS-22 Monitor Current File validates unchecked while nothing is monitored")
             try store.removeFolder(folder)
             check(
                 store.state.folders.isEmpty && FileManager.default.fileExists(atPath: source.path),

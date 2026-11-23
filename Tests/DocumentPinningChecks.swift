@@ -38,6 +38,26 @@ extension DocumentChecks {
     }
     static func same(_ a: String, _ b: String) -> Bool { a.utf8.elementsEqual(b.utf8) }
 
+    /// DS-23: the menu levels that list more than twenty items, as "path (count)". Separators and
+    /// hidden shortcut aliases are not listed items. Lists of the person's own content are exempt,
+    /// because their length is the person's: Open Recent and Reopen Recent File, saved macros,
+    /// automations and Run commands (items whose represented object is a UUID), and the windows
+    /// AppKit adds to the Window menu. The system fills Services.
+    @MainActor static func menuLevelsOverTwenty(_ bar: NSMenu) -> [String] {
+        func userContent(_ item: NSMenuItem) -> Bool {
+            item.representedObject is URL
+                || (item.representedObject as? String).flatMap(UUID.init(uuidString:)) != nil
+                || item.action == #selector(NSWindow.makeKeyAndOrderFront(_:))
+        }
+        func crowded(_ menu: NSMenu, _ path: String) -> [String] {
+            guard menu !== NSApp.servicesMenu, !(menu.delegate is RecentDocumentsMenu) else { return [] }
+            let listed = menu.items.filter { !$0.isSeparatorItem && !$0.isHidden && !userContent($0) }
+            return (listed.count > 20 ? ["\(path) (\(listed.count))"] : [])
+                + menu.items.flatMap { item in item.submenu.map { crowded($0, path + " > " + item.title) } ?? [] }
+        }
+        return crowded(bar, "Menu bar")
+    }
+
     @MainActor static func pinning(root: URL, app: NSApplication, sessionDelegate: AppDelegate, section: SectionRunner)
     {
         // F252
@@ -221,7 +241,7 @@ extension DocumentChecks {
             check(
                 rows(single).count == 1 && UnicodeFixtures.lineBreaks(in: single) == 0,
                 "fixture: the separator row has no CR or LF")
-            var automation = AutomationDefinition.example
+            var automation = AutomationDefinition.recipeFixture
             automation.steps = [.init(kind: .sortLines)]
             check(
                 same(try automation.transform("b\u{2028}y\na\u{85}x\n"), "a\u{85}x\nb\u{2028}y\n"),
@@ -1027,33 +1047,83 @@ extension DocumentChecks {
             check(
                 conflicts.isEmpty,
                 "assigned menu keys, including hidden aliases and automations, are unique: \(conflicts)")
-            let menuSnapshotData = try JSONSerialization.data(withJSONObject: menuSnapshot, options: [.sortedKeys])
-            let legacyMenu =
-                try JSONSerialization.jsonObject(
-                    with: Data(contentsOf: TestPaths.fixtures.appendingPathComponent("menu-tree-wave-3.json")))
-                as! [[String: String]]
-            let additions =
-                try JSONSerialization.jsonObject(
-                    with: Data(
-                        contentsOf: TestPaths.fixtures.appendingPathComponent("menu-tree-wave-5-d1-additions.json")))
-                as! [[String: String]]
-            let mergeAdditions =
-                try JSONSerialization.jsonObject(
-                    with: Data(
-                        contentsOf:
-                            TestPaths.fixtures.appendingPathComponent("menu-tree-wave-5-d2-additions.json")))
-                as! [[String: String]]
-            let bookmarkLines =
-                try JSONSerialization.jsonObject(with: Data(contentsOf: TestPaths.fixtures.appendingPathComponent("menu-tree-bookmarked-lines.json")))
-                as! [[String: String]]
-            let boundary = legacyMenu.firstIndex { $0["position"] == "6" }!
+            // One golden file for the whole nine-menu tree. TEXTTANK_WRITE_MENU_FIXTURE=1 rewrites it;
+            // do that only for a reviewed change to the menu map (DS-D4).
+            let menuFixture = TestPaths.fixtures.appendingPathComponent("menu-tree.json")
+            if ProcessInfo.processInfo.environment["TEXTTANK_WRITE_MENU_FIXTURE"] != nil {
+                try JSONSerialization.data(withJSONObject: menuSnapshot, options: [.sortedKeys, .prettyPrinted])
+                    .write(to: menuFixture)
+                print("WROTE \(menuFixture.path)")
+            }
             let expectedMenu =
-                Array(legacyMenu[..<boundary]) + additions + mergeAdditions + bookmarkLines + Array(legacyMenu[boundary...])
-            let expectedMenuData = try JSONSerialization.data(withJSONObject: expectedMenu, options: [.sortedKeys])
-            check(
-                menuSnapshotData == expectedMenuData,
+                try JSONSerialization.jsonObject(with: Data(contentsOf: menuFixture)) as! [[String: String]]
+            if !check(
+                menuSnapshot == expectedMenu,
                 "F191 the complete menu tree preserves order, titles, actions, shortcuts, dispatch roles and represented objects"
-            )
+            ) {
+                let known = Set(expectedMenu), actual = Set(menuSnapshot)
+                print("NOTE menu rows not in the fixture: \(menuSnapshot.filter { !known.contains($0) }.prefix(12))")
+                print("NOTE fixture rows not in the menu: \(expectedMenu.filter { !actual.contains($0) }.prefix(12))")
+            }
+            // The redesign moved commands; it removed none. Every command of the fourteen-menu bar
+            // is still listed exactly as often, with its action, represented object, shortcut and
+            // dispatch role. A deliberate removal or addition is named here with its reason, and
+            // a removal must be a row of the fixture, so nothing can be left out of it silently.
+            func identities(_ rows: [[String: String]]) -> [String] {
+                rows.filter { $0["action"] != "" && $0["action"] != "submenuAction:" }.map { row in
+                    ["action", "object", "key", "modifiers", "target"].map { row[$0] ?? "" }.joined(separator: "\u{1F}")
+                }.sorted()
+            }
+            let formerCommands =
+                try JSONSerialization.jsonObject(
+                    with: Data(
+                        contentsOf: TestPaths.fixtures.appendingPathComponent(
+                            "menu-command-identities-before-nine-menus.json"))) as! [[String: String]]
+            // Removed: built-in recipe automation retired. The fourteen-menu bar listed the
+            // installed "Clean up recipe list" automation twice: once to paste with it and once
+            // to run it. The application no longer installs it.
+            let retiredRecipeAutomation = "A931733F-310A-4EBF-9C48-38C59202D586"
+            let deliberatelyRemoved: [[String: String]] = [
+                [
+                    "action": "pasteAction:", "object": retiredRecipeAutomation, "key": "", "modifiers": "1048576",
+                    "target": "explicit",
+                ],
+                [
+                    "action": "runAction:", "object": retiredRecipeAutomation, "key": "", "modifiers": "1572864",
+                    "target": "explicit",
+                ],
+            ]
+            // Added with the nine-menu bar: the Source, Preview and Both views of a document.
+            let deliberatelyAdded: [[String: String]] = ["source", "preview", "both"].map {
+                [
+                    "action": "setDocumentViewMode:", "object": $0, "key": "", "modifiers": "1048576",
+                    "target": "responder",
+                ]
+            }
+            var accounted = identities(formerCommands + deliberatelyAdded)
+            var removedRowsInFixture = 0
+            for removed in identities(deliberatelyRemoved) {
+                if let index = accounted.firstIndex(of: removed) {
+                    accounted.remove(at: index)
+                    removedRowsInFixture += 1
+                }
+            }
+            let current = identities(menuSnapshot)
+            check(
+                formerCommands.count == 338 && removedRowsInFixture == deliberatelyRemoved.count,
+                "DS-D4 the fixture lists all 338 commands of the fourteen-menu bar, the two rows of the retired recipe automation among them")
+            if !check(
+                current == accounted.sorted(),
+                "DS-D4 every command of the fourteen-menu bar is listed exactly once more in the nine-menu bar, apart from the removals named")
+            {
+                func show(_ id: String) -> String { id.replacingOccurrences(of: "\u{1F}", with: "|") }
+                var missing = accounted, extra = current
+                for id in current { if let index = missing.firstIndex(of: id) { missing.remove(at: index) } }
+                for id in accounted { if let index = extra.firstIndex(of: id) { extra.remove(at: index) } }
+                print("NOTE commands no longer listed: \(missing.map(show)); newly listed: \(extra.map(show))")
+            }
+            let crowded = menuLevelsOverTwenty(bar)
+            check(crowded.isEmpty, "DS-23 no menu level lists more than twenty items: \(crowded)")
             try Audit29IntentChecks.checkMenuTargets(bar, composition: sessionDelegate)
             let helperMenu = NSMenu()
             let helperItem = helperMenu.addItem(
@@ -1077,9 +1147,8 @@ extension DocumentChecks {
             let items = walk(bar, "")
             check(
                 bar.items.map(\.title) == [
-                    "TextTank", "File", "Workspace", "Encoding", "Edit", "Search", "Run", "Text Utilities", "View",
-                    "Language", "Macros", "Automations", "Window", "Help"
-                ], "the menu bar has the expected top-level menus in order")
+                    "TextTank", "File", "Edit", "Find", "View", "Compare", "Tools", "Window", "Help"
+                ], "DS-D4 the menu bar has the nine top-level menus in order")
             // Items without a target go to the first responder. The chain is walked here from the
             // editor that would be focused, so the check does not depend on the test process
             // being allowed to hold the key window.

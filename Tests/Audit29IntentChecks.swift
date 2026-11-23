@@ -25,7 +25,7 @@ import NativeSearch
             return siblingViews(editor)
         }
         let item = try requireValue(
-            composition.languages.menu().items.first {
+            composition.languages.languageMenuItems().first {
                 ($0.representedObject as? String) == "cpp"
             }, "F186 fixture: C++ language action")
         let revision = document.editor.revision, bytes = document.editor.utf8Data
@@ -50,71 +50,74 @@ import NativeSearch
             window.statusText == "Owned status fixture; complete" && document.editor.revision == revision,
             "F186 status intent updates only the owned label and leaves the document untouched")
     }
+    /// Every explicitly targeted command reaches its owner. The owner is found from the command's
+    /// identity (its action, and its shortcut where two owners share an action), never from its
+    /// position, so regrouping a menu cannot hide a wrong target.
     static func checkMenuTargets(_ menu: NSMenu, composition: AppDelegate) throws {
-        let legacyRows =
-            try JSONSerialization.jsonObject(
-                with: Data(
-                    contentsOf:
-                        TestPaths.fixtures.appendingPathComponent("menu-tree-wave-3.json"))) as! [[String: String]]
-        let additions =
-            try JSONSerialization.jsonObject(
-                with: Data(contentsOf: TestPaths.fixtures.appendingPathComponent("menu-tree-wave-5-d1-additions.json")))
-            as! [[String: String]]
-        let mergeAdditions =
-            try JSONSerialization.jsonObject(
-                with: Data(
-                    contentsOf:
-                        TestPaths.fixtures.appendingPathComponent("menu-tree-wave-5-d2-additions.json")))
-            as! [[String: String]]
-        let rows = legacyRows + additions + mergeAdditions
-        let commands = rows.filter { $0["target"] == "explicit" && $0["action"] != "submenuAction:" }
-        var wrong: [String] = []
-        for row in commands {
-            let path = row["position"]!.split(separator: ".").map { Int($0)! }
-            var current = menu
-            var item: NSMenuItem?
-            for (depth, index) in path.enumerated() {
-                guard current.items.indices.contains(index) else { break }
-                item = current.items[index]
-                if depth + 1 < path.count, let submenu = item?.submenu { current = submenu }
+        let owners: [(owner: AnyObject, actions: [String])] = [
+            (
+                composition,
+                [
+                    "installCommandLine:", "findNextShared:", "findPreviousShared:", "actualSize:",
+                    "performCompareCommand:", "nextDocumentTab:", "previousDocumentTab:", "performTabCommand:"
+                ]
+            ),
+            (
+                composition.settings,
+                [
+                    "showSettings:", "toggleAutoIndent:", "toggleAutoPair:", "toggleBraceHighlight:",
+                    "toggleCurrentLineHighlight:", "toggleIndentGuides:"
+                ]
+            ),
+            (composition.workspace, ["saveSession:", "openSession:"]),
+            (composition.workspaceBrowser, ["show:", "quickOpen:", "addFolder:", "toggleMonitor:", "reloadMonitored:"]),
+            (
+                composition.automations,
+                [
+                    "pasteAction:", "manageAction", "paletteAction", "reminderHistory", "restoreDefaultsAction",
+                    "showPalette", "runAction:"
+                ]
+            ),
+            (composition.compare, ["showPicker:", "markCurrent:", "compareCurrent:", "compareVisibleTabs:"]),
+            (composition.runner, ["configure:", "manage:", "addSample:", "cancel:"]),
+            (composition.utilities, ["run:", "hexOptions:", "convertNumber:", "exportStyled:"]),
+            (composition.workspaceWindow.groupCommands, ["invoke:"]),
+            (
+                composition.languages,
+                [
+                    "complete", "functions", "callTip", "styleSettings", "configure", "importUDL", "editUDL",
+                    "exportUDL", "selectLanguage:"
+                ]
+            ),
+            (
+                composition.macros,
+                ["startRecording", "stopRecording", "playLast", "saveLast", "manage", "playAgain", "playSaved:"]
+            )
+        ]
+        func owner(of item: NSMenuItem) -> AnyObject? {
+            let action = item.action.map(NSStringFromSelector) ?? ""
+            // Find and Replace and Find in Folder share a selector; their shortcuts tell them apart.
+            if action == "showSearch:" {
+                return item.keyEquivalentModifierMask == [.command, .option]
+                    ? composition.searchController : composition.folderSearch
             }
-            let expected: AnyObject?
-            switch path[0] {
-            case 0 where row["action"] == "installCommandLine:": expected = composition
-            case 0: expected = composition.settings
-            case 1: expected = composition.workspace
-            case 2: expected = composition.workspaceBrowser
-            case 4 where path[1] == 6 && ["pasteAction:", "manageAction"].contains(row["action"] ?? ""):
-                expected = composition.automations
-            case 5 where row["action"] == "performCompareCommand:": expected = composition
-            case 5:
-                switch path[1] {
-                case 1: expected = composition.searchController
-                case 5: expected = composition.folderSearch
-                case 13: expected = composition.compare
-                default: expected = composition
-                }
-            case 6: expected = composition.runner
-            case 7: expected = composition.utilities
-            case 8 where row["action"] == "actualSize:": expected = composition
-            case 8:
-                expected =
-                    [
-                        "toggleAutoIndent:", "toggleAutoPair:", "toggleBraceHighlight:", "toggleCurrentLineHighlight:",
-                        "toggleIndentGuides:"
-                    ]
-                    .contains(row["action"] ?? "")
-                    ? composition.settings : composition.workspaceWindow.groupCommands
-            case 9: expected = composition.languages
-            case 10: expected = composition.macros
-            case 11: expected = composition.automations
-            case 12: expected = composition
-            default: expected = nil
+            // A saved Run command is a UUID; a text utility is its case name.
+            if action == "run:", (item.representedObject as? String).flatMap(UUID.init(uuidString:)) != nil {
+                return composition.runner
             }
-            if expected == nil || item?.target !== expected { wrong.append(row["position"]!) }
+            return owners.first { $0.actions.contains(action) }?.owner
         }
+        func commands(_ menu: NSMenu, _ path: String) -> [(path: String, item: NSMenuItem)] {
+            menu.items.flatMap { item -> [(path: String, item: NSMenuItem)] in
+                let here = path.isEmpty ? item.title : path + " > " + item.title
+                if let submenu = item.submenu { return commands(submenu, here) }
+                return item.target == nil || item.action == nil ? [] : [(here, item)]
+            }
+        }
+        let explicit = commands(menu, "")
+        let wrong = explicit.filter { owner(of: $0.item) == nil || $0.item.target !== owner(of: $0.item) }.map(\.path)
         check(
-            commands.count > 100 && wrong.isEmpty,
+            explicit.count > 100 && wrong.isEmpty,
             "F274/F276 every explicit command target is its actual composition-root instance (wrong: \(wrong))")
     }
 }

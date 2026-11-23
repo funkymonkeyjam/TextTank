@@ -672,6 +672,237 @@
         }
       }
     },
+    "preview.accessibility.label": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preview of %@"
+          }
+        }
+      }
+    },
+    "preview.empty": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This document is empty. Type in Source to see its preview here."
+          }
+        }
+      }
+    },
+    "preview.json.goToError": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Go to Error"
+          }
+        }
+      }
+    },
+    "preview.json.goToError.label": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Go to the JSON error in the source"
+          }
+        }
+      }
+    },
+    "preview.json.goToError.macro": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Go to Error is not recorded in macros yet."
+          }
+        }
+      }
+    },
+    "preview.json.nameColumn": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Name"
+          }
+        }
+      }
+    },
+    "preview.json.root": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Document"
+          }
+        }
+      }
+    },
+    "preview.json.valueColumn": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Value"
+          }
+        }
+      }
+    },
+    "preview.status.notPreviewable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This kind of document has no preview. The tab shows Source again."
+          }
+        }
+      }
+    },
+    "preview.summary.refused.one": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ local file was not loaded. Only stylesheets and images in the document's folder are loaded."
+          }
+        }
+      }
+    },
+    "preview.summary.refused.other": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ local files were not loaded. Only stylesheets and images in the document's folder are loaded."
+          }
+        }
+      }
+    },
+    "preview.summary.broadFolder.one": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ local file was not loaded because this document is saved directly in your home folder or at the top of the disk. Save the document in a folder of its own to load it."
+          }
+        }
+      }
+    },
+    "preview.summary.broadFolder.other": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ local files were not loaded because this document is saved directly in your home folder or at the top of the disk. Save the document in a folder of its own to load them."
+          }
+        }
+      }
+    },
+    "preview.table.column.help": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Column %@"
+          }
+        }
+      }
+    },
+    "preview.table.lineColumn": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Line"
+          }
+        }
+      }
+    },
+    "preview.table.lineColumn.help": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The line of the document that each row starts on."
+          }
+        }
+      }
+    },
+    "preview.table.moreProblems.one": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ more row has a quoting problem."
+          }
+        }
+      }
+    },
+    "preview.table.moreProblems.other": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ more rows have quoting problems."
+          }
+        }
+      }
+    },
+    "preview.web.notReady": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The preview is not ready yet. Nothing has been loaded. It appears when its safety rules are in place."
+          }
+        }
+      }
+    },
+    "preview.web.unavailable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The preview cannot be shown because its safety rules could not be prepared. Nothing was loaded. Quit TextTank and open it again to try once more."
+          }
+        }
+      }
+    },
+    "preview.web.stoppedRepeatedly": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The preview stopped twice while showing this document, so it is not shown. The document is not changed. Edit the document to try the preview again."
+          }
+        }
+      }
+    },
     "reminders.send.one": {
       "extractionState": "manual",
       "localizations": {
@@ -1354,6 +1585,39 @@
         }
       }
     },
+    "view.mode.both": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Both"
+          }
+        }
+      }
+    },
+    "view.mode.preview": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preview"
+          }
+        }
+      }
+    },
+    "view.mode.source": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Source"
+          }
+        }
+      }
+    },
     "workspace.counts": {
       "extractionState": "manual",
       "localizations": {
@@ -1650,6 +1914,347 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@, pinned, edited"
+          }
+        }
+      }
+    },
+    "preview.json.expectedValue": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expected a value at line %@, column %@."
+          }
+        }
+      }
+    },
+    "preview.json.expectedValueOrBracket": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expected a value or closing bracket at line %@, column %@."
+          }
+        }
+      }
+    },
+    "preview.json.expectedNameOrBrace": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expected a name in double quotes or a closing brace at line %@, column %@."
+          }
+        }
+      }
+    },
+    "preview.json.expectedName": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expected a name in double quotes at line %@, column %@."
+          }
+        }
+      }
+    },
+    "preview.json.expectedColon": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expected a colon after the name at line %@, column %@."
+          }
+        }
+      }
+    },
+    "preview.json.expectedCommaOrBrace": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expected a comma or closing brace at line %@, column %@."
+          }
+        }
+      }
+    },
+    "preview.json.expectedCommaOrBracket": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Expected a comma or closing bracket at line %@, column %@."
+          }
+        }
+      }
+    },
+    "preview.json.unterminatedString": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The text that starts at line %@, column %@ has no closing quote."
+          }
+        }
+      }
+    },
+    "preview.json.invalidEscape": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The backslash sequence at line %@, column %@ is not valid."
+          }
+        }
+      }
+    },
+    "preview.json.controlCharacter": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quoted text cannot contain a line break or control character, found at line %@, column %@."
+          }
+        }
+      }
+    },
+    "preview.json.invalidNumber": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The number at line %@, column %@ is not written correctly."
+          }
+        }
+      }
+    },
+    "preview.json.leadingZero": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The number at line %@, column %@ starts with an extra zero."
+          }
+        }
+      }
+    },
+    "preview.json.invalidUTF8": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The text at line %@, column %@ is not valid UTF-8."
+          }
+        }
+      }
+    },
+    "preview.json.unexpectedEnd": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The document ends before the JSON is complete, at line %@, column %@."
+          }
+        }
+      }
+    },
+    "preview.json.textAfterValue": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "There is extra text after the end of the JSON at line %@, column %@."
+          }
+        }
+      }
+    },
+    "preview.table.unterminatedQuote": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Row %@ opens a quoted value that is never closed. The rest of the document is shown as one value."
+          }
+        }
+      }
+    },
+    "preview.table.strayQuote": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Row %@ has a quotation mark in an unexpected place. It is shown as written."
+          }
+        }
+      }
+    },
+    "preview.limit.sourceTooLarge": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This document is too large to preview. Preview works with documents up to %@."
+          }
+        }
+      }
+    },
+    "preview.limit.outputTooLarge": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This document is too large to preview. The formatted page would be larger than %@."
+          }
+        }
+      }
+    },
+    "preview.limit.rows": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only the first %@ rows are shown."
+          }
+        }
+      }
+    },
+    "preview.limit.columns": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only the first %@ columns are shown."
+          }
+        }
+      }
+    },
+    "preview.limit.values": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only the first %@ values are shown."
+          }
+        }
+      }
+    },
+    "preview.limit.depth": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only the first %@ levels of nesting are shown."
+          }
+        }
+      }
+    },
+    "preview.limit.tableCells": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This document is too large to preview. Its tables have more than %@ cells."
+          }
+        }
+      }
+    },
+    "preview.summary.external.one": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ external resource was blocked."
+          }
+        }
+      }
+    },
+    "preview.summary.external.other": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ external resources were blocked."
+          }
+        }
+      }
+    },
+    "preview.summary.scripts.one": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ script was not run."
+          }
+        }
+      }
+    },
+    "preview.summary.scripts.other": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ scripts were not run."
+          }
+        }
+      }
+    },
+    "preview.summary.missing.one": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ local file could not be found."
+          }
+        }
+      }
+    },
+    "preview.summary.missing.other": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ local files could not be found."
+          }
+        }
+      }
+    },
+    "preview.svg.notSVG": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This document is not an SVG image."
           }
         }
       }

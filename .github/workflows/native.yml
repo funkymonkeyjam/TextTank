@@ -10,28 +10,17 @@ concurrency:
 permissions:
   contents: read
 jobs:
+  # The one required check. Dependencies.lock.json sets the minimum system to the current macOS, so no
+  # older runner can launch the app; the former Xcode 16.4 advisory job was retired with that change.
   native:
-    name: ${{ matrix.check }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - check: native
-            runner: xcode-27
-            xcode: '27.2'
-            advisory: false
-          - check: native-advisory-16.4
-            runner: macos-15
-            xcode: '16.4'
-            advisory: true
-    runs-on: ${{ matrix.runner }}
-    continue-on-error: ${{ matrix.advisory }}
+    name: native
+    runs-on: xcode-27
     timeout-minutes: 45
     env:
       TEXTTANK_PERF_BUDGET_SCALE: 3
       CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      XCODE_VERSION: ${{ matrix.xcode }}
-      TEXTTANK_WARNINGS_AS_ERRORS: ${{ matrix.advisory && '0' || '1' }}
+      XCODE_VERSION: '27.2'
+      TEXTTANK_WARNINGS_AS_ERRORS: '1'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 (upstream tag verified)
         with:
@@ -39,13 +28,6 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Select the verified CI toolchain
         run: sudo xcode-select -s "/Applications/Xcode_${XCODE_VERSION}.app"
-      - name: Configure advisory Swift builds
-        if: matrix.advisory
-        run: |
-          # Xcode project settings take precedence over ordinary shell variables.
-          config="$RUNNER_TEMP/advisory.xcconfig"
-          echo 'SWIFT_TREAT_WARNINGS_AS_ERRORS = NO' > "$config"
-          echo "XCODE_XCCONFIG_FILE=$config" >> "$GITHUB_ENV"
       - name: Record candidate and toolchain
         run: |
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
@@ -64,12 +46,7 @@ jobs:
           python3 scripts/generate-project.py
           git diff --exit-code -- TextTank.xcodeproj
       - name: Build pinned native app
-        run: |
-          if [[ "$TEXTTANK_WARNINGS_AS_ERRORS" == 0 ]]; then
-            scripts/build.sh --advisory-swift-warnings
-          else
-            scripts/build.sh
-          fi
+        run: scripts/build.sh
       - name: Run acceptance checks
         id: acceptance
         run: scripts/test.sh
@@ -79,10 +56,8 @@ jobs:
       - name: Static analyzer
         run: xcodebuild -project TextTank.xcodeproj -scheme TextTank -configuration Debug -derivedDataPath build/DerivedData CODE_SIGNING_ALLOWED=NO analyze
       - name: Write strict native evidence
-        if: success() && !matrix.advisory
         run: python3 scripts/ci_evidence.py
       - name: Upload strict native evidence
-        if: success() && !matrix.advisory
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: strict-native-${{ github.run_id }}-${{ github.run_attempt }}
@@ -92,7 +67,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2 (upstream tag verified)
         with:
-          name: native-evidence-${{ matrix.xcode }}-${{ env.CANDIDATE_SHA }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: native-evidence-${{ env.XCODE_VERSION }}-${{ env.CANDIDATE_SHA }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: harness/logs
       - name: Report acceptance outcome
         if: always()

@@ -388,7 +388,7 @@ import NativeSearch
         captured.editor.text = "- 2 eggs\n"
         captured.editor.resetUndoHistory()
         captured.showWindows()
-        var workflow = AutomationDefinition.example
+        var workflow = AutomationDefinition.recipeFixture
         workflow.id = UUID()
         workflow.name = "Stage 0 captured automation"
         workflow.input = .document

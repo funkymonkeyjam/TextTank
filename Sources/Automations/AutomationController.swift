@@ -63,7 +63,9 @@ private struct AutomationCheckboxEdits {
         get { loadState.error }
         set { loadState.error = newValue }
     }
-    /// No library existed and the first write of the presets failed. This does not block saving.
+    /// A launch-time write failed, so the library in memory is not the file: either no library
+    /// existed and the presets could not be written, or the retired factory automation could not
+    /// be removed from the file. This does not block saving; the next save writes the library.
     private var installError: Error?
     private var installErrorReported = false
     private var busy = false {
@@ -119,6 +121,16 @@ private struct AutomationCheckboxEdits {
         do {
             if let existing = try AutomationLibrary.readIfPresent(at: storage) {
                 library = existing
+                if let retired = existing.removingRetiredFactoryItems() {
+                    // The retired factory automation is gone for this session whether or not the
+                    // file can be rewritten now. A failed write leaves the file as it was and is
+                    // not reported: Manage Automations, the next save and the next launch repeat it.
+                    do { try persistLibrary(retired) } catch {
+                        library = retired
+                        installError = error
+                        installErrorReported = true
+                    }
+                }
             } else {
                 // Only the interactive manager installs the editable first-run presets.
                 library = AutomationLibrary(workflows: AutomationDefinition.firstRunPresets)
@@ -126,8 +138,9 @@ private struct AutomationCheckboxEdits {
             }
         } catch { loadError = error }
     }
-    /// The first write of the starting automations failed. Tries again; if it still fails, says so
-    /// once and lets the session carry on with the automations held in memory.
+    /// Tries a failed launch-time write again. A failed first installation is reported once; a
+    /// failed removal of the retired factory automation is not reported. Either way the session
+    /// carries on with the automations held in memory.
     private func retryInstall() {
         guard installError != nil else { return }
         do { try persistLibrary(library) } catch {
@@ -136,7 +149,7 @@ private struct AutomationCheckboxEdits {
             installErrorReported = true
             showError(
                 AutomationError.invalid(
-                    "The starting automations could not be saved yet: \(error.localizedDescription)\nThey stay available until you quit, and the next change you save is written again."
+                    "The starting automation could not be saved yet: \(error.localizedDescription)\nIt stays available until you quit, and the next change you save is written again."
                 ))
         }
     }
@@ -308,13 +321,12 @@ private struct AutomationCheckboxEdits {
     private func rebuild() {
         updateSaveAllShortcut()
         automationMenu.removeAllItems()
+        let workflows = NSMenuItem(title: "Run Automation…", action: #selector(showPalette), keyEquivalent: "")
+        workflows.target = self
+        automationMenu.addItem(workflows)
         let manage = NSMenuItem(title: "Manage Automations…", action: #selector(manageAction), keyEquivalent: "")
         manage.target = self
         automationMenu.addItem(manage)
-        // The one entry for the palette, with its shortcut (Shift-Command-P).
-        let palette = NSMenuItem(title: commandDiscovery == nil ? "Automation Palette…" : "Command Palette…", action: #selector(paletteAction), keyEquivalent: "P")
-        palette.target = self
-        automationMenu.addItem(palette)
         let history = NSMenuItem(
             title: "Review Reminder Export History…", action: #selector(reminderHistory), keyEquivalent: "")
         history.target = self
@@ -323,11 +335,6 @@ private struct AutomationCheckboxEdits {
             title: "Restore Default Automations…", action: #selector(restoreDefaultsAction), keyEquivalent: "")
         restore.target = self
         automationMenu.addItem(restore)
-        if commandDiscovery != nil {
-            let workflows = NSMenuItem(title: "Run Automation…", action: #selector(showPalette), keyEquivalent: "")
-            workflows.target = self
-            automationMenu.addItem(workflows)
-        }
         if !library.workflows.isEmpty { automationMenu.addItem(.separator()) }
         for workflow in library.workflows {
             let item = NSMenuItem(
@@ -337,6 +344,15 @@ private struct AutomationCheckboxEdits {
             item.representedObject = workflow.id.uuidString
             automationMenu.addItem(item)
         }
+    }
+    /// The one menu entry for the palette, with its shortcut (Shift-Command-P). The menu bar
+    /// lists it in Help, beside the system's own command search.
+    func paletteMenuItem() -> NSMenuItem {
+        let palette = NSMenuItem(
+            title: commandDiscovery == nil ? "Automation Palette…" : "Command Palette…",
+            action: #selector(paletteAction), keyEquivalent: "P")
+        palette.target = self
+        return palette
     }
     @MainActor @objc private func manageAction() { manage() }
     @MainActor @objc private func paletteAction() {
@@ -542,9 +558,7 @@ private struct AutomationCheckboxEdits {
                         read: { try AutomationFileInput.readData($0, limit: AutomationLibrary.maximumBytes) },
                         extraAction: { proposed in
                             var copy = proposed
-                            var example = AutomationDefinition.example
-                            if copy.workflows.contains(where: { $0.id == example.id }) { example.id = UUID() }
-                            copy.workflows.append(example)
+                            copy.workflows.append(AutomationDefinition.insertableExample())
                             return copy
                         },
                         save: { proposed in
@@ -647,11 +661,19 @@ private struct AutomationCheckboxEdits {
         defer { busy = false }
         let presets = AutomationDefinition.firstRunPresets
         let confirm = TTAlert()
-        confirm.messageText = "Add the default automations?"
-        confirm.informativeText =
-            "This adds new copies of \(presets.map { "‘\($0.name)’" }.joined(separator: " and ")) as they ship with this version. Your saved automations are kept as they are, including any you edited or renamed."
-        confirm.addButton(withTitle: "Add Defaults").identifier = NSUserInterfaceItemIdentifier(
-            "automation.restore.confirm")
+        let names = presets.map { "‘\($0.name)’" }
+        // Whole sentences for one and for several (DS-83, DS-84).
+        if names.count == 1 {
+            confirm.messageText = "Add the default automation?"
+            confirm.informativeText =
+                "This adds a new copy of \(names[0]) as it ships with this version. Your saved automations are kept as they are, including any you edited or renamed."
+        } else {
+            confirm.messageText = "Add the default automations?"
+            confirm.informativeText =
+                "This adds new copies of \(names.joined(separator: " and ")) as they ship with this version. Your saved automations are kept as they are, including any you edited or renamed."
+        }
+        confirm.addButton(withTitle: names.count == 1 ? "Add Default" : "Add Defaults").identifier =
+            NSUserInterfaceItemIdentifier("automation.restore.confirm")
         confirm.addButton(withTitle: "Cancel", role: .cancel)
         guard confirm.runModal() == .alertFirstButtonReturn else { return }
         do {

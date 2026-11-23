@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" onload="alert(1)">
+  <script>alert(document.cookie) // </svg> inside a script</script>
+  <script href="http://evil.example/x.js"/>
+  <style><![CDATA[
+    @import url("http://css.example/s.css");
+    .a { fill: url(#local); }
+  ]]></style>
+  <image href="http://img.example/a.png"/>
+  <image xlink:href="https://img.example/b.png"/>
+  <use href="//use.example/sprite.svg#a"/>
+  <a href="http://link.example/"><text>link</text></a>
+  <image href="local.png"/>
+  <rect style="fill:url(http://attr.example/p.svg#p)"/>
+</svg>

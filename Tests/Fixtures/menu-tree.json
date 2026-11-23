@@ -1,0 +1,3899 @@
+[
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "0",
+    "target" : "explicit",
+    "title" : "TextTank"
+  },
+  {
+    "action" : "about",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "0.0",
+    "target" : "responder",
+    "title" : "About TextTank"
+  },
+  {
+    "action" : "showSettings:",
+    "key" : ",",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "0.1",
+    "target" : "explicit",
+    "title" : "Settings…"
+  },
+  {
+    "action" : "installCommandLine:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "0.2",
+    "target" : "explicit",
+    "title" : "Install tt Command-Line Tool…"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "0.3",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "0.4",
+    "target" : "explicit",
+    "title" : "Services"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "0.5",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "hide:",
+    "key" : "h",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "0.6",
+    "target" : "responder",
+    "title" : "Hide TextTank"
+  },
+  {
+    "action" : "hideOtherApplications:",
+    "key" : "h",
+    "modifiers" : "1572864",
+    "object" : "",
+    "position" : "0.7",
+    "target" : "responder",
+    "title" : "Hide Others"
+  },
+  {
+    "action" : "unhideAllApplications:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "0.8",
+    "target" : "responder",
+    "title" : "Show All"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "0.9",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "terminate:",
+    "key" : "q",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "0.10",
+    "target" : "responder",
+    "title" : "Quit TextTank"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "1",
+    "target" : "explicit",
+    "title" : "File"
+  },
+  {
+    "action" : "newDocument:",
+    "key" : "n",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "1.0",
+    "target" : "responder",
+    "title" : "New"
+  },
+  {
+    "action" : "openDocument:",
+    "key" : "o",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "1.1",
+    "target" : "responder",
+    "title" : "Open…"
+  },
+  {
+    "action" : "quickOpen:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "1.2",
+    "target" : "explicit",
+    "title" : "Quick Open…"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "1.3",
+    "target" : "explicit",
+    "title" : "Open Recent"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "1.4",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "performClose:",
+    "key" : "w",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "1.5",
+    "target" : "responder",
+    "title" : "Close"
+  },
+  {
+    "action" : "saveDocument:",
+    "key" : "s",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "1.6",
+    "target" : "responder",
+    "title" : "Save"
+  },
+  {
+    "action" : "saveDocumentAs:",
+    "key" : "S",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "1.7",
+    "target" : "responder",
+    "title" : "Save As…"
+  },
+  {
+    "action" : "saveCopy:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "1.8",
+    "target" : "responder",
+    "title" : "Save Copy…"
+  },
+  {
+    "action" : "saveAllDocuments:",
+    "key" : "s",
+    "modifiers" : "1572864",
+    "object" : "",
+    "position" : "1.9",
+    "target" : "responder",
+    "title" : "Save All"
+  },
+  {
+    "action" : "revertDocumentToSaved:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "1.10",
+    "target" : "responder",
+    "title" : "Revert to Saved…"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "1.11",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "1.12",
+    "target" : "explicit",
+    "title" : "Reload with Encoding"
+  },
+  {
+    "action" : "reloadEncoding:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "utf8",
+    "position" : "1.12.0",
+    "target" : "responder",
+    "title" : "UTF-8…"
+  },
+  {
+    "action" : "reloadEncoding:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "utf16LE",
+    "position" : "1.12.1",
+    "target" : "responder",
+    "title" : "UTF-16 LE…"
+  },
+  {
+    "action" : "reloadEncoding:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "utf16BE",
+    "position" : "1.12.2",
+    "target" : "responder",
+    "title" : "UTF-16 BE…"
+  },
+  {
+    "action" : "reloadEncoding:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "windows1252",
+    "position" : "1.12.3",
+    "target" : "responder",
+    "title" : "Windows-1252…"
+  },
+  {
+    "action" : "reloadEncoding:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "latin1",
+    "position" : "1.12.4",
+    "target" : "responder",
+    "title" : "ISO-8859-1…"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "1.13",
+    "target" : "explicit",
+    "title" : "Convert to Encoding"
+  },
+  {
+    "action" : "convertEncoding:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "utf8",
+    "position" : "1.13.0",
+    "target" : "responder",
+    "title" : "UTF-8"
+  },
+  {
+    "action" : "convertEncoding:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "utf8bom",
+    "position" : "1.13.1",
+    "target" : "responder",
+    "title" : "UTF-8 with BOM"
+  },
+  {
+    "action" : "convertEncoding:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "utf16LE",
+    "position" : "1.13.2",
+    "target" : "responder",
+    "title" : "UTF-16 LE with BOM"
+  },
+  {
+    "action" : "convertEncoding:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "utf16BE",
+    "position" : "1.13.3",
+    "target" : "responder",
+    "title" : "UTF-16 BE with BOM"
+  },
+  {
+    "action" : "convertEncoding:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "windows1252",
+    "position" : "1.13.4",
+    "target" : "responder",
+    "title" : "Windows-1252"
+  },
+  {
+    "action" : "convertEncoding:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "latin1",
+    "position" : "1.13.5",
+    "target" : "responder",
+    "title" : "ISO-8859-1"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "1.14",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "toggleReadOnly:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "1.15",
+    "target" : "responder",
+    "title" : "Read Only"
+  },
+  {
+    "action" : "checkExternalChanges:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "1.16",
+    "target" : "responder",
+    "title" : "Check for External Changes"
+  },
+  {
+    "action" : "toggleMonitor:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "1.17",
+    "target" : "explicit",
+    "title" : "Monitor Current File"
+  },
+  {
+    "action" : "reloadMonitored:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "1.18",
+    "target" : "explicit",
+    "title" : "Reload Monitored File…"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "1.19",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "1.20",
+    "target" : "explicit",
+    "title" : "Workspace"
+  },
+  {
+    "action" : "addFolder:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "1.20.0",
+    "target" : "explicit",
+    "title" : "Add Folder to Workspace…"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "1.20.1",
+    "target" : "explicit",
+    "title" : "Reopen Recent File"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "1.20.2",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "saveSession:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "1.20.3",
+    "target" : "explicit",
+    "title" : "Save Session Snapshot…"
+  },
+  {
+    "action" : "openSession:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "1.20.4",
+    "target" : "explicit",
+    "title" : "Open Session Snapshot…"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "1.21",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "runPageLayout:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "1.22",
+    "target" : "responder",
+    "title" : "Page Setup…"
+  },
+  {
+    "action" : "printDocument:",
+    "key" : "p",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "1.23",
+    "target" : "responder",
+    "title" : "Print…"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "2",
+    "target" : "explicit",
+    "title" : "Edit"
+  },
+  {
+    "action" : "undo:",
+    "key" : "z",
+    "modifiers" : "1048576",
+    "object" : "undo",
+    "position" : "2.0",
+    "target" : "responder",
+    "title" : "Undo"
+  },
+  {
+    "action" : "redo:",
+    "key" : "Z",
+    "modifiers" : "1048576",
+    "object" : "redo",
+    "position" : "2.1",
+    "target" : "responder",
+    "title" : "Redo"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "2.2",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "cut:",
+    "key" : "x",
+    "modifiers" : "1048576",
+    "object" : "cut",
+    "position" : "2.3",
+    "target" : "responder",
+    "title" : "Cut"
+  },
+  {
+    "action" : "copy:",
+    "key" : "c",
+    "modifiers" : "1048576",
+    "object" : "copy",
+    "position" : "2.4",
+    "target" : "responder",
+    "title" : "Copy"
+  },
+  {
+    "action" : "paste:",
+    "key" : "v",
+    "modifiers" : "1048576",
+    "object" : "paste",
+    "position" : "2.5",
+    "target" : "responder",
+    "title" : "Paste"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "2.6",
+    "target" : "explicit",
+    "title" : "Paste Through"
+  },
+  {
+    "action" : "pasteAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "AE932D35-4371-4D64-9091-95780DCD2441",
+    "position" : "2.6.0",
+    "target" : "explicit",
+    "title" : "★ Add to Reminders"
+  },
+  {
+    "action" : "manageAction",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "2.6.1",
+    "target" : "explicit",
+    "title" : "Manage Automations…"
+  },
+  {
+    "action" : "selectAll:",
+    "key" : "a",
+    "modifiers" : "1048576",
+    "object" : "selectAll",
+    "position" : "2.7",
+    "target" : "responder",
+    "title" : "Select All"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "2.8",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "2.9",
+    "target" : "explicit",
+    "title" : "Lines"
+  },
+  {
+    "action" : "command:",
+    "key" : "d",
+    "modifiers" : "1048576",
+    "object" : "duplicateLine",
+    "position" : "2.9.0",
+    "target" : "responder",
+    "title" : "Duplicate Line"
+  },
+  {
+    "action" : "command:",
+    "key" : "K",
+    "modifiers" : "262144",
+    "object" : "deleteLine",
+    "position" : "2.9.1",
+    "target" : "responder",
+    "title" : "Delete Line"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "transposeLine",
+    "position" : "2.9.2",
+    "target" : "responder",
+    "title" : "Transpose Lines"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1310720",
+    "object" : "moveLineUp",
+    "position" : "2.9.3",
+    "target" : "responder",
+    "title" : "Move Line Up"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1310720",
+    "object" : "moveLineDown",
+    "position" : "2.9.4",
+    "target" : "responder",
+    "title" : "Move Line Down"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "joinLines",
+    "position" : "2.9.5",
+    "target" : "responder",
+    "title" : "Join Selected Lines"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "2.9.6",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "transform.sortAscending",
+    "position" : "2.9.7",
+    "target" : "responder",
+    "title" : "Sort Lines Ascending"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "transform.sortDescending",
+    "position" : "2.9.8",
+    "target" : "responder",
+    "title" : "Sort Lines Descending"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "transform.sortCaseInsensitive",
+    "position" : "2.9.9",
+    "target" : "responder",
+    "title" : "Sort Lines Ignoring Case"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "transform.sortLocalized",
+    "position" : "2.9.10",
+    "target" : "responder",
+    "title" : "Sort Lines in Locale Order"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "transform.sortLength",
+    "position" : "2.9.11",
+    "target" : "responder",
+    "title" : "Sort Lines by Length"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "2.9.12",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "transform.reverseLines",
+    "position" : "2.9.13",
+    "target" : "responder",
+    "title" : "Reverse Line Order"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "transform.uniqueLines",
+    "position" : "2.9.14",
+    "target" : "responder",
+    "title" : "Remove Duplicate Lines"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "transform.removeEmptyLines",
+    "position" : "2.9.15",
+    "target" : "responder",
+    "title" : "Remove Empty Lines"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "2.10",
+    "target" : "explicit",
+    "title" : "Indentation and Whitespace"
+  },
+  {
+    "action" : "command:",
+    "key" : "]",
+    "modifiers" : "1048576",
+    "object" : "indent",
+    "position" : "2.10.0",
+    "target" : "responder",
+    "title" : "Indent"
+  },
+  {
+    "action" : "command:",
+    "key" : "[",
+    "modifiers" : "1048576",
+    "object" : "unindent",
+    "position" : "2.10.1",
+    "target" : "responder",
+    "title" : "Unindent"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "2.10.2",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "transform.trimLeading",
+    "position" : "2.10.3",
+    "target" : "responder",
+    "title" : "Trim Leading Whitespace"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "trimTrailing",
+    "position" : "2.10.4",
+    "target" : "responder",
+    "title" : "Trim Trailing Whitespace"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "transform.trimBoth",
+    "position" : "2.10.5",
+    "target" : "responder",
+    "title" : "Trim Leading and Trailing Whitespace"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "2.11",
+    "target" : "explicit",
+    "title" : "Convert Case"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "upper",
+    "position" : "2.11.0",
+    "target" : "responder",
+    "title" : "Uppercase"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "lower",
+    "position" : "2.11.1",
+    "target" : "responder",
+    "title" : "Lowercase"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "transform.titleCase",
+    "position" : "2.11.2",
+    "target" : "responder",
+    "title" : "Title Case"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "transform.invertCase",
+    "position" : "2.11.3",
+    "target" : "responder",
+    "title" : "Invert Case"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "2.12",
+    "target" : "explicit",
+    "title" : "Comment"
+  },
+  {
+    "action" : "comment:",
+    "key" : "\/",
+    "modifiers" : "1048576",
+    "object" : "toggleLine",
+    "position" : "2.12.0",
+    "target" : "responder",
+    "title" : "Toggle Line Comment"
+  },
+  {
+    "action" : "comment:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "lineComment",
+    "position" : "2.12.1",
+    "target" : "responder",
+    "title" : "Comment Selected Lines"
+  },
+  {
+    "action" : "comment:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "lineUncomment",
+    "position" : "2.12.2",
+    "target" : "responder",
+    "title" : "Uncomment Selected Lines"
+  },
+  {
+    "action" : "comment:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "blockComment",
+    "position" : "2.12.3",
+    "target" : "responder",
+    "title" : "Block Comment"
+  },
+  {
+    "action" : "comment:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "blockUncomment",
+    "position" : "2.12.4",
+    "target" : "responder",
+    "title" : "Remove Block Comment"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "2.13",
+    "target" : "explicit",
+    "title" : "Selection"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "rectangularSelection",
+    "position" : "2.13.0",
+    "target" : "responder",
+    "title" : "Rectangular Selection"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "streamSelection",
+    "position" : "2.13.1",
+    "target" : "responder",
+    "title" : "Stream Selection"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "addNextOccurrence",
+    "position" : "2.13.2",
+    "target" : "responder",
+    "title" : "Add Next Occurrence"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "selectAllOccurrences",
+    "position" : "2.13.3",
+    "target" : "responder",
+    "title" : "Select All Occurrences"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "clearAdditionalSelections",
+    "position" : "2.13.4",
+    "target" : "responder",
+    "title" : "Clear Additional Selections"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "duplicateSelection",
+    "position" : "2.13.5",
+    "target" : "responder",
+    "title" : "Duplicate Selection"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "2.13.6",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "columnInsert:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "2.13.7",
+    "target" : "responder",
+    "title" : "Column Insert \/ Number…"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "2.14",
+    "target" : "explicit",
+    "title" : "Delete"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "deleteWordLeft",
+    "position" : "2.14.0",
+    "target" : "responder",
+    "title" : "Delete Word Left"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "deleteWordRight",
+    "position" : "2.14.1",
+    "target" : "responder",
+    "title" : "Delete Word Right"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "deleteLineLeft",
+    "position" : "2.14.2",
+    "target" : "responder",
+    "title" : "Delete to Line Start"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "deleteLineRight",
+    "position" : "2.14.3",
+    "target" : "responder",
+    "title" : "Delete to Line End"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "2.15",
+    "target" : "explicit",
+    "title" : "Line Endings"
+  },
+  {
+    "action" : "convertEOL:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "LF",
+    "position" : "2.15.0",
+    "target" : "responder",
+    "title" : "Convert to LF"
+  },
+  {
+    "action" : "convertEOL:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "CRLF",
+    "position" : "2.15.1",
+    "target" : "responder",
+    "title" : "Convert to CRLF"
+  },
+  {
+    "action" : "convertEOL:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "CR",
+    "position" : "2.15.2",
+    "target" : "responder",
+    "title" : "Convert to CR"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "2.16",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "2.17",
+    "target" : "explicit",
+    "title" : "Encode and Decode"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "2.17.0",
+    "target" : "explicit",
+    "title" : "Base64"
+  },
+  {
+    "action" : "run:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "base64Encode",
+    "position" : "2.17.0.0",
+    "target" : "explicit",
+    "title" : "Base64 Encode"
+  },
+  {
+    "action" : "run:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "base64EncodePadded",
+    "position" : "2.17.0.1",
+    "target" : "explicit",
+    "title" : "Base64 Encode with Padding"
+  },
+  {
+    "action" : "run:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "base64EncodeUnix",
+    "position" : "2.17.0.2",
+    "target" : "explicit",
+    "title" : "Base64 Encode with Unix EOL"
+  },
+  {
+    "action" : "run:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "base64EncodeLines",
+    "position" : "2.17.0.3",
+    "target" : "explicit",
+    "title" : "Base64 Encode by Line"
+  },
+  {
+    "action" : "run:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "base64Decode",
+    "position" : "2.17.0.4",
+    "target" : "explicit",
+    "title" : "Base64 Decode"
+  },
+  {
+    "action" : "run:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "base64DecodeLines",
+    "position" : "2.17.0.5",
+    "target" : "explicit",
+    "title" : "Base64 Decode by Line"
+  },
+  {
+    "action" : "run:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "base64DecodeStrict",
+    "position" : "2.17.0.6",
+    "target" : "explicit",
+    "title" : "Base64 Decode Strict"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "2.17.1",
+    "target" : "explicit",
+    "title" : "URL"
+  },
+  {
+    "action" : "run:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "urlEncode",
+    "position" : "2.17.1.0",
+    "target" : "explicit",
+    "title" : "URL Encode (RFC1738)"
+  },
+  {
+    "action" : "run:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "urlEncodeExtended",
+    "position" : "2.17.1.1",
+    "target" : "explicit",
+    "title" : "URL Encode (Extended)"
+  },
+  {
+    "action" : "run:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "urlEncodeFull",
+    "position" : "2.17.1.2",
+    "target" : "explicit",
+    "title" : "URL Encode (Full)"
+  },
+  {
+    "action" : "run:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "urlEncodeLines",
+    "position" : "2.17.1.3",
+    "target" : "explicit",
+    "title" : "URL Encode (RFC1738) by Line"
+  },
+  {
+    "action" : "run:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "urlEncodeExtendedLines",
+    "position" : "2.17.1.4",
+    "target" : "explicit",
+    "title" : "URL Encode (Extended) by Line"
+  },
+  {
+    "action" : "run:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "urlEncodeFullLines",
+    "position" : "2.17.1.5",
+    "target" : "explicit",
+    "title" : "URL Encode (Full) by Line"
+  },
+  {
+    "action" : "run:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "urlDecode",
+    "position" : "2.17.1.6",
+    "target" : "explicit",
+    "title" : "URL Decode"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "2.17.2",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "run:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "quotedPrintableEncode",
+    "position" : "2.17.3",
+    "target" : "explicit",
+    "title" : "Quoted-printable Encode"
+  },
+  {
+    "action" : "run:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "quotedPrintableDecode",
+    "position" : "2.17.4",
+    "target" : "explicit",
+    "title" : "Quoted-printable Decode"
+  },
+  {
+    "action" : "run:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "samlDecode",
+    "position" : "2.17.5",
+    "target" : "explicit",
+    "title" : "SAML Decode"
+  },
+  {
+    "action" : "run:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "hexEncode",
+    "position" : "2.17.6",
+    "target" : "explicit",
+    "title" : "UTF-8 to Hex"
+  },
+  {
+    "action" : "run:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "hexDecode",
+    "position" : "2.17.7",
+    "target" : "explicit",
+    "title" : "Hex to UTF-8"
+  },
+  {
+    "action" : "hexOptions:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "2.17.8",
+    "target" : "explicit",
+    "title" : "UTF-8 to Hex with Options…"
+  },
+  {
+    "action" : "run:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "formatJSON",
+    "position" : "2.18",
+    "target" : "explicit",
+    "title" : "Format JSON"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "2.19",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "complete",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "2.20",
+    "target" : "explicit",
+    "title" : "Complete Word"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "2.21",
+    "target" : "explicit",
+    "title" : "Typing"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "toggleOvertype",
+    "position" : "2.21.0",
+    "target" : "responder",
+    "title" : "Toggle Overtype"
+  },
+  {
+    "action" : "toggleAutoIndent:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "2.21.1",
+    "target" : "explicit",
+    "title" : "Auto-Indent on Return"
+  },
+  {
+    "action" : "toggleAutoPair:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "2.21.2",
+    "target" : "explicit",
+    "title" : "Auto-Pair Brackets and Quotes"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "3",
+    "target" : "explicit",
+    "title" : "Find"
+  },
+  {
+    "action" : "showFind:",
+    "key" : "f",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "3.0",
+    "target" : "responder",
+    "title" : "Find…"
+  },
+  {
+    "action" : "showSearch:",
+    "key" : "f",
+    "modifiers" : "1572864",
+    "object" : "",
+    "position" : "3.1",
+    "target" : "explicit",
+    "title" : "Find and Replace…"
+  },
+  {
+    "action" : "findNextShared:",
+    "key" : "g",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "3.2",
+    "target" : "explicit",
+    "title" : "Find Next"
+  },
+  {
+    "action" : "findPreviousShared:",
+    "key" : "G",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "3.3",
+    "target" : "explicit",
+    "title" : "Find Previous"
+  },
+  {
+    "action" : "useSelectionForFind:",
+    "key" : "e",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "3.4",
+    "target" : "responder",
+    "title" : "Use Selection for Find"
+  },
+  {
+    "action" : "showSearch:",
+    "key" : "F",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "3.5",
+    "target" : "explicit",
+    "title" : "Find in Folder…"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "3.6",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "goToLine:",
+    "key" : "l",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "3.7",
+    "target" : "responder",
+    "title" : "Go to Line…"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "gotoMatchingBrace",
+    "position" : "3.8",
+    "target" : "responder",
+    "title" : "Matching Brace"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "selectMatchingBrace",
+    "position" : "3.9",
+    "target" : "responder",
+    "title" : "Select to Matching Brace"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "3.10",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "3.11",
+    "target" : "explicit",
+    "title" : "Bookmarks"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "bookmarkToggle",
+    "position" : "3.11.0",
+    "target" : "responder",
+    "title" : "Toggle Bookmark"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "0",
+    "object" : "bookmarkNext",
+    "position" : "3.11.1",
+    "target" : "responder",
+    "title" : "Next Bookmark"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "131072",
+    "object" : "bookmarkPrevious",
+    "position" : "3.11.2",
+    "target" : "responder",
+    "title" : "Previous Bookmark"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "3.11.3",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "bookmarkCutLines",
+    "position" : "3.11.4",
+    "target" : "responder",
+    "title" : "Cut Bookmarked Lines"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "bookmarkCopyLines",
+    "position" : "3.11.5",
+    "target" : "responder",
+    "title" : "Copy Bookmarked Lines"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "bookmarkDeleteLines",
+    "position" : "3.11.6",
+    "target" : "responder",
+    "title" : "Delete Bookmarked Lines"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "bookmarkInvert",
+    "position" : "3.11.7",
+    "target" : "responder",
+    "title" : "Invert Bookmarks"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "bookmarkClearAll",
+    "position" : "3.11.8",
+    "target" : "responder",
+    "title" : "Clear All Bookmarks"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "3.12",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "functions",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "3.13",
+    "target" : "explicit",
+    "title" : "Function List…"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4",
+    "target" : "explicit",
+    "title" : "View"
+  },
+  {
+    "action" : "setDocumentViewMode:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "source",
+    "position" : "4.0",
+    "target" : "responder",
+    "title" : "Source"
+  },
+  {
+    "action" : "setDocumentViewMode:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "preview",
+    "position" : "4.1",
+    "target" : "responder",
+    "title" : "Preview"
+  },
+  {
+    "action" : "setDocumentViewMode:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "both",
+    "position" : "4.2",
+    "target" : "responder",
+    "title" : "Both"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.3",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "clone:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.4",
+    "target" : "responder",
+    "title" : "Split Tab View"
+  },
+  {
+    "action" : "closeSplit:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.5",
+    "target" : "responder",
+    "title" : "Close Split View"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.6",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "toggleWrap:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.7",
+    "target" : "responder",
+    "title" : "Wrap Lines"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "showWhitespace",
+    "position" : "4.8",
+    "target" : "responder",
+    "title" : "Show Whitespace"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "toggleEOL",
+    "position" : "4.9",
+    "target" : "responder",
+    "title" : "Show Line Endings"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "toggleLineNumbers",
+    "position" : "4.10",
+    "target" : "responder",
+    "title" : "Show Line Numbers"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.11",
+    "target" : "explicit",
+    "title" : "Guides and Highlights"
+  },
+  {
+    "action" : "toggleIndentGuides:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.11.0",
+    "target" : "explicit",
+    "title" : "Show Indentation Guides"
+  },
+  {
+    "action" : "toggleCurrentLineHighlight:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.11.1",
+    "target" : "explicit",
+    "title" : "Highlight Current Line"
+  },
+  {
+    "action" : "toggleBraceHighlight:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.11.2",
+    "target" : "explicit",
+    "title" : "Highlight Matching Braces"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.12",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "command:",
+    "key" : "+",
+    "modifiers" : "1048576",
+    "object" : "zoomIn",
+    "position" : "4.13",
+    "target" : "responder",
+    "title" : "Zoom In"
+  },
+  {
+    "action" : "command:",
+    "key" : "-",
+    "modifiers" : "1048576",
+    "object" : "zoomOut",
+    "position" : "4.14",
+    "target" : "responder",
+    "title" : "Zoom Out"
+  },
+  {
+    "action" : "actualSize:",
+    "key" : "0",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.15",
+    "target" : "explicit",
+    "title" : "Actual Size"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.16",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.17",
+    "target" : "explicit",
+    "title" : "Folding"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "foldCurrent",
+    "position" : "4.17.0",
+    "target" : "responder",
+    "title" : "Fold Current"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "foldAll",
+    "position" : "4.17.1",
+    "target" : "responder",
+    "title" : "Fold All"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "unfoldAll",
+    "position" : "4.17.2",
+    "target" : "responder",
+    "title" : "Unfold All"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "foldLevel1",
+    "position" : "4.17.3",
+    "target" : "responder",
+    "title" : "Fold Level 1"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "foldLevel2",
+    "position" : "4.17.4",
+    "target" : "responder",
+    "title" : "Fold Level 2"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "foldLevel3",
+    "position" : "4.17.5",
+    "target" : "responder",
+    "title" : "Fold Level 3"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "foldLevel4",
+    "position" : "4.17.6",
+    "target" : "responder",
+    "title" : "Fold Level 4"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "foldLevel5",
+    "position" : "4.17.7",
+    "target" : "responder",
+    "title" : "Fold Level 5"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "foldLevel6",
+    "position" : "4.17.8",
+    "target" : "responder",
+    "title" : "Fold Level 6"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "foldLevel7",
+    "position" : "4.17.9",
+    "target" : "responder",
+    "title" : "Fold Level 7"
+  },
+  {
+    "action" : "command:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "foldLevel8",
+    "position" : "4.17.10",
+    "target" : "responder",
+    "title" : "Fold Level 8"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.18",
+    "target" : "explicit",
+    "title" : "Syntax Highlighting"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "normal",
+    "position" : "4.18.0",
+    "target" : "explicit",
+    "title" : "Normal text"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.18.1",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.18.2",
+    "target" : "explicit",
+    "title" : "A–C"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "actionscript",
+    "position" : "4.18.2.0",
+    "target" : "explicit",
+    "title" : "ActionScript"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "ada",
+    "position" : "4.18.2.1",
+    "target" : "explicit",
+    "title" : "Ada"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "asn1",
+    "position" : "4.18.2.2",
+    "target" : "explicit",
+    "title" : "ASN.1"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "asp",
+    "position" : "4.18.2.3",
+    "target" : "explicit",
+    "title" : "ASP"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "asm",
+    "position" : "4.18.2.4",
+    "target" : "explicit",
+    "title" : "Assembly"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "autoit",
+    "position" : "4.18.2.5",
+    "target" : "explicit",
+    "title" : "AutoIt"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "avs",
+    "position" : "4.18.2.6",
+    "target" : "explicit",
+    "title" : "AviSynth"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "baanc",
+    "position" : "4.18.2.7",
+    "target" : "explicit",
+    "title" : "BaanC"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "batch",
+    "position" : "4.18.2.8",
+    "target" : "explicit",
+    "title" : "Batch"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "blitzbasic",
+    "position" : "4.18.2.9",
+    "target" : "explicit",
+    "title" : "BlitzBasic"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "c",
+    "position" : "4.18.2.10",
+    "target" : "explicit",
+    "title" : "C"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "cs",
+    "position" : "4.18.2.11",
+    "target" : "explicit",
+    "title" : "C#"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "cpp",
+    "position" : "4.18.2.12",
+    "target" : "explicit",
+    "title" : "C++"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "caml",
+    "position" : "4.18.2.13",
+    "target" : "explicit",
+    "title" : "CAML"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "cmake",
+    "position" : "4.18.2.14",
+    "target" : "explicit",
+    "title" : "CMake"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "cobol",
+    "position" : "4.18.2.15",
+    "target" : "explicit",
+    "title" : "COBOL"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "coffeescript",
+    "position" : "4.18.2.16",
+    "target" : "explicit",
+    "title" : "CoffeeScript"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "csound",
+    "position" : "4.18.2.17",
+    "target" : "explicit",
+    "title" : "Csound"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "css",
+    "position" : "4.18.2.18",
+    "target" : "explicit",
+    "title" : "CSS"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.18.3",
+    "target" : "explicit",
+    "title" : "D–H"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "d",
+    "position" : "4.18.3.0",
+    "target" : "explicit",
+    "title" : "D"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "diff",
+    "position" : "4.18.3.1",
+    "target" : "explicit",
+    "title" : "Diff"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "javascript",
+    "position" : "4.18.3.2",
+    "target" : "explicit",
+    "title" : "Embedded JS"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "erlang",
+    "position" : "4.18.3.3",
+    "target" : "explicit",
+    "title" : "Erlang"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "errorlist",
+    "position" : "4.18.3.4",
+    "target" : "explicit",
+    "title" : "ErrorList"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "escseq",
+    "position" : "4.18.3.5",
+    "target" : "explicit",
+    "title" : "EscapeSequence (ANSI)"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "escript",
+    "position" : "4.18.3.6",
+    "target" : "explicit",
+    "title" : "ESCRIPT"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "forth",
+    "position" : "4.18.3.7",
+    "target" : "explicit",
+    "title" : "Forth"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "fortran77",
+    "position" : "4.18.3.8",
+    "target" : "explicit",
+    "title" : "Fortran fixed form"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "fortran",
+    "position" : "4.18.3.9",
+    "target" : "explicit",
+    "title" : "Fortran free form"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "freebasic",
+    "position" : "4.18.3.10",
+    "target" : "explicit",
+    "title" : "FreeBasic"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "gdscript",
+    "position" : "4.18.3.11",
+    "target" : "explicit",
+    "title" : "GDScript"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "go",
+    "position" : "4.18.3.12",
+    "target" : "explicit",
+    "title" : "Go"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "gui4cli",
+    "position" : "4.18.3.13",
+    "target" : "explicit",
+    "title" : "Gui4Cli"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "haskell",
+    "position" : "4.18.3.14",
+    "target" : "explicit",
+    "title" : "Haskell"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "hollywood",
+    "position" : "4.18.3.15",
+    "target" : "explicit",
+    "title" : "Hollywood"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "html",
+    "position" : "4.18.3.16",
+    "target" : "explicit",
+    "title" : "HTML"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.18.4",
+    "target" : "explicit",
+    "title" : "I–M"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "ini",
+    "position" : "4.18.4.0",
+    "target" : "explicit",
+    "title" : "ini"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "inno",
+    "position" : "4.18.4.1",
+    "target" : "explicit",
+    "title" : "Inno Setup"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "ihex",
+    "position" : "4.18.4.2",
+    "target" : "explicit",
+    "title" : "Intel HEX"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "java",
+    "position" : "4.18.4.3",
+    "target" : "explicit",
+    "title" : "Java"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "javascript.js",
+    "position" : "4.18.4.4",
+    "target" : "explicit",
+    "title" : "JavaScript"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "json",
+    "position" : "4.18.4.5",
+    "target" : "explicit",
+    "title" : "json"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "json5",
+    "position" : "4.18.4.6",
+    "target" : "explicit",
+    "title" : "json5"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "jsp",
+    "position" : "4.18.4.7",
+    "target" : "explicit",
+    "title" : "JSP"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "kix",
+    "position" : "4.18.4.8",
+    "target" : "explicit",
+    "title" : "KiXtart"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "latex",
+    "position" : "4.18.4.9",
+    "target" : "explicit",
+    "title" : "LaTeX"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "lisp",
+    "position" : "4.18.4.10",
+    "target" : "explicit",
+    "title" : "Lisp"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "lua",
+    "position" : "4.18.4.11",
+    "target" : "explicit",
+    "title" : "Lua"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "makefile",
+    "position" : "4.18.4.12",
+    "target" : "explicit",
+    "title" : "Makefile"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "markdown",
+    "position" : "4.18.4.13",
+    "target" : "explicit",
+    "title" : "Markdown"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "matlab",
+    "position" : "4.18.4.14",
+    "target" : "explicit",
+    "title" : "MATLAB"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "mmixal",
+    "position" : "4.18.4.15",
+    "target" : "explicit",
+    "title" : "MMIXAL"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "mssql",
+    "position" : "4.18.4.16",
+    "target" : "explicit",
+    "title" : "mssql"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.18.5",
+    "target" : "explicit",
+    "title" : "N–P"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "nfo",
+    "position" : "4.18.5.0",
+    "target" : "explicit",
+    "title" : "NFO"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "nim",
+    "position" : "4.18.5.1",
+    "target" : "explicit",
+    "title" : "Nim"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "nncrontab",
+    "position" : "4.18.5.2",
+    "target" : "explicit",
+    "title" : "Nncrontab"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "nsis",
+    "position" : "4.18.5.3",
+    "target" : "explicit",
+    "title" : "NSIS"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "oscript",
+    "position" : "4.18.5.4",
+    "target" : "explicit",
+    "title" : "OScript"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "pascal",
+    "position" : "4.18.5.5",
+    "target" : "explicit",
+    "title" : "Pascal"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "perl",
+    "position" : "4.18.5.6",
+    "target" : "explicit",
+    "title" : "Perl"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "php",
+    "position" : "4.18.5.7",
+    "target" : "explicit",
+    "title" : "PHP"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "postscript",
+    "position" : "4.18.5.8",
+    "target" : "explicit",
+    "title" : "PostScript"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "powershell",
+    "position" : "4.18.5.9",
+    "target" : "explicit",
+    "title" : "PowerShell"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "props",
+    "position" : "4.18.5.10",
+    "target" : "explicit",
+    "title" : "Properties file"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "purebasic",
+    "position" : "4.18.5.11",
+    "target" : "explicit",
+    "title" : "PureBasic"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "python",
+    "position" : "4.18.5.12",
+    "target" : "explicit",
+    "title" : "Python"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.18.6",
+    "target" : "explicit",
+    "title" : "R–S"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "r",
+    "position" : "4.18.6.0",
+    "target" : "explicit",
+    "title" : "R"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "raku",
+    "position" : "4.18.6.1",
+    "target" : "explicit",
+    "title" : "Raku"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "rc",
+    "position" : "4.18.6.2",
+    "target" : "explicit",
+    "title" : "RC"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "rebol",
+    "position" : "4.18.6.3",
+    "target" : "explicit",
+    "title" : "REBOL"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "registry",
+    "position" : "4.18.6.4",
+    "target" : "explicit",
+    "title" : "registry"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "ruby",
+    "position" : "4.18.6.5",
+    "target" : "explicit",
+    "title" : "Ruby"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "rust",
+    "position" : "4.18.6.6",
+    "target" : "explicit",
+    "title" : "Rust"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "srec",
+    "position" : "4.18.6.7",
+    "target" : "explicit",
+    "title" : "S-Record"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "sas",
+    "position" : "4.18.6.8",
+    "target" : "explicit",
+    "title" : "SAS"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "scheme",
+    "position" : "4.18.6.9",
+    "target" : "explicit",
+    "title" : "Scheme"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "bash",
+    "position" : "4.18.6.10",
+    "target" : "explicit",
+    "title" : "Shell"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "smalltalk",
+    "position" : "4.18.6.11",
+    "target" : "explicit",
+    "title" : "Smalltalk"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "spice",
+    "position" : "4.18.6.12",
+    "target" : "explicit",
+    "title" : "Spice"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "sql",
+    "position" : "4.18.6.13",
+    "target" : "explicit",
+    "title" : "SQL"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "fcST",
+    "position" : "4.18.6.14",
+    "target" : "explicit",
+    "title" : "Structured Text"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "swift",
+    "position" : "4.18.6.15",
+    "target" : "explicit",
+    "title" : "Swift"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.18.7",
+    "target" : "explicit",
+    "title" : "T–Y"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "tcl",
+    "position" : "4.18.7.0",
+    "target" : "explicit",
+    "title" : "TCL"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "tehex",
+    "position" : "4.18.7.1",
+    "target" : "explicit",
+    "title" : "Tektronix extended HEX"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "tex",
+    "position" : "4.18.7.2",
+    "target" : "explicit",
+    "title" : "TeX"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "toml",
+    "position" : "4.18.7.3",
+    "target" : "explicit",
+    "title" : "TOML"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "txt2tags",
+    "position" : "4.18.7.4",
+    "target" : "explicit",
+    "title" : "txt2tags"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "typescript",
+    "position" : "4.18.7.5",
+    "target" : "explicit",
+    "title" : "TypeScript"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "verilog",
+    "position" : "4.18.7.6",
+    "target" : "explicit",
+    "title" : "Verilog"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "vhdl",
+    "position" : "4.18.7.7",
+    "target" : "explicit",
+    "title" : "VHDL"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "vb",
+    "position" : "4.18.7.8",
+    "target" : "explicit",
+    "title" : "Visual Basic"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "visualprolog",
+    "position" : "4.18.7.9",
+    "target" : "explicit",
+    "title" : "Visual Prolog"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "xml",
+    "position" : "4.18.7.10",
+    "target" : "explicit",
+    "title" : "XML"
+  },
+  {
+    "action" : "selectLanguage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "yaml",
+    "position" : "4.18.7.11",
+    "target" : "explicit",
+    "title" : "YAML"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.18.8",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "styleSettings",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.18.9",
+    "target" : "explicit",
+    "title" : "Syntax Style Settings…"
+  },
+  {
+    "action" : "configure",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.18.10",
+    "target" : "explicit",
+    "title" : "Edit Language Profiles…"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.18.11",
+    "target" : "explicit",
+    "title" : "User-Defined Languages"
+  },
+  {
+    "action" : "importUDL",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.18.11.0",
+    "target" : "explicit",
+    "title" : "Import Notepad++ UDL…"
+  },
+  {
+    "action" : "editUDL",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.18.11.1",
+    "target" : "explicit",
+    "title" : "Edit Current UDL…"
+  },
+  {
+    "action" : "exportUDL",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.18.11.2",
+    "target" : "explicit",
+    "title" : "Export Current UDL…"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.19",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "show:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.20",
+    "target" : "explicit",
+    "title" : "Workspace Browser"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.21",
+    "target" : "explicit",
+    "title" : "Editor Groups"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.21.0",
+    "target" : "explicit",
+    "title" : "Editor Group Layout"
+  },
+  {
+    "action" : "invoke:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "group.layout.single",
+    "position" : "4.21.0.0",
+    "target" : "explicit",
+    "title" : "Single Group"
+  },
+  {
+    "action" : "invoke:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "group.layout.twoColumns",
+    "position" : "4.21.0.1",
+    "target" : "explicit",
+    "title" : "Two Columns"
+  },
+  {
+    "action" : "invoke:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "group.layout.twoRows",
+    "position" : "4.21.0.2",
+    "target" : "explicit",
+    "title" : "Two Rows"
+  },
+  {
+    "action" : "invoke:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "group.layout.grid2x2",
+    "position" : "4.21.0.3",
+    "target" : "explicit",
+    "title" : "Grid (2 × 2)"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.21.1",
+    "target" : "explicit",
+    "title" : "Move to Group"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.21.2",
+    "target" : "explicit",
+    "title" : "Show Tab in Another Group"
+  },
+  {
+    "action" : "invoke:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "group.move",
+    "position" : "4.21.3",
+    "target" : "explicit",
+    "title" : "Move Tab to Next Group"
+  },
+  {
+    "action" : "invoke:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "group.close",
+    "position" : "4.21.4",
+    "target" : "explicit",
+    "title" : "Close Group"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.21.5",
+    "target" : "explicit",
+    "title" : "Focus Group"
+  },
+  {
+    "action" : "invoke:",
+    "key" : "1",
+    "modifiers" : "1310720",
+    "object" : "group.focus",
+    "position" : "4.21.5.0",
+    "target" : "explicit",
+    "title" : "Group 1"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.22",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "toggleToolbarShown:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.23",
+    "target" : "responder",
+    "title" : "Show Toolbar"
+  },
+  {
+    "action" : "runToolbarCustomizationPalette:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "4.24",
+    "target" : "responder",
+    "title" : "Customize Toolbar…"
+  },
+  {
+    "action" : "command:",
+    "key" : "=",
+    "modifiers" : "1048576",
+    "object" : "zoomIn",
+    "position" : "4.25",
+    "target" : "responder",
+    "title" : "Zoom In"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "5",
+    "target" : "explicit",
+    "title" : "Compare"
+  },
+  {
+    "action" : "compareVisibleTabs:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "5.0",
+    "target" : "explicit",
+    "title" : "Compare Two Visible Tabs"
+  },
+  {
+    "action" : "compareWithSavedVersion:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "5.1",
+    "target" : "responder",
+    "title" : "Compare with Saved Version"
+  },
+  {
+    "action" : "showPicker:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "5.2",
+    "target" : "explicit",
+    "title" : "Compare Text…"
+  },
+  {
+    "action" : "markCurrent:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "5.3",
+    "target" : "explicit",
+    "title" : "Select for Compare"
+  },
+  {
+    "action" : "compareCurrent:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "5.4",
+    "target" : "explicit",
+    "title" : "Compare with Selected"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "5.5",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "performCompareCommand:",
+    "key" : "",
+    "modifiers" : "131072",
+    "object" : "previous",
+    "position" : "5.6",
+    "target" : "explicit",
+    "title" : "Previous Change"
+  },
+  {
+    "action" : "performCompareCommand:",
+    "key" : "",
+    "modifiers" : "0",
+    "object" : "next",
+    "position" : "5.7",
+    "target" : "explicit",
+    "title" : "Next Change"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "5.8",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "performCompareCommand:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "sideBySide",
+    "position" : "5.9",
+    "target" : "responder",
+    "title" : "Side by Side"
+  },
+  {
+    "action" : "performCompareCommand:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "unified",
+    "position" : "5.10",
+    "target" : "responder",
+    "title" : "Unified"
+  },
+  {
+    "action" : "performCompareCommand:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "linked",
+    "position" : "5.11",
+    "target" : "responder",
+    "title" : "Linked Scrolling"
+  },
+  {
+    "action" : "performCompareCommand:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "collapse",
+    "position" : "5.12",
+    "target" : "responder",
+    "title" : "Collapse Unchanged"
+  },
+  {
+    "action" : "performCompareCommand:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "expandAll",
+    "position" : "5.13",
+    "target" : "responder",
+    "title" : "Expand All Unchanged Lines"
+  },
+  {
+    "action" : "performCompareCommand:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "whitespace",
+    "position" : "5.14",
+    "target" : "responder",
+    "title" : "Show Whitespace"
+  },
+  {
+    "action" : "performCompareCommand:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "wrap",
+    "position" : "5.15",
+    "target" : "responder",
+    "title" : "Wrap Lines"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "5.16",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "performCompareCommand:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "refresh",
+    "position" : "5.17",
+    "target" : "responder",
+    "title" : "Refresh Comparison"
+  },
+  {
+    "action" : "performCompareCommand:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "cancel",
+    "position" : "5.18",
+    "target" : "responder",
+    "title" : "Cancel Comparison"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "5.19",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "5.20",
+    "target" : "explicit",
+    "title" : "Merge Changes"
+  },
+  {
+    "action" : "performCompareCommand:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "chooseDestination",
+    "position" : "5.20.0",
+    "target" : "responder",
+    "title" : "Choose Destination…"
+  },
+  {
+    "action" : "performCompareCommand:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "selectChanges",
+    "position" : "5.20.1",
+    "target" : "responder",
+    "title" : "Select Changes…"
+  },
+  {
+    "action" : "performCompareCommand:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "selectAllChanges",
+    "position" : "5.20.2",
+    "target" : "responder",
+    "title" : "Select All Changes"
+  },
+  {
+    "action" : "performCompareCommand:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "clearChangeSelection",
+    "position" : "5.20.3",
+    "target" : "responder",
+    "title" : "Clear Selection"
+  },
+  {
+    "action" : "performCompareCommand:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "applySelected",
+    "position" : "5.20.4",
+    "target" : "responder",
+    "title" : "Apply Selected Changes"
+  },
+  {
+    "action" : "performCompareCommand:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "showDestination",
+    "position" : "5.20.5",
+    "target" : "responder",
+    "title" : "Show Destination"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "5.21",
+    "target" : "explicit",
+    "title" : "Patch"
+  },
+  {
+    "action" : "performCompareCommand:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "exportPatch",
+    "position" : "5.21.0",
+    "target" : "responder",
+    "title" : "Export Unified Patch…"
+  },
+  {
+    "action" : "performCompareCommand:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "copyPatch",
+    "position" : "5.21.1",
+    "target" : "responder",
+    "title" : "Copy Patch"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "6",
+    "target" : "explicit",
+    "title" : "Tools"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "6.0",
+    "target" : "explicit",
+    "title" : "Macros"
+  },
+  {
+    "action" : "startRecording",
+    "key" : "",
+    "modifiers" : "0",
+    "object" : "",
+    "position" : "6.0.0",
+    "target" : "explicit",
+    "title" : "Start Recording"
+  },
+  {
+    "action" : "stopRecording",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "6.0.1",
+    "target" : "explicit",
+    "title" : "Stop Recording"
+  },
+  {
+    "action" : "playLast",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "6.0.2",
+    "target" : "explicit",
+    "title" : "Play Last Recording…"
+  },
+  {
+    "action" : "saveLast",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "6.0.3",
+    "target" : "explicit",
+    "title" : "Save Last Recording…"
+  },
+  {
+    "action" : "manage",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "6.0.4",
+    "target" : "explicit",
+    "title" : "Manage Saved Macros…"
+  },
+  {
+    "action" : "playAgain",
+    "key" : "",
+    "modifiers" : "131072",
+    "object" : "",
+    "position" : "6.0.5",
+    "target" : "explicit",
+    "title" : "Play Again"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "6.1",
+    "target" : "explicit",
+    "title" : "Automations"
+  },
+  {
+    "action" : "showPalette",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "6.1.0",
+    "target" : "explicit",
+    "title" : "Run Automation…"
+  },
+  {
+    "action" : "manageAction",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "6.1.1",
+    "target" : "explicit",
+    "title" : "Manage Automations…"
+  },
+  {
+    "action" : "reminderHistory",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "6.1.2",
+    "target" : "explicit",
+    "title" : "Review Reminder Export History…"
+  },
+  {
+    "action" : "restoreDefaultsAction",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "6.1.3",
+    "target" : "explicit",
+    "title" : "Restore Default Automations…"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "6.1.4",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "runAction:",
+    "key" : "",
+    "modifiers" : "1572864",
+    "object" : "AE932D35-4371-4D64-9091-95780DCD2441",
+    "position" : "6.1.5",
+    "target" : "explicit",
+    "title" : "Add to Reminders"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "6.2",
+    "target" : "explicit",
+    "title" : "Run Commands"
+  },
+  {
+    "action" : "configure:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "6.2.0",
+    "target" : "explicit",
+    "title" : "Configure Command…"
+  },
+  {
+    "action" : "manage:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "6.2.1",
+    "target" : "explicit",
+    "title" : "Manage Commands…"
+  },
+  {
+    "action" : "addSample:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "6.2.2",
+    "target" : "explicit",
+    "title" : "Add Sample Text Extension"
+  },
+  {
+    "action" : "cancel:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "6.2.3",
+    "target" : "explicit",
+    "title" : "Cancel Running Command"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "6.2.4",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "6.3",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "run:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "inspectUnicode",
+    "position" : "6.4",
+    "target" : "explicit",
+    "title" : "Inspect Unicode Selection"
+  },
+  {
+    "action" : "run:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "validateJSON",
+    "position" : "6.5",
+    "target" : "explicit",
+    "title" : "Validate JSON"
+  },
+  {
+    "action" : "convertNumber:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "6.6",
+    "target" : "explicit",
+    "title" : "Number Conversion…"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "6.7",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "6.8",
+    "target" : "explicit",
+    "title" : "Export Styled Text"
+  },
+  {
+    "action" : "exportStyled:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "{\n    destination = clipboard;\n    format = html;\n}",
+    "position" : "6.8.0",
+    "target" : "explicit",
+    "title" : "Copy Styled Text as HTML"
+  },
+  {
+    "action" : "exportStyled:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "{\n    destination = file;\n    format = html;\n}",
+    "position" : "6.8.1",
+    "target" : "explicit",
+    "title" : "Export Styled Text as HTML…"
+  },
+  {
+    "action" : "exportStyled:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "{\n    destination = clipboard;\n    format = rtf;\n}",
+    "position" : "6.8.2",
+    "target" : "explicit",
+    "title" : "Copy Styled Text as RTF"
+  },
+  {
+    "action" : "exportStyled:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "{\n    destination = file;\n    format = rtf;\n}",
+    "position" : "6.8.3",
+    "target" : "explicit",
+    "title" : "Export Styled Text as RTF…"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "7",
+    "target" : "explicit",
+    "title" : "Window"
+  },
+  {
+    "action" : "nextDocumentTab:",
+    "key" : "\t",
+    "modifiers" : "262144",
+    "object" : "",
+    "position" : "7.0",
+    "target" : "explicit",
+    "title" : "Next Tab"
+  },
+  {
+    "action" : "previousDocumentTab:",
+    "key" : "\t",
+    "modifiers" : "393216",
+    "object" : "",
+    "position" : "7.1",
+    "target" : "explicit",
+    "title" : "Previous Tab"
+  },
+  {
+    "action" : "showDocumentTabs:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "7.2",
+    "target" : "responder",
+    "title" : "Open Documents…"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "7.3",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "performTabCommand:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "newToRight",
+    "position" : "7.4",
+    "target" : "explicit",
+    "title" : "New Tab to Right"
+  },
+  {
+    "action" : "performTabCommand:",
+    "key" : "T",
+    "modifiers" : "1048576",
+    "object" : "reopen",
+    "position" : "7.5",
+    "target" : "explicit",
+    "title" : "Reopen Closed Tab"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "7.6",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "performTabCommand:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "close",
+    "position" : "7.7",
+    "target" : "explicit",
+    "title" : "Close Tab"
+  },
+  {
+    "action" : "performTabCommand:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "closeOthers",
+    "position" : "7.8",
+    "target" : "explicit",
+    "title" : "Close Other Tabs"
+  },
+  {
+    "action" : "performTabCommand:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "closeLeft",
+    "position" : "7.9",
+    "target" : "explicit",
+    "title" : "Close Tabs to the Left"
+  },
+  {
+    "action" : "performTabCommand:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "closeRight",
+    "position" : "7.10",
+    "target" : "explicit",
+    "title" : "Close Tabs to the Right"
+  },
+  {
+    "action" : "performTabCommand:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "closeGroup",
+    "position" : "7.11",
+    "target" : "explicit",
+    "title" : "Close All in Group"
+  },
+  {
+    "action" : "performTabCommand:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "closeSaved",
+    "position" : "7.12",
+    "target" : "explicit",
+    "title" : "Close Saved Tabs"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "7.13",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "performTabCommand:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "pin",
+    "position" : "7.14",
+    "target" : "explicit",
+    "title" : "Pin Tab"
+  },
+  {
+    "action" : "performTabCommand:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "moveLeft",
+    "position" : "7.15",
+    "target" : "explicit",
+    "title" : "Move Tab Left"
+  },
+  {
+    "action" : "performTabCommand:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "moveRight",
+    "position" : "7.16",
+    "target" : "explicit",
+    "title" : "Move Tab Right"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "7.17",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "performTabCommand:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "reveal",
+    "position" : "7.18",
+    "target" : "explicit",
+    "title" : "Reveal in Finder"
+  },
+  {
+    "action" : "performTabCommand:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "copyPath",
+    "position" : "7.19",
+    "target" : "explicit",
+    "title" : "Copy File Path"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "7.20",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "performMiniaturize:",
+    "key" : "m",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "7.21",
+    "target" : "responder",
+    "title" : "Minimize"
+  },
+  {
+    "action" : "performZoom:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "7.22",
+    "target" : "responder",
+    "title" : "Zoom"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "7.23",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "arrangeInFront:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "7.24",
+    "target" : "responder",
+    "title" : "Bring All to Front"
+  },
+  {
+    "action" : "nextDocumentTab:",
+    "key" : "}",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "7.25",
+    "target" : "explicit",
+    "title" : "Next Tab"
+  },
+  {
+    "action" : "previousDocumentTab:",
+    "key" : "{",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "7.26",
+    "target" : "explicit",
+    "title" : "Previous Tab"
+  },
+  {
+    "action" : "previousDocumentTab:",
+    "key" : "\u0019",
+    "modifiers" : "393216",
+    "object" : "",
+    "position" : "7.27",
+    "target" : "explicit",
+    "title" : "Previous Tab"
+  },
+  {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "8",
+    "target" : "explicit",
+    "title" : "Help"
+  },
+  {
+    "action" : "openUserGuide:",
+    "key" : "?",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "8.0",
+    "target" : "responder",
+    "title" : "TextTank User Guide"
+  },
+  {
+    "action" : "openWelcome:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "8.1",
+    "target" : "responder",
+    "title" : "Welcome to TextTank"
+  },
+  {
+    "action" : "openOnlineHelp:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "8.2",
+    "target" : "responder",
+    "title" : "TextTank Help (Online)"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "8.3",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "paletteAction",
+    "key" : "P",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "8.4",
+    "target" : "explicit",
+    "title" : "Command Palette…"
+  },
+  {
+    "action" : "callTip",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "8.5",
+    "target" : "explicit",
+    "title" : "Show Keyword Help"
+  }
+]

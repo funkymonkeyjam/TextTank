@@ -4,12 +4,12 @@
 
 Plain text. Sharp tools.
 
-An independent native macOS plain-text and code editor using Swift/AppKit, Scintilla Cocoa and Lexilla. **Incomplete preview:** standard Notepad++ capability coverage remains required and is not certified. User-named automations, recorded macros, explicit Run commands and local text tools are implemented with focused checks; they are not a full-parity claim. Core editing and deterministic automations require no account or paid service.
+An independent native macOS plain-text and code editor using Swift/AppKit, Scintilla Cocoa and Lexilla. **Incomplete preview:** TextTank is a close approximation of Notepad++ for familiar editing tasks, not a behaviour-by-behaviour copy; coverage of its capability matrix is incomplete and not certified. User-named automations, recorded macros, explicit Run commands and local text tools are implemented with focused checks; they are not a full-parity claim. Core editing and deterministic automations require no account or paid service.
 
 ## Requirements
 
-- An arm64 Mac with full Xcode and its command-line tools selected, Git, make and Python 3.9 or newer. Local development and the required `native` CI check use Xcode 27.2. CI also runs an advisory compatibility check with Xcode 16.4. Each run reports the acceptance outcome for each toolchain.
-- The deployment target is macOS 14; actual macOS 14/15 and Intel runtime behavior is not certified. Only arm64 is supported by these build scripts.
+- An arm64 Mac with full Xcode and its command-line tools selected, Git, make and Python 3.9 or newer. Local development and the required `native` CI check use Xcode 27.2. That check is the only CI job: it builds, runs every acceptance suite including the gate performance tier, then the full performance tier and the static analyzer. The earlier advisory Xcode 16.4 job on a macOS 15 runner was retired when the minimum system rose to macOS 27.0, because that runner cannot launch a macOS 27 app.
+- The minimum system is macOS 27.0, set once in `Dependencies.lock.json`; the build rejects any app image, embedded framework, `tt` helper or property list that states another minimum. Testing ran on macOS 27.0.1; a separate macOS 27.0 host was not tested, and earlier systems cannot launch the app. Intel is not supported: only arm64 is built and checked.
 - Initial acquisition of pinned Scintilla/Lexilla archives needs network access. An existing verified `Vendor/` tree builds without downloads. No model, service or executable is contacted by ordinary editing or import.
 
 ## Build and test

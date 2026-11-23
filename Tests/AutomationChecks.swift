@@ -13,10 +13,19 @@ import Darwin
         let url = privateArea.appendingPathComponent("Automations.json")
         check(
             try AutomationLibrary.readIfPresent(at: url) == nil
-                && AutomationLibrary.forSuppliedText(at: url).workflows.count
-                    == AutomationDefinition.firstRunPresets.count
+                && AutomationLibrary.forSuppliedText(at: url).workflows == [AutomationDefinition.remindersExample]
                 && !FileManager.default.fileExists(atPath: url.path),
-            "fresh read-only library offers defaults without writing")
+            "fresh read-only library offers only Add to Reminders, without writing")
+        // A read-only consumer never applies the launch-time retirement and never writes.
+        let untouched = try AutomationLibrary(workflows: RetiredFactoryAutomation.definitions.suffix(1) + [])
+            .encoded()
+        try untouched.write(to: url)
+        check(
+            try AutomationLibrary.forSuppliedText(at: url).workflows.map(\.id) == [RetiredFactoryAutomation.id]
+                && Data(contentsOf: url) == untouched
+                && FileManager.default.contentsOfDirectory(atPath: privateArea.path) == ["Automations.json"],
+            "a read-only consumer reads a file that still holds the retired recipe and leaves it byte-identical")
+        try FileManager.default.removeItem(at: url)
         let wf = AutomationDefinition(
             id: UUID(), name: "Clean", input: .selection, steps: [.init(kind: .removeBlankLines)], output: .editor)
         let data = try AutomationLibrary(workflows: [wf]).encoded()
@@ -48,6 +57,111 @@ import Darwin
             _ = try AutomationLibrary.forSuppliedText(at: url)
         }
         check(try Data(contentsOf: url) == Data("invalid".utf8), "failed read preserves stored bytes")
+    }
+    /// The matcher and the pure migration. The launch-time write is in AutomationControllerChecks.
+    static func retiredFactoryRecipe() throws {
+        typealias Step = AutomationDefinition.Step
+        let factoryID = "A931733F-310A-4EBF-9C48-38C59202D586"
+        // The two installed definitions, written out here as their saved JSON so that the check
+        // does not depend on the constants it tests.
+        func saved(name: String, kinds: [String], extra: String = "") -> String {
+            let pattern = #"(?i)^[ \\t]*(?:Ingredients|Cups|Metric|Garnish[ \\t]*\\(optional\\))[ \\t]*$"#
+            let first = #"{"kind":"removeMatchingLines","find":""# + pattern + #""}"#
+            let steps = ([first] + kinds.map { #"{"kind":""# + $0 + #""}"# }).joined(separator: ",")
+            return #"{"version":1,"id":""# + factoryID + #"","name":""# + name
+                + #"","input":"document","steps":["# + steps
+                + #"],"output":"editor","previewBeforeApply":false,"pinToToolbar":true"# + extra + "}"
+        }
+        let common = [
+            "keepMarkedListRows", "removeMarkdownHeadings", "removeListMarkers", "removeMarkdownFormatting",
+            "removeCheckboxMarkers", "removeNoteReferences"
+        ]
+        let firstKinds = common + ["removeBlankLines"], secondKinds = common + ["trimWhitespace", "removeBlankLines"]
+        func decoded(_ json: String) throws -> AutomationDefinition {
+            try JSONDecoder().decode(AutomationDefinition.self, from: Data(json.utf8))
+        }
+        let first = try decoded(saved(name: "Clean up text", kinds: firstKinds))
+        let second = try decoded(saved(name: "Clean up recipe list", kinds: secondKinds))
+        check(
+            RetiredFactoryAutomation.definitions == [first, second] && first.id.uuidString == factoryID,
+            "the retired record is exactly the two definitions earlier builds saved")
+        check(
+            RetiredFactoryAutomation.isUntouched(first) && RetiredFactoryAutomation.isUntouched(second),
+            "both installed definitions are recognised as untouched")
+        check(
+            RetiredFactoryAutomation.isUntouched(
+                try decoded(saved(name: "Clean up recipe list", kinds: secondKinds, extra: #","shortcut":"""#))),
+            "an empty stored shortcut counts as no shortcut")
+
+        // Everything the user could have done to it keeps it.
+        var kept: [(String, AutomationDefinition)] = []
+        func keep(_ what: String, _ change: (inout AutomationDefinition) -> Void) {
+            for original in [first, second] {
+                var changed = original
+                change(&changed)
+                kept.append((what, changed))
+            }
+        }
+        keep("renamed") { $0.name = "My recipe tidy" }
+        keep("named as the other build's definition") {
+            $0.name = $0.name == "Clean up text" ? "Clean up recipe list" : "Clean up text"
+        }
+        keep("name differing only in case") { $0.name = $0.name.uppercased() }
+        keep("a rule removed") { $0.steps.removeLast() }
+        keep("a rule added") { $0.steps.append(Step(kind: .sortLines)) }
+        keep("rules reordered") { $0.steps.swapAt(1, 2) }
+        keep("the pattern edited") { $0.steps[0].find = "(?i)^Ingredients$" }
+        keep("a rule set to ask when run") { $0.steps[0].askForFind = true }
+        keep("an explicit false ask flag") { $0.steps[0].askForFind = false }
+        keep("a shortcut") { $0.shortcut = "k" }
+        keep("not a favorite") { $0.pinToToolbar = false }
+        keep("favorite flag removed") { $0.pinToToolbar = nil }
+        keep("preview turned on") { $0.previewBeforeApply = true }
+        keep("preview flag removed") { $0.previewBeforeApply = nil }
+        keep("a destination") { $0.destinationID = "list-identifier" }
+        keep("another input") { $0.input = .selection }
+        keep("another output") { $0.output = .clipboard }
+        keep("an independent copy under another identifier") { $0.id = UUID() }
+        for (what, definition) in kept {
+            check(!RetiredFactoryAutomation.isUntouched(definition), "kept: \(what) (\(definition.name))")
+        }
+        let otherContent = AutomationDefinition(
+            id: RetiredFactoryAutomation.id, name: "Old name", input: .selection, steps: [], output: .editor)
+        check(!RetiredFactoryAutomation.isUntouched(otherContent), "kept: other content under the factory identifier")
+        check(
+            !RetiredFactoryAutomation.isUntouched(.remindersExample)
+                && !RetiredFactoryAutomation.isUntouched(.insertableExample()),
+            "kept: the reminders preset and the inserted example")
+
+        // The migration removes only that item and keeps everything else in order.
+        let mine = AutomationDefinition(
+            id: UUID(), name: "Clean up recipe list", input: .document, steps: second.steps, output: .editor,
+            previewBeforeApply: false, pinToToolbar: true)
+        for factory in [first, second] {
+            var renamedCopy = kept[0].1
+            renamedCopy.id = UUID()
+            let library = AutomationLibrary(workflows: [mine, factory, .remindersExample, renamedCopy])
+            let migrated = library.removingRetiredFactoryItems()
+            check(
+                migrated?.workflows == [library.workflows[0], library.workflows[2], library.workflows[3]]
+                    && migrated?.version == 1,
+                "retiring ‘\(factory.name)’ keeps every other automation in order, including one with the same name")
+            check(
+                migrated?.removingRetiredFactoryItems() == nil,
+                "a second pass over the result finds nothing to retire")
+        }
+        check(
+            AutomationLibrary(workflows: []).removingRetiredFactoryItems() == nil
+                && AutomationLibrary(workflows: [mine, .remindersExample]).removingRetiredFactoryItems() == nil
+                && AutomationLibrary(workflows: kept.prefix(1).map(\.1)).removingRetiredFactoryItems() == nil,
+            "an empty library, a library without the item and a library with an edited item are unchanged")
+        check(
+            AutomationLibrary(workflows: [second]).removingRetiredFactoryItems() == AutomationLibrary(workflows: []),
+            "a library holding only the untouched item becomes an empty library")
+        check(
+            try AutomationLibrary.decode(AutomationLibrary(workflows: [first, mine]).encoded())
+                .removingRetiredFactoryItems()?.workflows == [mine],
+            "the item is recognised after a round trip through the saved format")
     }
     static func progressReentry(_ mode: String) throws {
         DispatchQueue.global().asyncAfter(deadline: .now() + 3) { exit(70) }
@@ -108,7 +222,7 @@ import Darwin
             check(
                 concurrentObservations.completed.sorted() == Array(0..<100),
                 "F316 actual concurrent progress callbacks retain every completed checkpoint")
-            var definition = AutomationDefinition.example
+            var definition = AutomationDefinition.recipeFixture
             // This older generic bullet-only configuration intentionally keeps unmarked rows.
             definition.steps = [.init(kind: .removeListMarkers), .init(kind: .removeBlankLines)]
             let input =
@@ -184,21 +298,22 @@ import Darwin
                 contentsOf: fixtures.appendingPathComponent("recipe-markdown-input.txt"), encoding: .utf8)
             let cleaned = try String(
                 contentsOf: fixtures.appendingPathComponent("recipe-cleaned-expected.txt"), encoding: .utf8)
-            let actual = try AutomationDefinition.example.transform(recipe)
+            let actual = try AutomationDefinition.recipeFixture.transform(recipe)
             fixtureCheck(
                 recipe.split(separator: "\n").filter { $0.hasPrefix("- ") }.count == 28,
                 "independently count source28 ingredient rows")
             fixtureCheck(cleaned.split(separator: "\n").count == 28, "expected28 ingredient rows")
             check(actual == cleaned, "exact user Markdown recipe cleanup: \(actual.debugDescription)")
             check(
-                AutomationDefinition.example.input == .document && AutomationDefinition.example.output == .editor,
+                AutomationDefinition.recipeFixture.input == .document
+                    && AutomationDefinition.recipeFixture.output == .editor,
                 "cleanup targets current editor")
             check(
-                AutomationDefinition.example.previewBeforeApply == false
-                    && AutomationDefinition.example.pinToToolbar == true, "direct cleanup favorite defaults")
+                AutomationDefinition.recipeFixture.previewBeforeApply == false
+                    && AutomationDefinition.recipeFixture.pinToToolbar == true, "direct cleanup favorite defaults")
             check(
                 AutomationDefinition.remindersExample.output == .reminders
-                    && AutomationDefinition.remindersExample.id != AutomationDefinition.example.id,
+                    && AutomationDefinition.remindersExample.id != AutomationDefinition.recipeFixture.id,
                 "separate reusable reminder output")
             let noNewKeys = Data(
                 "{\"version\":1,\"workflows\":[{\"version\":1,\"id\":\"A931733F-310A-4EBF-9C48-38C59202D586\",\"name\":\"Old name\",\"input\":\"selection\",\"steps\":[],\"output\":\"editor\"}]}"
@@ -207,7 +322,7 @@ import Darwin
             check(
                 legacy.previewBeforeApply == nil && legacy.pinToToolbar == nil,
                 "old libraries remain decodable with flags absent")
-            var format = AutomationDefinition.example
+            var format = AutomationDefinition.recipeFixture
             format.steps = [.init(kind: .removeMarkdownFormatting)]
             check(
                 try format.transform("2 * 3 * 4, snake_case, **salt** and *pepper*")
@@ -218,7 +333,7 @@ import Darwin
                 "balanced URL parentheses do not eat ingredient options")
             check(try format.transform("[salt](broken") == "[salt](broken", "malformed links retained")
             check(try format.transform(#"\*literal\*"#) == "*literal*", "escaped stars remain literal")
-            var notes = AutomationDefinition.example
+            var notes = AutomationDefinition.recipeFixture
             notes.steps = [.init(kind: .removeNoteReferences)]
             check(
                 try notes.transform("1 cup flour (optional, Note 2) (finely sifted)")
@@ -227,13 +342,13 @@ import Darwin
             check(
                 try notes.transform("1 notebook (optional) — 2 eggs") == "1 notebook (optional) — 2 eggs",
                 "ordinary note-like words unchanged")
-            var marks = AutomationDefinition.example
+            var marks = AutomationDefinition.recipeFixture
             marks.steps = [.init(kind: .removeCheckboxMarkers)]
             check(
                 try marks.transform("▢2 eggs\n☐salt to taste\n[x] pepper\n[ ] ½ cup flour")
                     == "2 eggs\nsalt to taste\npepper\n½ cup flour",
                 "checkbox glyphs and ASCII boxes independent of numeric content")
-            var filtered = AutomationDefinition.example
+            var filtered = AutomationDefinition.recipeFixture
             filtered.steps = [.init(kind: .keepMarkedListRows)]
             check(
                 try filtered.transform("Heading:\n\n▢salt to taste\n▢2 eggs\n") == "▢salt to taste\n▢2 eggs\n",
@@ -258,25 +373,25 @@ import Darwin
                     && plainExpected.split(separator: "\n").count == cleaned.split(separator: "\n").count,
                 "plain-copy expected fixture differs from the Markdown expected fixture only within a row")
             check(
-                try AutomationDefinition.example.transform(plain) == plainExpected,
+                try AutomationDefinition.recipeFixture.transform(plain) == plainExpected,
                 "configured optional heading removed from derived copy")
             let explicit = plain.replacingOccurrences(of: "Garnish (optional)", with: "# Garnish (optional)")
             check(
-                try AutomationDefinition.example.transform(explicit) == plainExpected,
+                try AutomationDefinition.recipeFixture.transform(explicit) == plainExpected,
                 "plain copied28 rows retain quantities after explicit heading markup")
             let native = try String(
                 contentsOf: fixtures.appendingPathComponent("recipe-browser-plain-input.txt"), encoding: .utf8)
             let nativeExpected = try String(
                 contentsOf: fixtures.appendingPathComponent("recipe-browser-cleaned-expected.txt"), encoding: .utf8)
             check(
-                try AutomationDefinition.example.transform(native) == nativeExpected,
-                "observed native browser copy cleans28 exactly: \(try AutomationDefinition.example.transform(native).debugDescription)"
+                try AutomationDefinition.recipeFixture.transform(native) == nativeExpected,
+                "observed native browser copy cleans28 exactly: \(try AutomationDefinition.recipeFixture.transform(native).debugDescription)"
             )
             fixtureCheck(nativeExpected.split(separator: "\n").count == 28, "native expected28 ingredient rows")
             rejects("unknown unmarked ingredient aborts entire transform") {
-                _ = try AutomationDefinition.example.transform(native + "salt to taste\n")
+                _ = try AutomationDefinition.recipeFixture.transform(native + "salt to taste\n")
             }
-            var matching = AutomationDefinition.example
+            var matching = AutomationDefinition.recipeFixture
             matching.steps = [.init(kind: .clearLinesMatching, find: "Ingredients")]
             check(
                 try matching.transform("Ingredients\n2 cups Ingredients mix\n") == "\n2 cups Ingredients mix\n",
@@ -285,7 +400,7 @@ import Darwin
             rejects("invalid heading regex") { try matching.validate() }
             matching.steps = [.init(kind: .clearLinesMatching, find: "", replacement: "x")]
             rejects("invalid heading parameters") { try matching.validate() }
-            var renamed = AutomationDefinition.example
+            var renamed = AutomationDefinition.recipeFixture
             renamed.name = "My chosen label"
             check(
                 try renamed.transform(native) == nativeExpected, "configured recipe behavior independent of user name")
@@ -297,7 +412,7 @@ import Darwin
             check(
                 ProcessInfo.processInfo.systemUptime - regexStarted < 10,
                 "regex timeout returns well inside the hang guard")
-            var prompted = AutomationDefinition.example
+            var prompted = AutomationDefinition.recipeFixture
             prompted.steps = [
                 .init(
                     kind: .replaceLiteral, find: "saved", replacement: "default", askForFind: true,
@@ -323,15 +438,15 @@ import Darwin
             let control = AutomationRunControl()
             control.cancel()
             rejects("cancelled transform cannot produce output", message: "Automation cancelled") {
-                _ = try AutomationDefinition.example.transform(native, control: control)
+                _ = try AutomationDefinition.recipeFixture.transform(native, control: control)
             }
             let progress = AutomationRunControl()
             let progressObservations = AutomationProgressObservations()
             progress.onProgress = { step, _ in progressObservations.record(step) }
-            _ = try AutomationDefinition.example.transform(native, control: progress)
+            _ = try AutomationDefinition.recipeFixture.transform(native, control: progress)
             check(
                 progressObservations.completed.first == 0
-                    && progressObservations.completed.last == AutomationDefinition.example.steps.count,
+                    && progressObservations.completed.last == AutomationDefinition.recipeFixture.steps.count,
                 "progress reaches all steps")
             let root = FileManager.default.temporaryDirectory.appendingPathComponent(
                 "AutomationFiles-" + UUID().uuidString)
@@ -376,7 +491,7 @@ import Darwin
                 .clearLinesEqualTo, .clearLinesContaining, .clearLinesStartingWith
             ]
             for kind in literalKinds {
-                var rule = AutomationDefinition.example
+                var rule = AutomationDefinition.recipeFixture
                 rule.steps = [.init(kind: kind, find: "Note")]
                 let source = "Note\r\n Note\r\nnote\r\nNote: optional\r\n2 eggs\r\n2 eggs\r\n½–¾ cup café\r\n"
                 let expected: String
@@ -427,7 +542,7 @@ import Darwin
                     try rule.resolvingParameters { _, _, _ in nil } == nil,
                     "\(kind.rawValue) prompt cancellation yields no runnable rule")
             }
-            var trimming = AutomationDefinition.example
+            var trimming = AutomationDefinition.recipeFixture
             trimming.steps = [.init(kind: .trimWhitespace)]
             check(
                 try trimming.transform(" \t½ cup café \t\r\n\t2 eggs\t\n \t \r👩🏽‍💻  \r\n")
@@ -445,7 +560,7 @@ import Darwin
             rejects("trim rejects unexpected replacement") { try trimming.validate() }
             trimming.steps = [.init(kind: .trimWhitespace, askForFind: true)]
             rejects("trim rejects meaningless runtime find prompt") { try trimming.validate() }
-            var friendly = AutomationDefinition.example
+            var friendly = AutomationDefinition.recipeFixture
             friendly.steps = [
                 .init(kind: .clearLinesStartingWith, find: "Serves:"), .init(kind: .trimWhitespace),
                 .init(kind: .clearLinesEqualTo, find: "Ingredients"),
@@ -468,7 +583,7 @@ import Darwin
                 try sampleOnly.testSample("Serves: 4\n Ingredients \n ½ cup flour \n2 eggs\n2 eggs\n")
                     == "½ cup flour\n2 eggs\n2 eggs\n",
                 "sample test uses supplied text only regardless file input or reminder output")
-            var emptyRules = AutomationDefinition.example
+            var emptyRules = AutomationDefinition.recipeFixture
             emptyRules.steps = []
             check(
                 try emptyRules.testSample(String(repeating: "a", count: 65536)).utf8.count == 65536,
@@ -481,7 +596,7 @@ import Darwin
             rejects("sample cancellation applies even with zero rules", message: "Automation cancelled") {
                 _ = try emptyRules.testSample("preserved", control: cancelledSample)
             }
-            var expanding = AutomationDefinition.example
+            var expanding = AutomationDefinition.recipeFixture
             expanding.steps = Array(repeating: .init(kind: .replaceLiteral, find: "a", replacement: "aa"), count: 100)
             let expansionStarted = ProcessInfo.processInfo.systemUptime
             rejects("sample repeated expansion fails before an oversized intermediate", message: "sample-result limit")
@@ -542,7 +657,7 @@ import Darwin
             }
             invalidPortable.name = ""
             rejects("invalid portable name rejects export") { _ = try invalidPortable.encoded() }
-            var bounded = AutomationDefinition.example
+            var bounded = AutomationDefinition.recipeFixture
             bounded.steps = [
                 .init(
                     kind: .replaceLiteral, find: "x",
@@ -598,7 +713,7 @@ import Darwin
                 try bounded.transform(escapedMalformed) == escapedMalformed,
                 "odd-offset escaped malformed link preserves bytes with threshold checkpoints")
             // Audit package 14. Each group names the finding it guards.
-            var rule = AutomationDefinition.example
+            var rule = AutomationDefinition.recipeFixture
             // F55: the regex budget is charged for regex work, not for the number of lines.
             rule.steps = [
                 .init(kind: .clearLinesMatching, find: AutomationDefinition.recipeHeadingPattern),
@@ -653,8 +768,8 @@ import Darwin
                 try rule.transform("1/2 tsp herbs (Note 4)") == "1/2 tsp herbs",
                 "F62 the gap left by a removed note is still tidied")
             check(
-                try AutomationDefinition.example.transform("- 2 eggs  \n") == "2 eggs\n",
-                "F62 the built-in recipe cleanup still trims line edges")
+                try AutomationDefinition.recipeFixture.transform("- 2 eggs  \n") == "2 eggs\n",
+                "F62 the strict recipe cleanup still trims line edges")
             // F63: a whole-line match is anchored, in validation and in the run alike.
             rule.steps = [.init(kind: .clearLinesMatching, find: "Cups|Cups Metric")]
             check(
@@ -764,7 +879,7 @@ import Darwin
             }
             // F71: a rule that asks for its text when running may be saved with no default.
             for kind in literalKinds + [.clearLinesMatching, .replaceLiteral] {
-                var asking = AutomationDefinition.example
+                var asking = AutomationDefinition.recipeFixture
                 asking.steps = [
                     .init(kind: kind, find: "", replacement: kind == .replaceLiteral ? "" : nil, askForFind: true)
                 ]
@@ -875,19 +990,19 @@ import Darwin
                     && LineOrder.localizedAscending("item 9", "item 10")
                     && !LineOrder.codePointAscending("item 9", "item 10"),
                 "G347 the shared comparators differ exactly on case and numbers")
-            // G376: the first-run preset is named for what it does.
+            // G376: no recipe automation is shipped; the fixture stands in for a user's strict cleanup.
             check(
-                AutomationDefinition.example.id.uuidString == "A931733F-310A-4EBF-9C48-38C59202D586"
-                    && AutomationDefinition.example.name == "Clean up recipe list",
-                "G376 the first-run preset keeps its identifier and is named as a recipe cleanup")
+                AutomationDefinition.recipeFixture.id != RetiredFactoryAutomation.id
+                    && !RetiredFactoryAutomation.isUntouched(.recipeFixture),
+                "the recipe fixture is not the retired factory automation")
             let userSample = try String(
                 contentsOf: fixtures.appendingPathComponent("recipe-user-sample1-input.txt"), encoding: .utf8)
             rejects(
-                "G376 the strict preset refuses a list that mixes marked and unmarked rows", message: "no list marker"
-            ) { _ = try AutomationDefinition.example.transform(userSample) }
+                "G376 the strict cleanup refuses a list that mixes marked and unmarked rows", message: "no list marker"
+            ) { _ = try AutomationDefinition.recipeFixture.transform(userSample) }
             check(
-                AutomationDefinition.example.steps.first?.find == AutomationDefinition.recipeHeadingPattern,
-                "G376 the preset uses the one named heading pattern")
+                AutomationDefinition.recipeFixture.steps.first?.find == AutomationDefinition.recipeHeadingPattern,
+                "G376 the strict cleanup uses the one named heading pattern")
             // G377: templates are bundled rule files with no sample-specific text.
             let templateFolder = TestPaths.resources.appendingPathComponent("AutomationTemplates")
             check(
@@ -1008,7 +1123,7 @@ import Darwin
                         kind: .trimWhitespace, find: "", replacement: "", askForFind: false, askForReplacement: false,
                         from: Step(kind: .trimWhitespace)) == Step(kind: .trimWhitespace),
                     "G387 a rule saved unchanged equals the rule that was opened")
-                for step in AutomationDefinition.example.steps + [
+                for step in AutomationDefinition.recipeFixture.steps + [
                     Step(kind: .replaceLiteral, find: "a", replacement: ""),
                     Step(kind: .clearLinesEqualTo, find: "", askForFind: true),
                     Step(kind: .replaceLiteral, find: "a", replacement: "b", askForFind: false, askForReplacement: true)
@@ -1082,7 +1197,7 @@ import Darwin
                 ) { try Step(kind: .clearLinesEqualTo, find: "x", replacement: "y").validate() }
                 // G381: a run-time prompt uses the names the rule dialog uses.
                 var promptLabels: [String] = []
-                var asking = AutomationDefinition.example
+                var asking = AutomationDefinition.recipeFixture
                 asking.steps = [
                     Step(kind: .clearLinesMatching, find: "a+", askForFind: true),
                     Step(kind: .replaceLiteral, find: "x", replacement: "y", askForFind: true, askForReplacement: true)
@@ -1220,7 +1335,7 @@ import Darwin
                         && importedRules.sets[0].name == "Heading cleanup"
                         && importedRules.sets[0].steps == [rule("Ingredients")], "G388 a rule file imports as its rules"
                 )
-                var twoAutomations = AutomationLibrary(workflows: AutomationDefinition.firstRunPresets)
+                var twoAutomations = AutomationLibrary(workflows: [.recipeFixture, .remindersExample])
                 twoAutomations.workflows[1].destinationID = "list-identifier"
                 let importedLibrary = try AutomationRuleImport.ruleSets(from: twoAutomations.encoded())
                 check(
@@ -1257,10 +1372,17 @@ import Darwin
                 }
                 // G364: the presets a new installation starts with, for the explicit restore.
                 check(
-                    AutomationDefinition.firstRunPresets.map(\.id)
-                        == [AutomationDefinition.example.id, AutomationDefinition.remindersExample.id],
-                    "G364 the first-run presets are the cleanup and the reminders automation, in that order")
+                    AutomationDefinition.firstRunPresets == [AutomationDefinition.remindersExample],
+                    "G364 the only first-run preset is Add to Reminders")
+                let inserted = AutomationDefinition.insertableExample()
+                check(
+                    inserted.id != AutomationDefinition.insertableExample().id
+                        && inserted.id != RetiredFactoryAutomation.id && inserted.name == "Trim and remove empty lines"
+                        && inserted.steps.map(\.kind) == [.trimWhitespace, .removeBlankLines]
+                        && (try? inserted.validate()) != nil,
+                    "Insert Example is a general automation under a new identifier each time")
             }
+            Checks.section("retiring the untouched factory recipe") { try retiredFactoryRecipe() }
             Checks.summary {
                 "PASS AutomationChecks: \(Checks.count) assertions (pure core; native UI and external outputs not covered)"
             }

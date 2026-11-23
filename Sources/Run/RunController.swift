@@ -19,7 +19,7 @@ import AppKit
         set { loadState.error = newValue }
     }
     private var execution: RunExecution? { didSet { manager?.refresh() } }
-    private let menu = NSMenu(title: "Run")
+    private let menu = NSMenu(title: "Run Commands")
     private var resultWindow: NSWindow?
     private weak var applyButton: NSButton?
     /// The result that Apply would insert. The editor is weak: a result window must not keep a
