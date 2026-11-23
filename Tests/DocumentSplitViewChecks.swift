@@ -117,8 +117,8 @@ extension DocumentChecks {
             check(
                 finishes(delegate, in: document.editor),
                 "Start Recording records in the current editor while another window is main")
-            try delegate.automations.persistLibrary(AutomationLibrary(workflows: [.example]))
-            try delegate.automations.runSavedAutomation(id: AutomationDefinition.example.id)
+            try delegate.automations.persistLibrary(AutomationLibrary(workflows: [.recipeFixture]))
+            try delegate.automations.runSavedAutomation(id: AutomationDefinition.recipeFixture.id)
             check(
                 document.editor.text == "2 eggs\nplain text\n",
                 "an editor-output automation runs on the current editor while another window is main")
@@ -163,7 +163,7 @@ extension DocumentChecks {
                 "a text utility that changes the document discards the recording")
             document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             try recordOneStep(delegate, in: document.editor)
-            try delegate.automations.runSavedAutomation(id: AutomationDefinition.example.id)
+            try delegate.automations.runSavedAutomation(id: AutomationDefinition.recipeFixture.id)
             check(!finishes(delegate, in: document.editor), "running an automation discards the recording")
             document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             try require(
@@ -199,7 +199,7 @@ extension DocumentChecks {
             rejects(
                 "an editor-output automation without a current editor reports it", message: "requires an open editor"
             ) {
-                try delegate.automations.runSavedAutomation(id: AutomationDefinition.example.id)
+                try delegate.automations.runSavedAutomation(id: AutomationDefinition.recipeFixture.id)
             }
             check(
                 try delegate.workspace.capture(name: "empty").activeDocumentID == nil,

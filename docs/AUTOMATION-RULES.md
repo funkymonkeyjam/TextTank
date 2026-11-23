@@ -11,7 +11,7 @@ The management commands are in the Automations menu:
 - **Manage Automations…** lists the saved automations. Two automations may share a name; both are listed, and each keeps its own identifier.
 - **Choose Automation…** runs one from a list.
 - **Review Reminder Export History…** shows recorded Reminders exports, newest first. A record file that cannot be read is named there and left unchanged; a new export then asks before sending, because the unreadable file may record the same items. **Clear Confirmed History…** in that dialog removes, after a confirmation, TextTank's record of exports whose every item was confirmed. Exports with unsent, failed or uncertain items are kept, Reminders itself is not changed, and a cleared list no longer triggers the already-sent warning. Nothing is removed automatically.
-- **Restore Default Automations…** adds fresh copies of the automations a new installation starts with (Clean up recipe list and Add to Reminders), under new identifiers. Nothing already saved is replaced, including edited copies of the same automations.
+- **Restore Default Automations…** adds a fresh copy of the automation a new installation starts with (Add to Reminders), under a new identifier. Nothing already saved is replaced, including an edited copy of the same automation.
 
 ### Creating an automation
 
@@ -94,7 +94,7 @@ The templates are rule files bundled with the app (`Resources/AutomationTemplate
 
 ## Advanced JSON
 
-Manage Automations → Advanced JSON edits the whole library as JSON. The dialog lists every rule kind with its builder label and parameters; the list is generated from the same definitions the app validates against. An empty library is shown as an empty library. Insert Example adds the example automation to the JSON in the editor; nothing is saved until Save. Import and Export read and write a library file of at most 32 MiB.
+Manage Automations → Advanced JSON edits the whole library as JSON. The dialog lists every rule kind with its builder label and parameters; the list is generated from the same definitions the app validates against. An empty library is shown as an empty library. Insert Example adds a small general automation (Trim and remove empty lines, under a new identifier each time) to the JSON in the editor; nothing is saved until Save. Import and Export read and write a library file of at most 32 MiB.
 
 A library holds at most 200 automations. Each has `version` 1, a unique `id`, a `name` of 1–120 characters, an `input` (`selection`, `document`, `clipboard`, `file`), `steps`, an `output` (`editor`, `clipboard`, `newDocument`, `file`, `reminders`), and optionally `shortcut`, `previewBeforeApply`, `pinToToolbar` and `destinationID`. A step has a `kind` and only the parameters that kind takes; a stray `find` or `replacement` is refused. Validation messages name a rule by its builder label and its JSON kind. No automation runs when it is saved or imported.
 
@@ -108,19 +108,37 @@ Clipboard input reads plain text first, then rich text. A clipboard that offers 
 
 ## First run and storage
 
-Automations are stored in `Automations.json` in the app's support folder, written atomically with private permissions. When no file exists, the two starting automations are installed. If that first write fails, they stay available for the session, the failure is reported once, and the next save writes them. An existing file that cannot be read is never overwritten: saving is refused until it is repaired or removed outside the app.
+Automations are stored in `Automations.json` in the app's support folder, written atomically with private permissions. When no file exists, the one starting automation, Add to Reminders, is installed. It has its own explicit destination and Send. If that first write fails, it stays available for the session, the failure is reported once, and the next save writes it. An existing file that cannot be read is never overwritten: saving is refused until it is repaired or removed outside the app. An existing library is never topped up: an empty library stays empty.
 
-The automation installed first is named Clean up recipe list. It is a strict, marker-based cleanup: when a list has bullets or checkboxes, every other non-blank line must be a Markdown heading or a colon label, or the run stops with nothing changed. Add to Reminders is a separate automation with its own explicit destination and Send.
+No recipe automation is installed. Recipe cleanup is available as rules: the Recipe ingredient cleanup template below, and the Keep marked list rows (strict) rule for a marker-based cleanup that stops with nothing changed when a list mixes marked rows with other text.
+
+### The retired recipe automation
+
+Earlier builds installed a second starting automation, a recipe cleanup named Clean up text and later Clean up recipe list. When the app starts and reads an existing library, it removes that automation only if it is still exactly what a build installed (`RetiredFactoryAutomation` in `Sources/Automations/AutomationCore.swift`). All of these must hold:
+
+- the identifier is the one those builds used;
+- the name and the rule list are together one of the two installed definitions, with no rule edited, added, removed, reordered or set to ask when run;
+- the input is the document and the output is the captured document;
+- there is no shortcut (a stored empty shortcut counts as none) and no destination;
+- preview is stored as off and favorite is stored as on.
+
+Anything else is the user's and is kept: a renamed or edited copy, one with a shortcut, one removed from the favorites, a duplicate under another identifier, and any other automation that happens to use the same name. An automation is never removed by its name alone.
+
+The removal is decided from the content each time, with no marker that it has run, so repeating it is harmless and a library with nothing to remove is not rewritten. Every other automation keeps its content and position. A library that held only that automation becomes an empty library; the starting automation is not installed again. A library that cannot be read is not examined and not written.
+
+If the rewritten library cannot be saved, the file stays exactly as it was. The automation is still left out for that session and nothing is reported. Opening Manage Automations, the next save and the next start each try again. A remembered Paste Through choice that named the removed automation simply shows no check mark.
+
+Services and Shortcuts read the library without changing it. Until the app has started once and saved the library, they can still find the old automation in the file by its name. With no file they offer only Add to Reminders, which they refuse because it sends to Reminders.
 
 ## Recipe template and fixtures
 
 Load Rules → Template: Recipe ingredient cleanup replaces the draft with general rules only: the recipe control words and colon labels are cleared, then markers, Markdown, checkbox marks and numbered note references are removed, line edges are trimmed and empty lines dropped. It preserves unknown text rather than guessing whether an unmarked row is an ingredient or a heading: a heading without a colon stays, and so does preparation prose after an ingredient. Add your own Clear lines equal to text or Find and replace rules for those.
 
-The four supplied sample input and output pairs are `Tests/Fixtures/recipe-user-sample*`; the outputs contain 32, 7, 13 and 13 ingredient rows. They are matched byte for byte by `Tests/Fixtures/recipe-user-samples.rules.json`, which is the template plus eight literal rules for the headings and note suffixes that only those samples contain. That rule file is test data and is not part of the app; it can be imported with Load Rules → Import File. Samples 1 and 4 mix marked rows with unmarked ones, so the strict first-run automation refuses them; they need the rules above. `Tests/Fixtures/README.md` says which rules each fixture is checked against.
+The four supplied sample input and output pairs are `Tests/Fixtures/recipe-user-sample*`; the outputs contain 32, 7, 13 and 13 ingredient rows. They are matched byte for byte by `Tests/Fixtures/recipe-user-samples.rules.json`, which is the template plus eight literal rules for the headings and note suffixes that only those samples contain. That rule file is test data and is not part of the app; it can be imported with Load Rules → Import File. Samples 1 and 4 mix marked rows with unmarked ones, so a strict cleanup built on Keep marked list rows refuses them; they need the rules above. `Tests/Fixtures/README.md` says which rules each fixture is checked against.
 
 ## Changes for automations saved by earlier builds
 
-Saved automations are never rewritten. Three corrections change what an existing one does:
+Saved automations are never rewritten, apart from the removal of the untouched retired recipe automation described under First run and storage. Three corrections change what an existing one does:
 
 - An automation that uses Remove numbered note references without Trim spaces at line edges no longer trims lines that hold no note reference.
 - A pattern with a shorter alternative first, or a lazy quantifier, now clears every line it can match entirely. It may clear lines it used to leave.

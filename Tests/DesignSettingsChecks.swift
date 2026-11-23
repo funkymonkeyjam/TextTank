@@ -663,7 +663,7 @@ extension DesignSettingsChecks {
         let editor = document.editor
         let automation = AutomationController(
             editorProvider: { editor }, newDocument: { _ in check(false, "DG input checks never invoke output") })
-        var workflow = AutomationDefinition.example
+        var workflow = AutomationDefinition.recipeFixture
         workflow.name = "AX automation"
         workflow.shortcut = nil
         try automation.persistLibrary(.init(workflows: [workflow]))

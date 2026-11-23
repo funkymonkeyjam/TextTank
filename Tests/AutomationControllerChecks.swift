@@ -223,7 +223,7 @@ final class Audit24RecoverySpy: NSObject {
         func literal(_ find: String) -> AutomationDefinition.Step {
             .init(kind: .replaceLiteral, find: find, replacement: find.uppercased())
         }
-        var definition = AutomationDefinition.example
+        var definition = AutomationDefinition.recipeFixture
         definition.steps = [literal("a"), literal("b"), literal("c")]
         var trail: [RuleListState] = [], nestedSaved = false
         var keyLoopClosed = false, keyLoopReaches = false, defaultAndCancel = false
@@ -383,9 +383,12 @@ final class Audit24RecoverySpy: NSObject {
         let path = support.appendingPathComponent("Automations.json")
         func stored() throws -> AutomationLibrary { try AutomationLibrary.decode(Data(contentsOf: path)) }
         let controller = AutomationController(editorProvider: { nil }, newDocument: { _ in })
+        check(
+            (try? stored())?.workflows == [AutomationDefinition.remindersExample],
+            "a new installation saves only Add to Reminders")
 
         Checks.section("G375 pickers keep automations that share a name") {
-            var first = AutomationDefinition.example, second = AutomationDefinition.example
+            var first = AutomationDefinition.recipeFixture, second = AutomationDefinition.recipeFixture
             first.id = UUID()
             second.id = UUID()
             second.steps = [Step(kind: .trimWhitespace)]
@@ -473,7 +476,7 @@ final class Audit24RecoverySpy: NSObject {
         }
 
         Checks.section("rule builder: opening, layout, test and accept") {
-            var definition = AutomationDefinition.example
+            var definition = AutomationDefinition.recipeFixture
             definition.name = ""
             definition.steps = [
                 Step(kind: .replaceLiteral, find: "x", replacement: "y", askForReplacement: true),
@@ -593,8 +596,7 @@ final class Audit24RecoverySpy: NSObject {
         }
 
         Checks.section("F203 and F70: a failed Save keeps the edit dialog and its work") {
-            var library = try stored()
-            try require(library.workflows.count == 2, "fixture: the two first-run automations")
+            var library = AutomationLibrary(workflows: [.recipeFixture, .remindersExample])
             library.workflows[0].steps = [Step(kind: .trimWhitespace), Step(kind: .removeBlankLines)]
             // An older file may hold an empty string for "no shortcut".
             library.workflows[1].shortcut = ""
@@ -840,11 +842,15 @@ final class Audit24RecoverySpy: NSObject {
                 (try? AutomationLibrary.decode(Data(initialJSON.utf8)))?.workflows.isEmpty == true,
                 "G364 an empty library is shown as an empty library, not pre-filled with the example")
             check(
-                afterFirst?.workflows == [AutomationDefinition.example],
-                "G364 Insert Example adds the example automation to the JSON in the editor")
+                afterFirst?.workflows.count == 1
+                    && afterFirst?.workflows[0].name == AutomationDefinition.insertableExample().name
+                    && afterFirst?.workflows[0].steps == AutomationDefinition.insertableExample().steps
+                    && afterFirst?.workflows[0].id != RetiredFactoryAutomation.id,
+                "G364 Insert Example adds a general example automation, not the retired recipe, to the JSON")
             check(
-                afterSecond?.workflows.count == 2 && afterSecond?.workflows[1].id != AutomationDefinition.example.id
-                    && afterSecond?.workflows[1].steps == AutomationDefinition.example.steps,
+                afterSecond?.workflows.count == 2 && afterSecond?.workflows[0] == afterFirst?.workflows[0]
+                    && afterSecond?.workflows[1].id != afterFirst?.workflows[0].id
+                    && afterSecond?.workflows[1].steps == afterFirst?.workflows[0].steps,
                 "G364 a second Insert Example gets its own identifier")
             check(
                 (try Data(contentsOf: path)) == empty, "G364 Insert Example followed by Cancel saves nothing")
@@ -852,7 +858,7 @@ final class Audit24RecoverySpy: NSObject {
                 helpShown && referenceText == AutomationDefinition.ruleKindReference
                     && Step.Kind.allCases.allSatisfy { referenceText.contains($0.rawValue) },
                 "G381 the Advanced JSON dialog shows the generated help and every rule kind")
-            var correctedDefinition = AutomationDefinition.example
+            var correctedDefinition = AutomationDefinition.recipeFixture
             correctedDefinition.name = "Library JSON retry"
             let correctedLibrary = AutomationLibrary(workflows: [correctedDefinition])
             let correctedJSON = String(decoding: try correctedLibrary.encoded(), as: UTF8.self)
@@ -1067,10 +1073,11 @@ final class Audit24RecoverySpy: NSObject {
                     && restoreItem.map(controller.validateMenuItem) == true,
                 "G364 the Automations menu has an enabled Restore Default Automations command")
             // Keep one edited automation, then restore twice.
-            var mine = AutomationDefinition.example
+            var mine = AutomationDefinition.recipeFixture
             mine.name = "My edited cleanup"
             mine.steps = [Step(kind: .trimWhitespace)]
             try controller.persistLibrary(AutomationLibrary(workflows: [mine]))
+            var restoreText = "", restoreButton = ""
             @MainActor func restore(confirming: Bool) -> Bool {
                 let run = drivingModal(
                     timeout: 10,
@@ -1078,6 +1085,8 @@ final class Audit24RecoverySpy: NSObject {
                         guard let confirm = button("automation.restore.confirm", in: views),
                             let cancel = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Cancel" })
                         else { return false }
+                        restoreText = errorAlertText(in: views)
+                        restoreButton = confirm.title
                         (confirming ? confirm : cancel).performClick(nil)
                         return true
                     }
@@ -1087,22 +1096,28 @@ final class Audit24RecoverySpy: NSObject {
             check(
                 try restore(confirming: false) && stored().workflows == [mine],
                 "G364 cancelling Restore Default Automations changes nothing")
+            check(
+                restoreText.contains("Add the default automation?")
+                    && restoreText.contains("This adds a new copy of ‘Add to Reminders’ as it ships with this version.")
+                    && !restoreText.contains("recipe") && restoreButton == "Add Default",
+                "Restore Default Automations names its one automation in whole singular sentences (DS-83, DS-84)")
             check(restore(confirming: true), "Restore Default Automations was confirmed")
             let restored = try stored()
             let presets = AutomationDefinition.firstRunPresets
             check(
-                restored.workflows.count == 3 && restored.workflows[0] == mine
+                restored.workflows.count == 2 && restored.workflows[0] == mine
+                    && restored.workflows[1].name == "Add to Reminders"
                     && restored.workflows.dropFirst().map(\.name) == presets.map(\.name)
                     && restored.workflows.dropFirst().map(\.steps) == presets.map(\.steps)
                     && restored.workflows.dropFirst().map(\.output) == presets.map(\.output),
                 "G364 restoring appends the current presets and keeps the edited automation as it was")
             check(
-                Set(restored.workflows.map(\.id)).count == 3
+                Set(restored.workflows.map(\.id)).count == 2
                     && restored.workflows.dropFirst().allSatisfy { copy in !presets.contains { $0.id == copy.id } },
                 "G364 restored presets get new identifiers")
             check(
-                try restore(confirming: true) && stored().workflows.count == 5
-                    && Array(stored().workflows.prefix(3)) == restored.workflows,
+                try restore(confirming: true) && stored().workflows.count == 3
+                    && Array(stored().workflows.prefix(2)) == restored.workflows,
                 "G364 restoring again appends again and overwrites nothing")
         }
 
@@ -1120,8 +1135,8 @@ final class Audit24RecoverySpy: NSObject {
                 !FileManager.default.fileExists(atPath: lockedPath.path),
                 "fixture: the first write of the presets failed")
             check(
-                blocked.contextMenu().items.filter { $0.representedObject is String }.count == 2
-                    && blocked.menu().items.contains { $0.title == AutomationDefinition.example.name },
+                blocked.contextMenu().items.filter { $0.representedObject is String }.count == 1
+                    && blocked.menu().items.contains { $0.title == AutomationDefinition.remindersExample.name },
                 "F75 the presets are available in memory after a failed first write")
             // Manage reports the failure once, then opens as usual.
             var reports: [String] = [], manageOpened = 0
@@ -1172,6 +1187,243 @@ final class Audit24RecoverySpy: NSObject {
                     && !refusing.contextMenu().items.contains { $0.representedObject is String },
                 "F75 an existing unreadable library is never overwritten and no presets are substituted")
         }
+        Checks.section("retiring the untouched factory recipe at launch") {
+            try retiredFactoryLaunchChecks(root: root, restoring: support)
+        }
+    }
+    /// The launch-time retirement of the recipe automation that earlier builds installed: what is
+    /// removed, what is kept, and what a failed or impossible write leaves behind.
+    static func retiredFactoryLaunchChecks(root: URL, restoring support: URL) throws {
+        defer { setenv("TEXTTANK_SUPPORT_DIRECTORY", support.path, 1) }
+        let installed = RetiredFactoryAutomation.definitions
+        try require(installed.count == 2, "fixture: the two installed definitions")
+        var mine = AutomationDefinition.recipeFixture
+        mine.name = installed[1].name
+        var counter = 0
+        /// A new private support folder holding `bytes` as Automations.json, when given.
+        func folder(_ bytes: Data?) throws -> (directory: URL, file: URL) {
+            counter += 1
+            let directory = root.appendingPathComponent("retired-\(counter)", isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+            let file = directory.appendingPathComponent("Automations.json")
+            if let bytes {
+                try bytes.write(to: file)
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+            }
+            return (directory, file)
+        }
+        @MainActor func launch(_ directory: URL) -> AutomationController {
+            setenv("TEXTTANK_SUPPORT_DIRECTORY", directory.path, 1)
+            return AutomationController(editorProvider: { nil }, newDocument: { _ in })
+        }
+        func listed(_ controller: AutomationController) -> [String] {
+            controller.contextMenu().items.compactMap { $0.representedObject as? String }
+        }
+        /// Identifies the file itself: an atomic replacement changes it even when the bytes match.
+        func fileNumber(_ url: URL) throws -> Int {
+            (try FileManager.default.attributesOfItem(atPath: url.path)[.systemFileNumber] as? Int) ?? -1
+        }
+
+        /// The user-immutable flag makes every write in the folder fail, including the save path's
+        /// own repair of the folder permissions, which a read-only mode would not survive.
+        func setImmutable(_ on: Bool, _ directory: URL) throws {
+            guard chflags(directory.path, on ? UInt32(UF_IMMUTABLE) : 0) == 0 else {
+                throw CheckStop(description: "fixture: could not change the immutable flag")
+            }
+        }
+
+        // A new installation.
+        let fresh = try folder(nil)
+        check(
+            try listed(launch(fresh.directory)) == [AutomationDefinition.remindersExample.id.uuidString]
+                && AutomationLibrary.decode(Data(contentsOf: fresh.file)).workflows
+                    == [AutomationDefinition.remindersExample],
+            "a new installation starts with Add to Reminders only")
+
+        // Both installed definitions are retired; the others keep their content and order.
+        for factory in installed {
+            let before = AutomationLibrary(workflows: [mine, factory, .remindersExample])
+            let place = try folder(before.encoded())
+            let controller = launch(place.directory)
+            let after = try AutomationLibrary.decode(Data(contentsOf: place.file))
+            check(
+                after.workflows == [mine, .remindersExample]
+                    && listed(controller) == after.workflows.map(\.id.uuidString)
+                    && !controller.menu().items.contains {
+                        ($0.representedObject as? String) == factory.id.uuidString
+                    },
+                "the untouched ‘\(factory.name)’ is retired at launch and the file rewritten without it")
+            check(
+                try FileManager.default.contentsOfDirectory(atPath: place.directory.path) == ["Automations.json"]
+                    && (FileManager.default.attributesOfItem(atPath: place.file.path)[.posixPermissions] as? Int)
+                        == 0o600,
+                "the rewritten file is private and no temporary file is left beside it")
+            let bytes = try Data(contentsOf: place.file), number = try fileNumber(place.file)
+            let again = launch(place.directory)
+            check(
+                try Data(contentsOf: place.file) == bytes && fileNumber(place.file) == number
+                    && listed(again) == after.workflows.map(\.id.uuidString),
+                "the next launch finds nothing to retire and does not write the file")
+        }
+        var legacyShortcut = installed[1]
+        legacyShortcut.shortcut = ""
+        let legacy = try folder(AutomationLibrary(workflows: [legacyShortcut, .remindersExample]).encoded())
+        check(
+            try listed(launch(legacy.directory)) == [AutomationDefinition.remindersExample.id.uuidString]
+                && AutomationLibrary.decode(Data(contentsOf: legacy.file)).workflows
+                    == [AutomationDefinition.remindersExample],
+            "an empty stored shortcut is no shortcut, so that item is retired too")
+
+        // Whatever the user changed keeps the automation, and the file is not written.
+        var cases: [(String, AutomationDefinition)] = []
+        func keeping(_ what: String, _ change: (inout AutomationDefinition) -> Void) {
+            var changed = installed[1]
+            change(&changed)
+            cases.append((what, changed))
+        }
+        keeping("renamed") { $0.name = "My recipe tidy" }
+        keeping("a rule removed") { $0.steps.removeLast() }
+        keeping("rules reordered") { $0.steps.swapAt(1, 2) }
+        keeping("a shortcut assigned") { $0.shortcut = "k" }
+        keeping("removed from the favorites") { $0.pinToToolbar = false }
+        keeping("preview turned on") { $0.previewBeforeApply = true }
+        keeping("a destination set") { $0.destinationID = "list-identifier" }
+        keeping("an independent copy") { $0.id = UUID() }
+        let otherContent = AutomationDefinition(
+            id: RetiredFactoryAutomation.id, name: "Old name", input: .selection, steps: [], output: .editor)
+        cases.append(("other content under the factory identifier", otherContent))
+        for (what, definition) in cases {
+            let place = try folder(AutomationLibrary(workflows: [definition, .remindersExample]).encoded())
+            let bytes = try Data(contentsOf: place.file), number = try fileNumber(place.file)
+            let controller = launch(place.directory)
+            check(
+                try listed(controller).contains(definition.id.uuidString) && Data(contentsOf: place.file) == bytes
+                    && fileNumber(place.file) == number,
+                "kept at launch, file untouched: \(what)")
+        }
+
+        // An empty library stays empty, and a library holding only the item becomes empty: the
+        // presets are installed only when no file exists.
+        let empty = try folder(AutomationLibrary(workflows: []).encoded())
+        let emptyBytes = try Data(contentsOf: empty.file), emptyNumber = try fileNumber(empty.file)
+        check(
+            try listed(launch(empty.directory)).isEmpty && Data(contentsOf: empty.file) == emptyBytes
+                && fileNumber(empty.file) == emptyNumber,
+            "an empty library is left as it is")
+        let only = try folder(AutomationLibrary(workflows: [installed[0]]).encoded())
+        check(
+            try listed(launch(only.directory)).isEmpty
+                && AutomationLibrary.decode(Data(contentsOf: only.file)).workflows.isEmpty
+                && listed(launch(only.directory)).isEmpty
+                && AutomationLibrary.decode(Data(contentsOf: only.file)).workflows.isEmpty,
+            "a library holding only the retired item becomes an empty library and the presets are not installed again")
+
+        // A file that cannot be read is never touched, even when the item is visible in it.
+        var unsupported =
+            try JSONSerialization.jsonObject(
+                with: AutomationLibrary(workflows: [installed[1], .remindersExample]).encoded()) as! [String: Any]
+        unsupported["version"] = 2
+        for (what, bytes) in [
+            ("a library from a newer version", try JSONSerialization.data(withJSONObject: unsupported)),
+            ("damaged JSON", Data(#"{"version":1,"workflows":[{"id":"A931733F-310A-4EBF-9C48-38C59202D586""#.utf8))
+        ] {
+            let place = try folder(bytes)
+            let number = try fileNumber(place.file)
+            let controller = launch(place.directory)
+            rejects("an unreadable library still refuses a save: \(what)") {
+                try controller.persistLibrary(AutomationLibrary(workflows: []))
+            }
+            check(
+                try listed(controller).isEmpty && Data(contentsOf: place.file) == bytes
+                    && fileNumber(place.file) == number,
+                "an unreadable library is left byte-identical: \(what)")
+        }
+
+        // A write that fails leaves the file as it was. The item is gone for the session, nothing
+        // is reported, and the next launch that can write finishes the job.
+        let locked = try folder(AutomationLibrary(workflows: [mine, installed[1], .remindersExample]).encoded())
+        let lockedBytes = try Data(contentsOf: locked.file), lockedNumber = try fileNumber(locked.file)
+        try setImmutable(true, locked.directory)
+        defer { try? setImmutable(false, locked.directory) }
+        let blocked = launch(locked.directory)
+        check(
+            try Data(contentsOf: locked.file) == lockedBytes && fileNumber(locked.file) == lockedNumber
+                && FileManager.default.contentsOfDirectory(atPath: locked.directory.path) == ["Automations.json"],
+            "a failed write at launch leaves the file byte-identical")
+        check(
+            listed(blocked) == [mine.id.uuidString, AutomationDefinition.remindersExample.id.uuidString],
+            "after a failed write the retired item is still not offered in this session")
+        var alerts = 0, managerOpened = false
+        let managed = drivingModal(
+            timeout: 10,
+            { _, views in
+                if let ok = errorAlertButton(in: views) {
+                    alerts += 1
+                    ok.performClick(nil)
+                    return false
+                }
+                guard let cancel = button("automation.manager.cancel", in: views) else { return false }
+                managerOpened = true
+                cancel.performClick(nil)
+                return true
+            }
+        ) { blocked.manage() }
+        check(
+            try managed.acted && !managed.timedOut && managerOpened && alerts == 0
+                && Data(contentsOf: locked.file) == lockedBytes,
+            "Manage Automations opens without an alert while the file cannot be rewritten")
+        let stillBlocked = launch(locked.directory)
+        check(
+            try listed(stillBlocked) == listed(blocked) && Data(contentsOf: locked.file) == lockedBytes,
+            "a second launch that cannot write behaves the same")
+        try setImmutable(false, locked.directory)
+        let unblocked = launch(locked.directory)
+        check(
+            try AutomationLibrary.decode(Data(contentsOf: locked.file)).workflows == [mine, .remindersExample]
+                && listed(unblocked) == listed(blocked),
+            "the next launch that can write retires the item in the file")
+
+        // The same session finishes the job from Manage Automations once writing works.
+        let retried = try folder(AutomationLibrary(workflows: [installed[0], .remindersExample]).encoded())
+        try setImmutable(true, retried.directory)
+        defer { try? setImmutable(false, retried.directory) }
+        let waiting = launch(retried.directory)
+        try setImmutable(false, retried.directory)
+        let reopened = drivingModal(
+            timeout: 10,
+            { _, views in
+                guard let cancel = button("automation.manager.cancel", in: views) else { return false }
+                cancel.performClick(nil)
+                return true
+            }
+        ) { waiting.manage() }
+        check(
+            try reopened.acted && !reopened.timedOut
+                && AutomationLibrary.decode(Data(contentsOf: retried.file)).workflows
+                    == [AutomationDefinition.remindersExample],
+            "opening Manage Automations in the same session writes the file once the folder is writable")
+
+        // A remembered Paste Through choice that named the retired item checks nothing.
+        let paste = try folder(AutomationLibrary(workflows: [installed[1], .remindersExample]).encoded())
+        let choice = paste.directory.appendingPathComponent("PasteThroughChoice.json")
+        let choiceBytes = try JSONEncoder().encode(RetiredFactoryAutomation.id)
+        try choiceBytes.write(to: choice)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: choice.path)
+        let pasteItems = launch(paste.directory).pasteThroughMenu().items
+        check(
+            try pasteItems.compactMap { $0.representedObject as? String }
+                == [AutomationDefinition.remindersExample.id.uuidString]
+                && pasteItems.allSatisfy { $0.state == .off } && Data(contentsOf: choice) == choiceBytes,
+            "a Paste Through choice naming the retired item shows no check mark and is left as it is")
+        var keptChoice = installed[1]
+        keptChoice.name = "My recipe tidy"
+        try AutomationLibrary(workflows: [keptChoice, .remindersExample]).encoded().write(to: paste.file)
+        check(
+            launch(paste.directory).pasteThroughMenu().items.first {
+                ($0.representedObject as? String) == RetiredFactoryAutomation.id.uuidString
+            }?.state == .on,
+            "a Paste Through choice naming a kept, renamed item is still checked")
     }
     @MainActor static func horizontalDialogChecks() throws {
         let ownership = TTAlert()
@@ -1454,7 +1706,7 @@ final class Audit24RecoverySpy: NSObject {
         let isolated = try IsolatedSupportDirectory("ModelessUnicodeConfiguration")
         defer { isolated.restore() }
         let controller = AutomationController(editorProvider: { nil }, newDocument: { _ in })
-        var definition = AutomationDefinition.example
+        var definition = AutomationDefinition.recipeFixture
         definition.name = "Caf\u{e9}"
         let original = AutomationLibrary(workflows: [definition])
         try controller.persistLibrary(original)
@@ -1513,8 +1765,13 @@ final class Audit24RecoverySpy: NSObject {
             var saved = try AutomationLibrary.decode(Data(contentsOf: path))
             // The native drop-down host outlives the section that installs it.
             let toolbarHost = AutomationToolbarHost(controller)
+            check(
+                saved.workflows == [AutomationDefinition.remindersExample],
+                "a new configuration seeds only Add to Reminders")
+            // The app ships no recipe automation; the checks below run a user's own strict cleanup.
+            saved = AutomationLibrary(workflows: [.recipeFixture, .remindersExample])
+            try controller.persistLibrary(saved)
             Checks.section("direct cleanup, toolbar and recipe safety") {
-                check(saved.workflows.count == 2, "new configuration seeds two ordinary saved workflows")
                 check(
                     saved.workflows[0].output == .editor && saved.workflows[1].output == .reminders,
                     "separate cleanup and send definitions")
@@ -1538,7 +1795,7 @@ final class Audit24RecoverySpy: NSObject {
                             let table = views.compactMap({ $0 as? NSTableView }).first
                         {
                             filter.selectText(nil)
-                            typeKeys(AutomationDefinition.example.name, in: paletteWindow)
+                            typeKeys(AutomationDefinition.recipeFixture.name, in: paletteWindow)
                             paletteWindow.makeFirstResponder(table)
                             check(
                                 invocations == 0 && table.numberOfRows == 1,
@@ -1551,7 +1808,7 @@ final class Audit24RecoverySpy: NSObject {
                 check(
                     palette.acted && !palette.timedOut && invocations == 0 && editor.text == source,
                     "opening and cancelling the automation palette is not an invocation")
-                try controller.runSavedAutomation(id: AutomationDefinition.example.id)
+                try controller.runSavedAutomation(id: AutomationDefinition.recipeFixture.id)
                 check(invocations == 1, "running a saved automation reports one invocation")
                 check(
                     editor.text == "2 eggs\n½ cup flour\n",
@@ -1569,7 +1826,7 @@ final class Audit24RecoverySpy: NSObject {
                     toolbar.items.first as? NSMenuToolbarItem, "fixture: native Automations drop-down")
                 let button = try requireValue(
                     launcher.menu.items.first {
-                        $0.representedObject as? String == AutomationDefinition.example.id.uuidString
+                        $0.representedObject as? String == AutomationDefinition.recipeFixture.id.uuidString
                     }, "fixture: saved automation in drop-down")
                 check(
                     launcher.toolbar === toolbar && launcher.view == nil && toolbar.items.count == 1,
@@ -1613,7 +1870,7 @@ final class Audit24RecoverySpy: NSObject {
                 editor.setSavePoint()
                 let unchangedRevision = editor.revision
                 var rejectedAmbiguous = false
-                do { try controller.runSavedAutomation(id: AutomationDefinition.example.id) } catch {
+                do { try controller.runSavedAutomation(id: AutomationDefinition.recipeFixture.id) } catch {
                     rejectedAmbiguous = true
                 }
                 check(rejectedAmbiguous, "unknown unmarked recipe row rejects cleanup")
@@ -1629,7 +1886,7 @@ final class Audit24RecoverySpy: NSObject {
                 editor.setSavePoint()
                 let slowRevision = editor.revision, started = ProcessInfo.processInfo.systemUptime
                 var rejectedSlow = false
-                do { try controller.runSavedAutomation(id: AutomationDefinition.example.id) } catch {
+                do { try controller.runSavedAutomation(id: AutomationDefinition.recipeFixture.id) } catch {
                     rejectedSlow = true
                 }
                 check(
@@ -1649,12 +1906,12 @@ final class Audit24RecoverySpy: NSObject {
                     "existing named configuration is not replaced or rewritten by presets")
                 check(
                     restarted.makeToolbarItem().menu.items.contains {
-                        $0.representedObject as? String == AutomationDefinition.example.id.uuidString
+                        $0.representedObject as? String == AutomationDefinition.recipeFixture.id.uuidString
                             && $0.title == "★ My recipe tidy"
                     } == true, "drop-down stable identity survives configuration reload")
                 let menuItem = try requireValue(
                     restarted.menu().items.first(where: {
-                        ($0.representedObject as? String) == AutomationDefinition.example.id.uuidString
+                        ($0.representedObject as? String) == AutomationDefinition.recipeFixture.id.uuidString
                     }), "fixture: the automation has a menu item")
                 check(
                     menuItem.title == "My recipe tidy" && menuItem.keyEquivalent == "k",
@@ -1668,7 +1925,7 @@ final class Audit24RecoverySpy: NSObject {
                     editor.setSelectionAnchor(
                         "before\n".utf8.count, caret: "before\n- 2 eggs\n- ½ cup flour\n".utf8.count),
                     "selection test captures exact ingredient range")
-                try restarted.runSavedAutomation(id: AutomationDefinition.example.id)
+                try restarted.runSavedAutomation(id: AutomationDefinition.recipeFixture.id)
                 check(
                     editor.text == "before\n2 eggs\n½ cup flour\nafter",
                     "configured selection cleanup preserves surrounding document")
@@ -1683,7 +1940,7 @@ final class Audit24RecoverySpy: NSObject {
                         TTSelectionRange(anchor: 0, caret: 8),
                         TTSelectionRange(anchor: multiSource.utf8.count, caret: 11)
                     ]), "set separate reversed Unicode selections")
-                try restarted.runSavedAutomation(id: AutomationDefinition.example.id)
+                try restarted.runSavedAutomation(id: AutomationDefinition.recipeFixture.id)
                 check(
                     editor.text == "2 eggs | ½ cup flour", "automation transforms each captured selection independently"
                 )
@@ -1700,12 +1957,12 @@ final class Audit24RecoverySpy: NSObject {
                     TTSelectionRange(anchor: 7, caret: multiFailure.utf8.count)
                 ])
                 rejects("a later selection that times out rejects the whole run") {
-                    try restarted.runSavedAutomation(id: AutomationDefinition.example.id)
+                    try restarted.runSavedAutomation(id: AutomationDefinition.recipeFixture.id)
                 }
                 check(
                     editor.text == multiFailure && !editor.modified,
                     "later selection failure preserves all earlier selections")
-                saved.workflows[0].steps = AutomationDefinition.example.steps
+                saved.workflows[0].steps = AutomationDefinition.recipeFixture.steps
                 _ = editor.setSelectionAnchor(0, caret: 0)
                 saved.workflows[0].input = .document
                 saved.workflows[0].output = .newDocument
@@ -1720,7 +1977,7 @@ final class Audit24RecoverySpy: NSObject {
                     TTSelectionRange(anchor: 0, caret: 6),
                     TTSelectionRange(anchor: 7, caret: 14)
                 ])
-                try outputController.runSavedAutomation(id: AutomationDefinition.example.id)
+                try outputController.runSavedAutomation(id: AutomationDefinition.recipeFixture.id)
                 check(
                     editor.text == "- eggs\n- flour" && !editor.modified && capturedNewDocument == "eggs\nflour",
                     "document input external output never mutates multi-selection editor")
@@ -1729,7 +1986,7 @@ final class Audit24RecoverySpy: NSObject {
                 _ = editor.setSelectionAnchor(0, caret: 0)
                 editor.readOnly = true
                 rejects("read-only editor rejects the automation as read-only", message: "This document is read-only") {
-                    try restarted.runSavedAutomation(id: AutomationDefinition.example.id)
+                    try restarted.runSavedAutomation(id: AutomationDefinition.recipeFixture.id)
                 }
                 check(
                     editor.text == "- eggs\n- flour" && !editor.modified,
@@ -1750,7 +2007,7 @@ final class Audit24RecoverySpy: NSObject {
                         return true
                     }
                 ) {
-                    do { try restarted.runSavedAutomation(id: AutomationDefinition.example.id) } catch {
+                    do { try restarted.runSavedAutomation(id: AutomationDefinition.recipeFixture.id) } catch {
                         refusal = error.localizedDescription
                     }
                 }
@@ -1768,7 +2025,7 @@ final class Audit24RecoverySpy: NSObject {
                 rejects(
                     "running an automation during a Reminders export says an export is in progress",
                     message: "A Reminders export is in progress"
-                ) { try restarted.runSavedAutomation(id: AutomationDefinition.example.id) }
+                ) { try restarted.runSavedAutomation(id: AutomationDefinition.recipeFixture.id) }
                 var explained = ""
                 let managing = drivingModal(
                     timeout: 10,

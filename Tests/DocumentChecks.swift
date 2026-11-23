@@ -126,7 +126,7 @@ import NativeSearch
             section("automation configuration and settings") {
                 let automation = AutomationController(
                     editorProvider: { nil }, newDocument: { _ in fatalError("Saving must not run a workflow") })
-                let configuration = AutomationLibrary(workflows: [.example])
+                let configuration = AutomationLibrary(workflows: [.recipeFixture])
                 try automation.persistLibrary(configuration)
                 let support = root.appendingPathComponent("support"),
                     configurationURL = support.appendingPathComponent("Automations.json")

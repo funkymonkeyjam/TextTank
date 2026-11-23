@@ -221,7 +221,7 @@ extension DocumentChecks {
             check(
                 rows(single).count == 1 && UnicodeFixtures.lineBreaks(in: single) == 0,
                 "fixture: the separator row has no CR or LF")
-            var automation = AutomationDefinition.example
+            var automation = AutomationDefinition.recipeFixture
             automation.steps = [.init(kind: .sortLines)]
             check(
                 same(try automation.transform("b\u{2028}y\na\u{85}x\n"), "a\u{85}x\nb\u{2028}y\n"),

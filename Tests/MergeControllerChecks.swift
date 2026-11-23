@@ -66,7 +66,7 @@ private final class PatchDeadlineClock: @unchecked Sendable {
         var focused = doc.editor
         let automation = AutomationController(editorProvider: { focused }, newDocument: { _ in })
         automation.comparisonService = { service }
-        var workflow = AutomationDefinition.example
+        var workflow = AutomationDefinition.recipeFixture
         workflow.id = UUID()
         workflow.name = "Review saved text changes"
         workflow.input = .document
