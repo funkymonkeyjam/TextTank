@@ -366,7 +366,7 @@ button with four points between it and the title and between it and the close bu
 (DS-14, DS-74); the title gives up 32 points and truncates at its tail. A press on it never
 reaches the tab's own button, so it cannot select the tab or start a reorder. A Control-click or
 secondary click on it opens the tab's menu instead. The hovered tab is worked out again when the
-tabs move under a still pointer (a tab closes, tabs are reordered, the strip scrolls) and is
+tabs move under a still pointer (a tab closes, tabs are reordered) and is
 dropped when the window stops being key or TextTank stops being active. A tab narrower
 than 162 points does not show the mark that only appears under the pointer, so its title never
 has less than the 82 points a tab at the 130-point minimum width has always had; the mark of a
@@ -419,7 +419,11 @@ The keyboard goes to what the new tab shows when it is activated: the preview fo
 source for Both. A jump into the source of a tab that shows Preview alone puts the source beside
 it first and gives the editor the keyboard: a file opened with a line (the command line or a
 `texttank://open` address), and a Find in Folder or Find and Replace result
-(`EditorLifetime.activate`), as Find and Go to Line already did.
+(`EditorLifetime.activate`), as Find and Go to Line already did. A search action that selects a
+match or replaces text without activating the editor (Find Next, Find Previous, Replace and
+Replace All from the Find and Replace window, a recorded search) also shows the source first,
+through `EditorLifetime.revealSource(of:)`, and leaves the keyboard in the Find window.
+Bookmark Matches and Mark do not move the selection and leave the tab as it is.
 
 A value of the wrong JSON type for either member (a number, a list, an entry that is not text)
 is not tolerated: like any other member it fails the whole settings file, which is left

@@ -2462,6 +2462,45 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
                 && plainTab.primaryEditor.selectionCaret == 14,
             "and the editor has the keyboard, with the result selected")
         elsewhere.close()
+
+        // Find Next from the Find and Replace window selects without activating the editor.
+        // The tab shows Preview alone and the keyboard is outside the tab (in the app it is in
+        // the Find window, a separate window; here the workspace window itself holds it): the
+        // source is shown, the match is selected, the keyboard stays.
+        let search = app.searchController
+        search.onFailureSignal = {}
+        plainTab.setViewMode(.preview)
+        host.window?.makeFirstResponder(nil)
+        let held = host.window?.firstResponder
+        check(
+            plainTab.viewMode == .preview && plainTab.split.isHidden && !keyboard(in: plainTab.primaryEditor, of: host),
+            "fixture: the tab shows Preview alone and the keyboard is not in its editor")
+        _ = plainTab.primaryEditor.setSelectionAnchor(0, caret: 0)
+        search.queryField.stringValue = "line 12"
+        search.next(nil)
+        wait("Find Next finishes") { plainTab.primaryEditor.selectedText == "line 12" || plainTab.viewMode != .preview }
+        check(
+            plainTab.viewMode == .both && !plainTab.split.isHidden,
+            "Find Next from the Find and Replace window puts the source beside a preview that hid it")
+        check(plainTab.primaryEditor.selectedText == "line 12", "the match is selected in the source")
+        check(
+            host.window?.firstResponder === held && !keyboard(in: plainTab.primaryEditor, of: host),
+            "and the keyboard stays where it was")
+        plainTab.setViewMode(.preview)
+        search.previous(nil)
+        wait("Find Previous finishes") { plainTab.viewMode != .preview }
+        check(
+            plainTab.viewMode == .both && plainTab.primaryEditor.selectedText == "line 12"
+                && host.window?.firstResponder === held, "Find Previous does the same")
+        plainTab.setViewMode(.preview)
+        search.replacementField.stringValue = "LINE 12"
+        search.replaceAll(nil)
+        wait("Replace All finishes") { plainTab.primaryEditor.text.contains("LINE 12") }
+        check(
+            plainTab.viewMode == .both && plainTab.primaryEditor.text.contains("LINE 12")
+                && host.window?.firstResponder === held,
+            "Replace All shows the source it changed, without taking the keyboard")
+        search.window?.orderOut(nil)
         plainOpen.close()
     }
 

@@ -651,8 +651,9 @@ final class DocumentTabStrip: NSView {
         return order.first { controls[$0]?.background.frame.contains(p) == true }
     }
     /// Works out the hovered tab again from where the pointer was last seen. Called when the
-    /// pointer moves and when the tabs move under it: the strip scrolled, a tab closed, tabs
-    /// were reordered.
+    /// pointer moves and when the tabs move under it: a tab closed or tabs were reordered. A
+    /// scroll needs nothing: a strip only scrolls once its tabs are at the minimum width, where
+    /// no mark depends on the pointer.
     private func rehover() {
         let over = tabUnderPointer()
         guard over != hoveredTab else { return }
@@ -672,16 +673,12 @@ final class DocumentTabStrip: NSView {
             return
         }
         let center = NotificationCenter.default
-        scroll.contentView.postsBoundsChangedNotifications = true
         hoverObservers = [
             center.addObserver(forName: NSWindow.didResignKeyNotification, object: window, queue: .main) {
                 [weak self] _ in MainActor.assumeIsolated { self?.pointerLeftWithWindow() }
             },
             center.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) {
                 [weak self] _ in MainActor.assumeIsolated { self?.pointerLeftWithWindow() }
-            },
-            center.addObserver(forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main) {
-                [weak self] _ in MainActor.assumeIsolated { self?.rehover() }
             }
         ]
     }
