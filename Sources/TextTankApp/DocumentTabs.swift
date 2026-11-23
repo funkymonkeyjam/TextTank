@@ -273,8 +273,17 @@ private final class DocumentTabModeButton: NSButton {
     var tabID: TabID?
     weak var strip: DocumentTabStrip?
     override func menu(for event: NSEvent) -> NSMenu? { tabID.flatMap { strip?.contextMenu(for: $0) } }
+    /// A Control-click is a context click here too, as it is on the tab's own button: it opens
+    /// the tab's menu and does not change the mode.
+    override func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.control) {
+            rightMouseDown(with: event)
+            return
+        }
+        super.mouseDown(with: event)
+    }
     override func rightMouseDown(with event: NSEvent) {
-        if let menu = menu(for: event) { NSMenu.popUpContextMenu(menu, with: event, for: self) }
+        if let tabID { strip?.showContextMenu(for: tabID, event: event, from: self) }
     }
 }
 private final class DocumentTabBackground: NSView {
@@ -311,10 +320,18 @@ final class DocumentTabStrip: NSView {
         let mode = DocumentTabModeButton()
         /// Nil for a document with no preview; otherwise what the tab shows.
         var viewMode: DocumentViewMode?
-        var name = ""
     }
     /// The tab the pointer is over, which shows its mark even in Source.
     private var hoveredTab: TabID?
+    /// Where the pointer was last reported, in the strip's coordinates; nil when it is outside
+    /// the strip or the window is not in use. Kept so that the hovered tab can be worked out
+    /// again when the tabs move under a pointer that does not.
+    private var pointer: NSPoint?
+    private var hoverObservers: [NSObjectProtocol] = []
+    /// Shows a tab's menu. Checks replace it so that no menu is tracked on the desktop.
+    var presentContextMenu: (NSMenu, NSEvent, NSView) -> Void = { menu, event, view in
+        NSMenu.popUpContextMenu(menu, with: event, for: view)
+    }
     private var hoverArea: NSTrackingArea?
     /// A tab narrower than this has no room for a mark that only appears under the pointer: its
     /// title would fall below the 82 points a tab at the minimum width has always had. The mark
@@ -361,7 +378,9 @@ final class DocumentTabStrip: NSView {
         // A narrower tab may have lost the mark it showed under the pointer.
         publishAccessibilityChildren()
     }
-    func refresh() {
+    /// `revealingActive` is false for a change that is not about which tab is active (a tab's
+    /// mode): the strip then keeps its scroll position.
+    func refresh(revealingActive: Bool = true) {
         guard let host else { return }
         let tabs = (group?.tabs ?? []), ids = Set(tabs.map(\.id))
         if let reorder, reorder.tabs != tabs { cancelReorder() }
@@ -420,7 +439,6 @@ final class DocumentTabStrip: NSView {
             let selection = host.tabSelection.selected(in: host.model, group: groupSlot)
             let selected = selection.contains(tab.id)
             c.viewMode = host.tabCommands.viewMode(of: tab.id)
-            c.name = name
             c.select.updateSelectionActions(
                 selected: selected, canToggle: !active || selection.count > 1,
                 viewAction: c.viewMode.map { mode in
@@ -450,6 +468,14 @@ final class DocumentTabStrip: NSView {
                         ? String(format: Strings.text("tabs.pinnedEdited", "%@, pinned, edited"), name)
                         : String(format: Strings.text("tabs.pinned", "%@, pinned"), name))
             }
+            // DS-14, DS-84: a tab that shows Preview or Both says so, in one whole label for each
+            // combination with pinned and edited.
+            if let mode = c.viewMode, mode != .source {
+                c.select.setAccessibilityLabel(
+                    String(
+                        format: Self.viewModeLabel(
+                            preview: mode == .preview, pinned: tab.isPinned, edited: doc.isDocumentEdited), name))
+            }
             if let notice = doc.externalFile.notice {
                 c.select.title += "  ◇"
                 c.select.toolTip = name + " — " + notice
@@ -458,14 +484,6 @@ final class DocumentTabStrip: NSView {
             if EditorServices.current?.compare?.isMarked(doc.runtimeID) == true {
                 c.select.title += " ↔"
                 c.select.setAccessibilityLabel((c.select.accessibilityLabel() ?? name) + ", selected for comparison")
-            }
-            // DS-14: the label says what the tab shows when that is not the source alone.
-            if let mode = c.viewMode, mode != .source {
-                c.select.setAccessibilityLabel(
-                    (c.select.accessibilityLabel() ?? name) + ", "
-                        + (mode == .preview
-                            ? Strings.text("tabs.viewMode.showingPreview", "showing Preview")
-                            : Strings.text("tabs.viewMode.showingBoth", "showing Source and Preview")))
             }
             // DS-70: the mark names the document and what a press will do; the tooltip says the same.
             let rendered = c.viewMode != nil && c.viewMode != .source
@@ -485,7 +503,9 @@ final class DocumentTabStrip: NSView {
             c.close.setAccessibilityLabel(c.close.toolTip)
             c.close.isEnabled = host.tabCommands.state(.close, target: tab.id).enabled
         }
-        layoutTabs()
+        layoutTabs(revealingActive: revealingActive)
+        // A tab closed or moved under a still pointer: the tab now under it is the hovered one.
+        rehover()
         publishAccessibilityChildren()
     }
     /// Each tab, then its mark while it is shown, then its close button, in the order they are
@@ -497,6 +517,20 @@ final class DocumentTabStrip: NSView {
         }
         setAccessibilityChildren(accessible)
         setAccessibilityChildrenInNavigationOrder(accessible)
+    }
+    private static func viewModeLabel(preview: Bool, pinned: Bool, edited: Bool) -> String {
+        switch (preview, pinned, edited) {
+        case (true, false, false): return Strings.text("tabs.preview", "%@, showing Preview")
+        case (true, false, true): return Strings.text("tabs.previewEdited", "%@, edited, showing Preview")
+        case (true, true, false): return Strings.text("tabs.previewPinned", "%@, pinned, showing Preview")
+        case (true, true, true):
+            return Strings.text("tabs.previewPinnedEdited", "%@, pinned, edited, showing Preview")
+        case (false, false, false): return Strings.text("tabs.both", "%@, showing Source and Preview")
+        case (false, false, true): return Strings.text("tabs.bothEdited", "%@, edited, showing Source and Preview")
+        case (false, true, false): return Strings.text("tabs.bothPinned", "%@, pinned, showing Source and Preview")
+        case (false, true, true):
+            return Strings.text("tabs.bothPinnedEdited", "%@, pinned, edited, showing Source and Preview")
+        }
     }
     /// Whether the tab shows its mark at `width`: always in Preview or Both; in Source only for
     /// a document with a preview, while the pointer is over the tab and the tab has room.
@@ -608,12 +642,52 @@ final class DocumentTabStrip: NSView {
     override func mouseExited(with event: NSEvent) { pointerMoved(to: nil) }
     /// `point` is in the strip's coordinates, or nil when the pointer has left the strip.
     func pointerMoved(to point: NSPoint?) {
-        let inRow = point.flatMap { bounds.contains($0) ? row.convert($0, from: self) : nil }
-        let over = inRow.flatMap { p in order.first { controls[$0]?.background.frame.contains(p) == true } }
+        pointer = point.flatMap { bounds.contains($0) ? $0 : nil }
+        rehover()
+    }
+    private func tabUnderPointer() -> TabID? {
+        guard let pointer else { return nil }
+        let p = row.convert(pointer, from: self)
+        return order.first { controls[$0]?.background.frame.contains(p) == true }
+    }
+    /// Works out the hovered tab again from where the pointer was last seen. Called when the
+    /// pointer moves and when the tabs move under it: the strip scrolled, a tab closed, tabs
+    /// were reordered.
+    private func rehover() {
+        let over = tabUnderPointer()
         guard over != hoveredTab else { return }
         hoveredTab = over
         layoutTabs(revealingActive: false)
         publishAccessibilityChildren()
+    }
+    /// The window stopped being the key window, or TextTank stopped being the active app. No
+    /// exit event is sent for a pointer that did not move, so the hover is dropped here.
+    func pointerLeftWithWindow() { pointerMoved(to: nil) }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        hoverObservers.forEach(NotificationCenter.default.removeObserver)
+        hoverObservers = []
+        guard let window else {
+            pointerMoved(to: nil)
+            return
+        }
+        let center = NotificationCenter.default
+        scroll.contentView.postsBoundsChangedNotifications = true
+        hoverObservers = [
+            center.addObserver(forName: NSWindow.didResignKeyNotification, object: window, queue: .main) {
+                [weak self] _ in MainActor.assumeIsolated { self?.pointerLeftWithWindow() }
+            },
+            center.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) {
+                [weak self] _ in MainActor.assumeIsolated { self?.pointerLeftWithWindow() }
+            },
+            center.addObserver(forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main) {
+                [weak self] _ in MainActor.assumeIsolated { self?.rehover() }
+            }
+        ]
+    }
+    /// A Control-click on the mark, or a secondary click, opens the tab's menu.
+    fileprivate func showContextMenu(for id: TabID, event: NSEvent, from view: NSView) {
+        if let menu = contextMenu(for: id) { presentContextMenu(menu, event, view) }
     }
     /// The mark's own action: a tab in Preview or Both returns to Source, and a tab in Source
     /// shows Both. The tab is not selected.

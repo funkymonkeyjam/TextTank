@@ -373,6 +373,12 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         Checks.section("mark on the tab") { try tabMark(root: root, app: app, host: host) }
         Checks.section("Toggle Preview") { try togglePreview(root: root, app: app, host: host) }
         Checks.section("Open in, per format") { try openInPerFormat(root: root, app: app, host: host) }
+        Checks.section("switching without moving the keyboard or the strip") {
+            try switchingKeepsFocusAndScroll(root: root, app: app, host: host)
+        }
+        Checks.section("jumps into a Preview tab") { try jumpsRevealSource(root: root, app: app, host: host) }
+        Checks.section("settings routes for the preview") { try previewSettingsRoutes(root: root, app: app, host: host) }
+        Checks.section("Shift-Command-V from the preview") { try toggleKeyFromPreview(root: root, host: host) }
         Checks.section("fail closed") { try failClosed(root: root) }
         settle(0.5)
         check(
@@ -2212,6 +2218,417 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         }
         try setOpenMode(.source, for: .markdown)
         check(app.settings.value.previewOpenModes == nil, "fixture: the settings are back to Source everywhere")
+    }
+
+    // MARK: Review follow-ups
+
+    private static func switchingKeepsFocusAndScroll(
+        root: URL, app: AppDelegate, host: WorkspaceWindowController
+    ) throws {
+        let folder = root.appendingPathComponent("keep-focus")
+        let commands = host.tabCommands
+        let (notes, notesTab) = try open("notes.md", "# Notes\n\nfind me\n", in: folder)
+        let (other, otherTab) = try open("other.txt", "other\n", in: folder)
+        let notesID = try requireValue(notesTab.tabID, "fixture: notes tab")
+
+        // Same group, the tab hidden behind the active one, its find bar left open.
+        host.activate(notesTab)
+        notesTab.showFind(nil)
+        check(notesTab.findBarVisible, "fixture: the find bar is open in notes.md")
+        host.activate(otherTab)
+        host.window?.makeFirstResponder(otherTab.primaryEditor)
+        var responder = host.window?.firstResponder
+        check(
+            keyboard(in: otherTab.primaryEditor, of: host) && notesTab.findBarVisible && !notesTab.isPresented,
+            "fixture: the keyboard is in the other tab and notes.md is hidden with its find bar open")
+        check(commands.setViewMode(.preview, target: notesID), "fixture: Preview chosen from the hidden tab's menu")
+        check(
+            notesTab.viewMode == .preview && !notesTab.findBarVisible,
+            "Preview closes the find bar of the tab it was chosen for")
+        check(
+            host.window?.firstResponder === responder && host.active === otherTab,
+            "and the keyboard stays in the active tab's editor")
+        notesTab.setViewMode(.source)
+
+        // Two groups: notes.md visible in the group that does not have the keyboard.
+        guard host.setEditorLayout(.twoColumns) else {
+            Checks.fail("fixture: this screen cannot fit two editor groups", file: #filePath, line: #line)
+            return
+        }
+        host.moveTabs([notesID], target: notesID, to: .second)
+        let moved = try requireValue(
+            host.presentations.first { ($0.document as? TextDocument) === notes }, "fixture: notes.md in the second group")
+        let movedID = try requireValue(moved.tabID, "fixture: its tab")
+        host.activate(moved)
+        moved.showFind(nil)
+        let first = try requireValue(
+            host.presentations.first { ($0.document as? TextDocument) === other }, "fixture: other.txt in the first group")
+        host.activate(first)
+        host.window?.makeFirstResponder(first.primaryEditor)
+        responder = host.window?.firstResponder
+        check(
+            moved.findBarVisible && moved.isPresented && host.active === first
+                && keyboard(in: first.primaryEditor, of: host),
+            "fixture: notes.md shows in the other group with its find bar open; the keyboard is in the first group")
+        let items = viewModeItems(in: commands.contextMenu(for: movedID))
+        choose(items[1])
+        check(
+            moved.viewMode == .preview && !moved.findBarVisible,
+            "Preview chosen from the tab's menu in the other group closes its find bar")
+        check(
+            host.window?.firstResponder === responder && host.active === first
+                && !keyboard(in: moved.presentationRoot, of: host),
+            "and the keyboard does not jump into the editor that Preview has just hidden")
+        // The active tab still gets the keyboard back from its own find bar.
+        host.activate(moved)
+        moved.setViewMode(.source)
+        moved.showFind(nil)
+        check(moved.findBarVisible && !keyboard(in: moved.primaryEditor, of: host), "fixture: the keyboard is in the find field")
+        moved.setDocumentViewMode(try viewModeItems()[1])
+        check(
+            moved.viewMode == .preview && !moved.findBarVisible
+                && moved.previewCoordinator.map { keyboard(in: $0.pane, of: host) } == true,
+            "for the active tab View > Preview still closes the find bar and gives the keyboard to the preview")
+        moved.setViewMode(.source)
+        check(host.setEditorLayout(.single), "fixture: back to one group")
+
+        // The guards are the tab commands' own. A bulk close that is waiting for a decision is a
+        // tab operation in progress; no dialog is shown, because the decision is injected.
+        let survivor = try requireValue(
+            host.presentations.first { ($0.document as? TextDocument) === notes }, "fixture: notes.md after the merge")
+        let survivorID = try requireValue(survivor.tabID, "fixture: its tab")
+        let plainTab = try requireValue(
+            host.presentations.first { ($0.document as? TextDocument) === other }, "fixture: other.txt after the merge")
+        _ = plainTab.primaryEditor.replaceSelection("unsaved ")
+        let pending = Box<(@MainActor (TabCloseDecision) -> Void)?>(nil)
+        commands.decisionHandler = { _, reply in pending.value = reply }
+        commands.perform(.closeOthers, target: survivorID)
+        wait("the bulk close asks for a decision") { pending.value != nil }
+        let blocked = viewModeItems(in: commands.contextMenu(for: survivorID))
+        check(
+            commands.isBusy && blocked.count == 3 && blocked.allSatisfy { !$0.isEnabled }
+                && !commands.viewModeState(target: survivorID).enabled
+                && commands.viewModeState(target: survivorID).reason == commands.state(.pin, target: survivorID).reason,
+            "DS-21 while a tab operation is in progress the three items are disabled, for the tab commands' own reason")
+        check(
+            !commands.setViewMode(.both, target: survivorID) && survivor.viewMode == .source,
+            "and neither the menu nor the mark changes the mode")
+        try markButton(survivor, in: strip(of: host)).performClick(nil)
+        check(survivor.viewMode == .source, "the mark is refused in the same way")
+        pending.value?(.cancel)
+        wait("the bulk close ends") { !commands.isBusy }
+        commands.decisionHandler = nil
+        check(
+            commands.viewModeState(target: survivorID).enabled && NSDocumentController.shared.documents.count == 2,
+            "fixture: the cancelled close changed nothing, and the items are enabled again")
+        _ = plainTab.primaryEditor.executeCommand(undo)
+
+        // An overflowing strip does not scroll when a tab's mode changes.
+        let window = try requireValue(host.window, "workspace window")
+        let size = window.contentView?.bounds.size ?? .zero
+        window.setContentSize(NSSize(width: 800, height: size.height))
+        var fillers: [(TextDocument, EditorWindowController)] = []
+        for number in 1...7 { fillers.append(try open("filler\(number).md", "# Filler \(number)\n", in: folder)) }
+        host.activate(survivor)
+        window.contentView?.layoutSubtreeIfNeeded()
+        let strip = try strip(of: host)
+        strip.layout()
+        let clip = try requireValue(descendants(of: strip, as: NSClipView.self).first, "fixture: the strip's clip view")
+        let last = fillers[6].1, lastID = try requireValue(fillers[6].1.tabID, "fixture: last tab")
+        let rowWidth = clip.documentView?.frame.width ?? 0
+        check(rowWidth > clip.bounds.width + 100, "fixture: nine tabs overflow an 800-point strip (\(rowWidth) pt)")
+        clip.scroll(to: NSPoint(x: rowWidth - clip.bounds.width, y: 0))
+        let scrolled = clip.bounds.origin
+        check(
+            scrolled.x > 100 && strip.isTabHorizontallyVisible(lastID) && !strip.isTabHorizontallyVisible(survivorID),
+            "fixture: the strip is scrolled to its last tab, away from the active one")
+        try hover(last, in: strip)
+        try markButton(last, in: strip).performClick(nil)
+        check(
+            last.viewMode == .both && clip.bounds.origin == scrolled && strip.isTabHorizontallyVisible(lastID),
+            "pressing the mark of a scrolled-to tab does not scroll the strip back to the active tab")
+        choose(viewModeItems(in: commands.contextMenu(for: lastID))[0])
+        check(
+            last.viewMode == .source && clip.bounds.origin == scrolled,
+            "and neither does its menu (\(clip.bounds.origin.x) of \(scrolled.x))")
+
+        // The hovered tab follows the tabs when they move under a pointer that does not.
+        func marked(_ tab: EditorWindowController) throws -> Bool {
+            try requireValue(strip.tabLayout(try requireValue(tab.tabID, "tab")), "layout").markShown
+        }
+        // These tabs are too narrow for a pointer mark, so widen the window for this part.
+        fillers[0].0.close()
+        fillers[1].0.close()
+        fillers[2].0.close()
+        window.setContentSize(NSSize(width: 1000, height: size.height))
+        window.contentView?.layoutSubtreeIfNeeded()
+        strip.layout()
+        let fifth = fillers[4].1, sixth = fillers[5].1
+        clip.scroll(to: .zero)
+        try hover(fifth, in: strip)
+        let fifthButton = try tabButton(fifth, in: strip)
+        let still = strip.convert(NSPoint(x: fifthButton.bounds.midX, y: fifthButton.bounds.midY), from: fifthButton)
+        check(try marked(fifth) && !marked(sixth), "fixture: the pointer is over one Source tab, which shows its mark")
+        fillers[4].0.close()
+        let remaining = host.presentations.filter { $0.previewKind != nil }
+        let under = try remaining.filter { tab in
+            let frames = try requireValue(strip.tabLayout(try requireValue(tab.tabID, "tab")), "layout")
+            return frames.title.minX - 8 <= still.x && still.x < frames.close.maxX + 8
+        }
+        let shown = try remaining.filter { try marked($0) }
+        check(
+            under.count == 1 && shown.count == 1 && shown.first === under.first,
+            "closing the tab under a still pointer moves the mark to the tab now under the pointer, and only that one")
+        let hovered = try requireValue(under.first, "fixture: the tab under the pointer")
+        NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: window)
+        check(try !marked(hovered), "the mark goes when the window stops being the key window")
+        try hover(hovered, in: strip)
+        check(try marked(hovered), "fixture: hovered again")
+        NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApp)
+        check(try !marked(hovered), "and when TextTank stops being the active application")
+        // A strip only overflows once its tabs are at the minimum width, where a Source tab shows
+        // no pointer mark, so a scroll under a still pointer has nothing visible to get wrong.
+        // The strip still works the hovered tab out again when it scrolls.
+        // Control-click on the mark opens the tab's menu and does not toggle.
+        try hover(survivor, in: strip)
+        let mark = try markButton(survivor, in: strip)
+        let menuShown = Box<NSMenu?>(nil)
+        let present = strip.presentContextMenu
+        strip.presentContextMenu = { menu, _, _ in menuShown.value = menu }
+        defer { strip.presentContextMenu = present }
+        let controlClick = try requireValue(
+            NSEvent.mouseEvent(
+                with: .leftMouseDown, location: mark.convert(NSPoint(x: 14, y: 14), to: nil), modifierFlags: .control,
+                timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1,
+                pressure: 1), "fixture: a Control-click")
+        mark.mouseDown(with: controlClick)
+        check(
+            survivor.viewMode == .source && menuShown.value.map { viewModeItems(in: $0).count } == 3,
+            "a Control-click on the mark opens the tab's menu, with Source, Preview and Both, and changes nothing")
+        strip.pointerMoved(to: nil)
+
+        window.setContentSize(size)
+        commands.isTerminating = true
+        NSDocumentController.shared.documents.forEach { $0.close() }
+        commands.isTerminating = false
+    }
+
+    private static func jumpsRevealSource(root: URL, app: AppDelegate, host: WorkspaceWindowController) throws {
+        let folder = root.appendingPathComponent("jumps")
+        var value = app.settings.value
+        value.setPreviewOpenMode(.preview, for: .markdown)
+        try app.settings.save(value)
+        defer {
+            var value = app.settings.value
+            value.setPreviewOpenMode(.source, for: .markdown)
+            _ = try? app.settings.save(value)
+        }
+        let lines = (1...60).map { "line \($0)" }.joined(separator: "\n") + "\n"
+        let url = try write("# Jump\n\n" + lines, "jump.md", in: folder)
+
+        // Opened with a line (the command line, or a texttank://open address).
+        let document = try TextOpenRequest(path: url.path, line: 40).open()
+        let tab = try requireValue(document.presentation, "fixture: tab")
+        check(
+            tab.viewMode == .both && !tab.split.isHidden,
+            "a Markdown file that opens in Preview shows the source as well when a line was asked for")
+        check(
+            tab.primaryEditor.selectionCaret == tab.primaryEditor.text.utf8.count - lines.utf8.count
+                + (1...37).map { "line \($0)\n".utf8.count }.reduce(0, +)
+                && keyboard(in: tab.primaryEditor, of: host),
+            "the caret is on that line and the editor has the keyboard")
+        check(
+            try TextOpenRequest(path: url.path, line: nil).open() === document && tab.viewMode == .both,
+            "fixture: opening it again without a line selects the same tab")
+        document.close()
+
+        let plainOpen = try TextOpenRequest(path: url.path, line: nil).open()
+        let plainTab = try requireValue(plainOpen.presentation, "fixture: tab")
+        check(
+            plainTab.viewMode == .preview && plainTab.previewCoordinator.map { keyboard(in: $0.pane, of: host) } == true,
+            "without a line the file opens in Preview alone, as Settings says")
+
+        // A search result that activates the editor (Find in Folder, Find and Replace results).
+        let (elsewhere, elsewhereTab) = try open("elsewhere.txt", "elsewhere\n", in: folder)
+        host.window?.makeFirstResponder(elsewhereTab.primaryEditor)
+        check(plainTab.viewMode == .preview && host.active === elsewhereTab, "fixture: the Preview tab is in the background")
+        _ = plainTab.primaryEditor.setSelectionAnchor(10, caret: 14)
+        EditorLifetime.activate(plainTab.primaryEditor)
+        check(
+            host.active === plainTab && plainTab.viewMode == .both && !plainTab.split.isHidden,
+            "activating the editor of a Preview tab for a result puts the source beside the preview")
+        check(
+            keyboard(in: plainTab.primaryEditor, of: host) && plainTab.primaryEditor.selectionAnchor == 10
+                && plainTab.primaryEditor.selectionCaret == 14,
+            "and the editor has the keyboard, with the result selected")
+        elsewhere.close()
+        plainOpen.close()
+    }
+
+    private static func previewSettingsRoutes(root: URL, app: AppDelegate, host: WorkspaceWindowController) throws {
+        let folder = root.appendingPathComponent("settings-routes")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+
+        // The Settings window's two pop-ups. The window is an ordinary panel, not a dialog.
+        app.settings.showSettings(nil)
+        let form = try requireValue(
+            FormPanel.visible.last { $0.window.identifier?.rawValue == "TextTank.Settings" }, "fixture: Settings window")
+        defer { form.close() }
+        let content = try requireValue(form.window.contentView, "fixture: Settings content")
+        func popup(_ identifier: String) throws -> NSPopUpButton {
+            try requireValue(
+                descendants(of: content, as: NSPopUpButton.self).first { $0.identifier?.rawValue == identifier },
+                "fixture: \(identifier)")
+        }
+        let format = try popup("settings.preview.format"), openIn = try popup("settings.preview.openIn")
+        func pick(_ popup: NSPopUpButton, _ id: String) {
+            popup.selectItem(at: popup.indexOfItem(withRepresentedObject: id))
+            if let action = popup.action { _ = NSApp.sendAction(action, to: popup.target, from: popup) }
+        }
+        check(
+            format.itemTitles == ["Markdown", "HTML", "CSV and TSV", "SVG", "JSON"]
+                && openIn.itemTitles == ["Source", "Preview", "Both"] && format.titleOfSelectedItem == "Markdown"
+                && openIn.titleOfSelectedItem == "Source",
+            "DS-24 Settings lists the five formats and Source, Preview and Both in words, starting at Markdown in Source")
+        check(
+            format.accessibilityLabel() == "Preview format" && openIn.accessibilityLabel() == "Open Markdown documents in",
+            "DS-70 both pop-ups are labelled, the second with the format it is for")
+        pick(openIn, "both")
+        check(
+            app.settings.value.previewOpenMode(for: .markdown) == .both
+                && SettingsStore(url: app.settings.url).value.previewOpenModes == ["markdown": "both"],
+            "choosing Both for Markdown saves that choice alone")
+        pick(format, "json")
+        check(
+            openIn.titleOfSelectedItem == "Source" && openIn.accessibilityLabel() == "Open JSON documents in",
+            "choosing another format shows that format's own choice")
+        pick(openIn, "preview")
+        pick(format, "markdown")
+        check(
+            openIn.titleOfSelectedItem == "Both" && app.settings.value.previewOpenMode(for: .json) == .preview,
+            "each format keeps its own choice")
+        let pageURL = try write("# Page\n", "page.md", in: folder)
+        let page = try DocumentFactory.openCaptured(
+            WorkspaceStore.captureRegularFile(pageURL, maximumBytes: Int.max), from: pageURL)
+        check(page.presentation?.viewMode == .both, "and a Markdown file opened next shows Both")
+
+        // Reopen Closed Tab is a fresh open of the file: it follows the setting.
+        let commands = host.tabCommands
+        page.close()
+        check(commands.history.latest?.url.lastPathComponent == "page.md", "fixture: the closed tab is in the history")
+        commands.perform(.reopen, target: nil)
+        wait("the closed tab is reopened") {
+            !commands.isReopening
+                && NSDocumentController.shared.documents.contains { $0.fileURL?.lastPathComponent == "page.md" }
+        }
+        let reopened = NSDocumentController.shared.documents.compactMap { $0 as? TextDocument }.first {
+            $0.fileURL?.lastPathComponent == "page.md"
+        }
+        check(reopened?.presentation?.viewMode == .both, "a reopened closed tab opens in the mode Settings gives its format")
+
+        // A session reopened into a workspace that already has tabs does not apply its layout,
+        // so nothing restores a mode; the session's tabs still do not take the setting.
+        let (kept, keptTab) = try open("kept.md", "# Kept\n", in: folder)
+        keptTab.setViewMode(.source)
+        check(keptTab.viewMode == .source, "fixture: a tab the session will record in Source")
+        let session = try LastSessionLayout(
+            files: [.init(id: DocumentID(kept.recoveryID), url: try requireValue(kept.fileURL, "url"))],
+            layout: host.captureSessionLayout())
+        kept.close()
+        check(host.active != nil, "fixture: the workspace still has a tab, so the session's layout is not applied")
+        let result = AutomaticSession(url: folder.appendingPathComponent("last-session.json")).reopen(session, in: host)
+        let restored = try requireValue(result.files.values.first, "fixture: kept.md reopened")
+        check(
+            restored.presentation?.viewMode == .source && restored.presentation?.previewCoordinator == nil,
+            "a session's tab is not switched by the Markdown setting even when no layout is restored for it")
+        restored.close()
+        reopened?.close()
+        pick(openIn, "source")
+        pick(format, "json")
+        pick(openIn, "source")
+        check(app.settings.value.previewOpenModes?.isEmpty != false, "fixture: every format is back to Source")
+
+        // A one-member write adopts whatever else changed in the file, and applies it.
+        let url = folder.appendingPathComponent("adopt.json")
+        try Data(#"{"tabWidth":4,"wrap":false,"useTabs":true,"version":1,"appearance":"system","shortcuts":{}}"#.utf8)
+            .write(to: url)
+        let applied = Box<[(Int, Int?)]>([])
+        let controller = SettingsController(url: url, onApply: { value, previous in
+            applied.value.append((value.tabWidth, previous?.tabWidth))
+        })
+        try Data(#"{"tabWidth":7,"wrap":false,"useTabs":true,"version":1,"appearance":"system","shortcuts":{}}"#.utf8)
+            .write(to: url)
+        controller.noteRenderedMode(.preview)
+        check(
+            controller.value.tabWidth == 7 && controller.toggledPreviewMode == .preview
+                && applied.value.count == 1 && applied.value.first?.0 == 7 && applied.value.first?.1 == 4,
+            "remembering the rendered mode applies a setting it adopted from the changed file")
+        controller.noteRenderedMode(.preview)
+        check(applied.value.count == 1, "and applies nothing when nothing changed")
+
+        // A settings file that cannot be written: the mode is remembered until quit, silently.
+        let broken = folder.appendingPathComponent("broken.json")
+        let bytes = Data("{\"version\":2}".utf8)
+        try bytes.write(to: broken)
+        let unreadable = SettingsController(url: broken)
+        check(unreadable.loadError != nil && unreadable.toggledPreviewMode == .both, "fixture: an unreadable settings file")
+        unreadable.noteRenderedMode(.preview)
+        let untouched = try Data(contentsOf: broken)
+        check(
+            unreadable.toggledPreviewMode == .preview && untouched == bytes
+                && SettingsController(url: broken).toggledPreviewMode == .both,
+            "DS-40 with an unreadable file the choice is kept for this run only, and the file is not touched")
+        unreadable.noteRenderedMode(.both)
+        check(unreadable.toggledPreviewMode == .both, "and a later choice replaces it")
+    }
+
+    private static func toggleKeyFromPreview(root: URL, host: WorkspaceWindowController) throws {
+        let folder = root.appendingPathComponent("toggle-key")
+        let window = try requireValue(host.window, "workspace window")
+        let key = try requireValue(
+            NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [.command, .shift], timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, characters: "V", charactersIgnoringModifiers: "V",
+                isARepeat: false, keyCode: 9), "fixture: Shift-Command-V")
+        let toggle = #selector(EditorWindowController.toggleDocumentPreview(_:))
+        /// Whether the action, sent to the first responder, reaches this tab: the walk AppKit makes.
+        func reaches(_ tab: EditorWindowController) -> Bool {
+            var responder = window.firstResponder
+            while let current = responder {
+                if current.responds(to: toggle) { return current === tab }
+                responder = current.nextResponder
+            }
+            return false
+        }
+        let samples = [("page.md", "# Page\n"), ("rows.csv", "a,b\n1,2\n"), ("data.json", "{\"a\": 1}\n")]
+        for (name, text) in samples {
+            let (document, tab) = try open(name, text, in: folder)
+            check(tab.setViewMode(.both), "fixture: \(name) shows Both")
+            waitCurrent(tab, name)
+            let focus = try requireValue(tab.previewCoordinator?.pane.focusView, "fixture: preview focus view")
+            window.makeFirstResponder(focus)
+            check(keyboard(in: focus, of: host), "fixture: the keyboard is in the preview of \(name)")
+            let swallowed = window.performKeyEquivalent(with: key)
+            print("NOTE \(name): the preview's views \(swallowed ? "answered" : "did not answer") Shift-Command-V themselves")
+            if !(focus is WKWebView), descendants(of: focus, as: WKWebView.self).isEmpty {
+                check(!swallowed, "no view of the \(name) preview takes Shift-Command-V for itself, so it reaches the menu")
+            }
+            check(
+                reaches(tab) && tab.validateMenuItem(NSMenuItem(title: "", action: toggle, keyEquivalent: "")),
+                "from the preview of \(name) the menu's action reaches this tab, and is enabled")
+            settle(0.2)
+            check(tab.viewMode == .both, "fixture: nothing toggled by the probe itself")
+            document.close()
+        }
+        let (document, tab) = try open("find.md", "# Find\n", in: folder)
+        tab.showFind(nil)
+        check(tab.findBarVisible && !keyboard(in: tab.primaryEditor, of: host), "fixture: the keyboard is in the find field")
+        check(
+            !window.performKeyEquivalent(with: key),
+            "the find field does not take Shift-Command-V for itself")
+        check(reaches(tab) && host.active === tab, "and the menu's action reaches the active tab from the find field")
+        tab.hideFind(nil)
+        document.close()
     }
 
     // MARK: Scheme handler responses

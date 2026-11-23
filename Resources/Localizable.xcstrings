@@ -2435,28 +2435,6 @@
         }
       }
     },
-    "tabs.viewMode.showingBoth": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "showing Source and Preview"
-          }
-        }
-      }
-    },
-    "tabs.viewMode.showingPreview": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "showing Preview"
-          }
-        }
-      }
-    },
     "view.mode.toggle": {
       "extractionState": "manual",
       "localizations": {
@@ -2464,6 +2442,94 @@
           "stringUnit": {
             "state": "translated",
             "value": "Toggle Preview"
+          }
+        }
+      }
+    },
+    "tabs.both": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@, showing Source and Preview"
+          }
+        }
+      }
+    },
+    "tabs.bothEdited": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@, edited, showing Source and Preview"
+          }
+        }
+      }
+    },
+    "tabs.bothPinned": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@, pinned, showing Source and Preview"
+          }
+        }
+      }
+    },
+    "tabs.bothPinnedEdited": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@, pinned, edited, showing Source and Preview"
+          }
+        }
+      }
+    },
+    "tabs.preview": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@, showing Preview"
+          }
+        }
+      }
+    },
+    "tabs.previewEdited": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@, edited, showing Preview"
+          }
+        }
+      }
+    },
+    "tabs.previewPinned": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@, pinned, showing Preview"
+          }
+        }
+      }
+    },
+    "tabs.previewPinnedEdited": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@, pinned, edited, showing Preview"
           }
         }
       }

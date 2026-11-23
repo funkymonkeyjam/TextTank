@@ -664,7 +664,8 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     /// Only the strips are brought up to date; their controls are reused, so focus stays put.
     func tabViewModeChanged() {
         guard !isMutatingGroups else { return }
-        groupSurfaces.values.forEach { $0.strip.refresh() }
+        // Without scrolling: the tab that was clicked must stay under the pointer.
+        groupSurfaces.values.forEach { $0.strip.refresh(revealingActive: false) }
     }
     func visibilityChanged() { presentations.forEach { $0.visibilityChanged() } }
     func validateToolbar() {

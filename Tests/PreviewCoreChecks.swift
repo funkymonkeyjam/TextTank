@@ -245,6 +245,27 @@ private func seconds(_ work: () -> Void) -> Double {
             tolerant.toggledPreviewMode == .both,
             "a remembered mode that is not Preview reads as Both, including a stored Source")
 
+        // The wrong JSON type is not tolerated: as for any other member, the whole file fails.
+        func settings(_ members: String) -> Data {
+            Data(
+                (#"{"tabWidth":4,"wrap":false,"useTabs":true,"version":1,"appearance":"system","shortcuts":{},"#
+                    + members + "}").utf8)
+        }
+        for (label, members) in [
+            ("a number for previewOpenModes", #""previewOpenModes":5"#),
+            ("a list for previewOpenModes", #""previewOpenModes":["preview"]"#),
+            ("an entry that is not text", #""previewOpenModes":{"markdown":3}"#),
+            ("a number for lastRenderedPreviewMode", #""lastRenderedPreviewMode":1"#)
+        ] {
+            rejects("\(label) fails the settings file, as any member of the wrong type does") {
+                _ = try EditorSettings.decode(settings(members))
+            }
+        }
+        let nulls = try EditorSettings.decode(settings(#""previewOpenModes":null,"lastRenderedPreviewMode":null"#))
+        check(
+            nulls.previewOpenModes == nil && nulls.previewOpenMode(for: .markdown) == .source
+                && nulls.toggledPreviewMode == .both, "null for either member reads as the member being absent")
+
         var edited = EditorSettings()
         edited.setPreviewOpenMode(.preview, for: .markdown)
         edited.setPreviewOpenMode(.both, for: .delimited)

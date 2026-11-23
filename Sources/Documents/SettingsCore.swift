@@ -45,9 +45,15 @@ package struct EditorSettings: Codable, Equatable {
     package var externalChangePolicy: ExternalChangePolicy?
     package var diskChangeBehavior: ExternalChangePolicy { externalChangePolicy ?? .ask }
     /// What a document of each preview format shows when it is opened into a new tab: a
-    /// `PreviewFormat` raw value to a `DocumentViewMode` raw value. Stored as text so that a file
-    /// written by a later build, or edited by hand, still loads: a missing format, a missing
-    /// member and a value this build does not know all read as Source.
+    /// `PreviewFormat` raw value to a `DocumentViewMode` raw value, both as text.
+    ///
+    /// Tolerated, and read as Source: the member missing or null; a format with no entry; an
+    /// entry whose text is not `source`, `preview` or `both` (the match is exact, so `Preview`
+    /// is not known either); an entry for a format this build does not list, which is kept.
+    /// Not tolerated: a member that is not an object, or an entry that is not text. Like any
+    /// other member of the wrong JSON type it fails the whole file, which is then left unchanged
+    /// behind the usual "could not be read" notice. The same holds for `lastRenderedPreviewMode`:
+    /// any text other than `preview` reads as Both, and a value that is not text fails the file.
     package var previewOpenModes: [String: String]?
     package func previewOpenMode(for format: PreviewFormat) -> DocumentViewMode {
         (previewOpenModes?[format.rawValue]).flatMap(DocumentViewMode.init(rawValue:)) ?? .source

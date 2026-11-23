@@ -120,12 +120,7 @@ import EditorBridge
     func state(_ command: TabCommand, target: TabID?, scope: TabTargetCapture? = nil) -> (
         enabled: Bool, reason: String?
     ) {
-        if CompareCommandScope.blocksWorkspace {
-            return (false, "Close or leave the comparison window before managing document tabs.")
-        }
-        if host.isMutatingGroups || isBusy || isReopening || host.window?.attachedSheet != nil {
-            return (false, "Wait for the current tab operation to finish.")
-        }
+        if let reason = blockedReason() { return (false, reason) }
         if let scope, scope.members(in: host.model) == nil { return (false, "This tab is no longer open.") }
         if command == .reopen {
             return history.latest == nil ? (false, "There are no closed file tabs to reopen.") : (true, nil)
@@ -153,6 +148,18 @@ import EditorBridge
             }
         }
         return (true, nil)
+    }
+    /// Why no tab command can run now, or nil: a comparison window is in front, or a tab
+    /// operation or a sheet is in progress. The tab commands and a tab's Source, Preview and
+    /// Both share this one test.
+    private func blockedReason() -> String? {
+        if CompareCommandScope.blocksWorkspace {
+            return "Close or leave the comparison window before managing document tabs."
+        }
+        if host.isMutatingGroups || isBusy || isReopening || host.window?.attachedSheet != nil {
+            return "Wait for the current tab operation to finish."
+        }
+        return nil
     }
     static var sections: [[TabCommand]] {
         [
@@ -200,12 +207,7 @@ import EditorBridge
     /// The same conditions as the tab commands and the View menu: no comparison in front, no
     /// tab operation or sheet in progress, and a tab that is still open.
     func viewModeState(target: TabID) -> (enabled: Bool, reason: String?) {
-        if CompareCommandScope.blocksWorkspace {
-            return (false, "Close or leave the comparison window before managing document tabs.")
-        }
-        if host.isMutatingGroups || isBusy || isReopening || host.window?.attachedSheet != nil {
-            return (false, "Wait for the current tab operation to finish.")
-        }
+        if let reason = blockedReason() { return (false, reason) }
         guard tab(target) != nil, let doc = document(target), doc.isOpen else {
             return (false, "This tab is no longer open.")
         }

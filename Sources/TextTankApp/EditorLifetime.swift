@@ -42,7 +42,13 @@ import EditorBridge
         if let presentation = binding(editor)?.presentation, document(for: editor) != nil {
             presentation.host.activate(presentation, focus: focus)
             presentation.hostWindow?.makeKeyAndOrderFront(nil)
-            if focus { presentation.hostWindow?.makeFirstResponder(editor) }
+            if focus {
+                // The caller is about to show a place in the source (a search result, a jump).
+                // A tab that shows Preview alone puts the source beside it first, so the caret
+                // and the keyboard are never in a hidden editor.
+                presentation.revealSource()
+                presentation.hostWindow?.makeFirstResponder(editor)
+            }
         } else {
             editor.window?.makeKeyAndOrderFront(nil)
             if focus { editor.window?.makeFirstResponder(editor) }

@@ -390,6 +390,12 @@ struct TextOpenRequest {
         }
         if line != nil || column != nil {
             let editor = document.presentation?.activeEditor ?? document.editor
+            // A line was asked for: a tab that shows Preview alone (its format may open that
+            // way) puts the source beside it and gives the editor the keyboard, as Go to Line does.
+            if let presentation = document.presentation, presentation.viewMode == .preview {
+                presentation.revealSource()
+                if presentation.isActiveTab { presentation.hostWindow?.makeFirstResponder(editor) }
+            }
             editor.show(line: line ?? 1, column: column ?? 1)
         }
         return document

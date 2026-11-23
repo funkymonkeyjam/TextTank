@@ -1026,12 +1026,16 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         updateInlineFindValidation()
         scheduleFindPreview()
     }
-    @objc func hideFind(_ sender: Any?) {
+    @objc func hideFind(_ sender: Any?) { closeFindBar(returningKeyboard: true) }
+    /// Closes the find bar. `returningKeyboard` is false when the bar is closed for a tab that
+    /// does not hold the keyboard (its mode was changed from its tab while another tab is in
+    /// use): the first responder must then stay where it is.
+    func closeFindBar(returningKeyboard: Bool) {
         endFindPreview()
         cancelInlineSearch()
         let editor = activeEditor
         setFindBar(visible: false)
-        hostWindow?.makeFirstResponder(editor)
+        if returningKeyboard { hostWindow?.makeFirstResponder(editor) }
     }
     /// Command-E: the selected text becomes the text to find, here and in other apps.
     @objc func useSelectionForFind(_ sender: Any?) {

@@ -164,13 +164,23 @@ extension EditorSettings {
     /// settings file, and only when the choice differs from the one remembered.
     func noteRenderedMode(_ mode: DocumentViewMode) {
         guard mode != .source, mode != toggledPreviewMode else { return }
+        let previous = value
         do {
             try store.updateLastRenderedPreviewMode(mode, reservedKeys: Self.reservedShortcuts(in: NSApp?.mainMenu))
             unsavedRenderedMode = nil
+            adoptStoreValue(replacing: previous)
         } catch {
             // Losing this convenience is not worth an alert in the middle of a view change (DS-40).
             unsavedRenderedMode = mode
         }
+    }
+    /// A one-member write reads the settings file again first, so the store may now hold values
+    /// another writer changed. They are applied, and shown in an open Settings window, as they
+    /// are after the neighbouring one-member writes.
+    fileprivate func adoptStoreValue(replacing previous: EditorSettings) {
+        guard value != previous else { return }
+        apply(replacing: previous)
+        liveForm?.valuesChanged()
     }
     /// The composition root applies this synchronous change to open documents and menus.
     func apply(replacing previous: EditorSettings? = nil) { onApply(value, previous) }
@@ -538,11 +548,12 @@ extension EditorSettings {
     @objc private func selectPreviewOpenMode(_ sender: NSPopUpButton) {
         guard form.acceptsActions, let mode = ControlPresentation.selectedID(sender).flatMap(DocumentViewMode.init(rawValue:))
         else { return }
-        let format = selectedPreviewFormat
+        let format = selectedPreviewFormat, previous = owner.value
         do {
             try owner.store.updatePreviewOpenMode(
                 for: format, from: displayed.previewOpenMode(for: format), to: mode,
                 reservedKeys: SettingsController.reservedShortcuts(in: NSApp.mainMenu))
+            owner.apply(replacing: previous)
             valuesChanged()
             form.clearValidation()
         } catch {

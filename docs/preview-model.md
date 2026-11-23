@@ -352,7 +352,9 @@ Preview and Both, titled as in the View menu, with a checkmark on what that tab 
 (identifiers `tabs.command.viewMode.source`, `.preview`, `.both`). A tab with no preview has no
 such section. For the active tab an item behaves as the View command does. For any other tab it
 changes that tab where it is: the tab is not selected, the keyboard does not move, and the change
-is announced ("notes.md now shows Preview.", DS-72). The items are disabled while a comparison
+is announced ("notes.md now shows Preview.", DS-72); if that tab's find bar is open, Preview
+closes it without giving the keyboard to the editor it hides, and the tab strip does not scroll.
+The items are disabled while a comparison
 window is in front, while a tab operation or a sheet is in progress, and for a tab that has
 closed, as the other tab commands are.
 
@@ -362,14 +364,18 @@ preview shows an outlined eye only while the pointer is over the tab; pressing i
 tab with no preview has no mark and its title keeps the full width. The mark is a 28 by 28 point
 button with four points between it and the title and between it and the close button
 (DS-14, DS-74); the title gives up 32 points and truncates at its tail. A press on it never
-reaches the tab's own button, so it cannot select the tab or start a reorder. A tab narrower
+reaches the tab's own button, so it cannot select the tab or start a reorder. A Control-click or
+secondary click on it opens the tab's menu instead. The hovered tab is worked out again when the
+tabs move under a still pointer (a tab closes, tabs are reordered, the strip scrolls) and is
+dropped when the window stops being key or TextTank stops being active. A tab narrower
 than 162 points does not show the mark that only appears under the pointer, so its title never
 has less than the 82 points a tab at the 130-point minimum width has always had; the mark of a
 tab in Preview or Both is state and is shown at every width, leaving 50 points of title at the
 minimum. The mark's label and tooltip name the document and the result ("Show source for
 notes.md", "Show preview beside source for notes.md", DS-70), and while it is shown it is one of
 the strip's accessibility children, between the tab and its close button. The tab's own label
-gains ", showing Preview" or ", showing Source and Preview". Without a pointer the same step is
+ends ", showing Preview" or ", showing Source and Preview", as one whole label for each
+combination with pinned and edited (DS-84). Without a pointer the same step is
 the tab's accessibility action "Show Preview Beside Source" or "Show Source", and the context
 menu (DS-73). The strip brings the mark up to date whenever a mode changes, by any route, and
 whenever a document gains or loses its preview.
@@ -410,7 +416,14 @@ no mode. It is not applied:
 - to a second view of a document opened in another editor group, which starts in Source as before.
 
 The keyboard goes to what the new tab shows when it is activated: the preview for Preview, the
-source for Both.
+source for Both. A jump into the source of a tab that shows Preview alone puts the source beside
+it first and gives the editor the keyboard: a file opened with a line (the command line or a
+`texttank://open` address), and a Find in Folder or Find and Replace result
+(`EditorLifetime.activate`), as Find and Go to Line already did.
+
+A value of the wrong JSON type for either member (a number, a list, an entry that is not text)
+is not tolerated: like any other member it fails the whole settings file, which is left
+unchanged behind the usual notice. Only text is read leniently.
 
 ### When the preview is rendered
 
@@ -559,9 +572,15 @@ the others are left closed.
   physical click, and how the eye looks beside a truncated title. The checks tell the strip
   where the pointer is and press the button through `performClick`. Pressing Shift-Command-V on
   a keyboard is not exercised either; the checks send the menu item's action.
-- The tab menu's Source, Preview and Both while a sheet, a tab operation or a comparison window
-  blocks them. The conditions are the tab commands' own, but no check opens a sheet to observe
-  them, because a check must not put a dialog on the desktop.
+- The tab menu's Source, Preview and Both while a sheet or a comparison window blocks them. They
+  share one test (`blockedReason`) with the tab commands, and a check observes it for a tab
+  operation in progress; no check opens a sheet or a comparison window for it, because a check
+  must not put a dialog on the desktop and this check process never holds the key window.
+- Shift-Command-V pressed with the keyboard in a preview. From the table, the tree and the find
+  field no view takes the key equivalent and the action's responder chain reaches the tab. The
+  web view (Markdown, HTML, SVG) answers every key equivalent itself and passes on what the
+  page does not use, as it does for Command-F; that hand-back needs a key window and was not
+  observed.
 - `NSDocumentController.openDocument` itself with a format set to Preview or Both. The check
   process has no document types, so it performs the same three steps (read, register, show).
 - Release-build timings.
