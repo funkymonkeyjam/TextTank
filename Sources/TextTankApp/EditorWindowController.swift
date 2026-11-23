@@ -176,7 +176,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             responder.map {
                 ($0 as? NSView)?.isDescendant(of: presentationRoot) == true || ownsFindFieldEditor($0)
             } ?? false
-        let typingTarget = activeEditor
+        // The preview, not the hidden source, while the tab shows Preview alone: putting the
+        // keyboard in the source would make the tab show Both.
+        let typingTarget = keyboardFocusView
         host.activate(self, focus: false, explicit: explicit, preserveSelection: true)
         guard host.active === self else { return false }
         // Keep an existing local field editor or keyboard control. A click in sibling chrome

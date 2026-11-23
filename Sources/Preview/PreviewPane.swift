@@ -9,6 +9,10 @@ import TextTankCore
 /// `PreviewContent` it is given and keeps showing it until it is given the next, so the last
 /// good rendering stays in place while a new one is being made. It holds no document state.
 @MainActor final class PreviewPane: NSView {
+    /// Below this width the Go to Error button goes under the sentence instead of beside it, so
+    /// that the sentence keeps the width of the pane (DS-67).
+    static let stackedMessageWidth: CGFloat = 320
+
     /// Announced when it changes (DS-72): what the preview left out, or what is wrong.
     let messageLabel = AnnouncingLabel(wrappingLabelWithString: "")
     let goToErrorButton = NSButton(title: "", target: nil, action: nil)
@@ -110,6 +114,40 @@ import TextTankCore
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
 
+    /// True when the message row puts the button under the sentence: there is a button and the
+    /// pane is narrower than `stackedMessageWidth`.
+    static func stacksMessage(width: CGFloat, hasButton: Bool) -> Bool {
+        hasButton && width < stackedMessageWidth
+    }
+
+    /// Beside each other the button has a fixed width and the sentence is squeezed to what is
+    /// left, which at the narrowest pane is nothing. Under that width the two are stacked and
+    /// the sentence may use more lines.
+    private func arrangeMessageRow() {
+        let stacked = Self.stacksMessage(width: bounds.width, hasButton: !goToErrorButton.isHidden)
+        let orientation: NSUserInterfaceLayoutOrientation = stacked ? .vertical : .horizontal
+        // Set only on a change: each of these asks for another layout pass.
+        guard messageRow.orientation != orientation else {
+            if stacked, messageLabel.preferredMaxLayoutWidth != messageWidthWhenStacked {
+                messageLabel.preferredMaxLayoutWidth = messageWidthWhenStacked
+            }
+            return
+        }
+        messageRow.orientation = orientation
+        messageRow.alignment = stacked ? .leading : .firstBaseline
+        messageLabel.maximumNumberOfLines = stacked ? 6 : 3
+        messageLabel.preferredMaxLayoutWidth = stacked ? messageWidthWhenStacked : 0
+    }
+
+    private var messageWidthWhenStacked: CGFloat {
+        max(0, bounds.width - messageRow.edgeInsets.left - messageRow.edgeInsets.right)
+    }
+
+    override func layout() {
+        arrangeMessageRow()
+        super.layout()
+    }
+
     // MARK: Showing content
 
     /// Shows one render's content. `documentURL` is where the document is saved, or nil; a page
@@ -141,6 +179,7 @@ import TextTankCore
             setMessage(PreviewOutlinePresenter.summary(error: error, limit: limit))
         }
         goToErrorButton.isHidden = syntaxError == nil
+        needsLayout = true
         passFocusToPresenter()
     }
 
@@ -178,8 +217,11 @@ import TextTankCore
         }
         presenter.onUnavailable = { [weak self, weak presenter] sentence in
             guard let self, let presenter, presenter.view.isHidden == false else { return }
+            let isNew = sentence != nil && self.explanation != sentence
             self.explanationLabel.stringValue = sentence ?? ""
             self.explanationLabel.isHidden = sentence == nil
+            // Like `.message`: the sentence stands in place of the page, so it is announced (DS-72).
+            if isNew, let sentence { Announce.say(sentence, from: self.window) }
         }
         presenter.onContentLost = { [weak self] in self?.onContentLost?() }
         presenter.onWebViewCreated = { [weak self] in self?.passFocusToPresenter() }

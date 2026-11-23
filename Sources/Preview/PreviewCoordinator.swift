@@ -12,7 +12,10 @@ import TextTankCore
 /// - At most one render runs at a time. A newer request cancels the older one.
 /// - A render reads one immutable copy of the text taken on the main actor and runs on a
 ///   background task. Its result is applied only if the tab is still live and the document's
-///   revision and preview kind are the ones the render was started for; otherwise it is dropped.
+///   revision, preview kind and saved location are the ones the render was started for;
+///   otherwise it is dropped.
+/// - When the web content process ends, the page is rendered again once. If it ends a second
+///   time for the same text, the pane says so and nothing more is done until the text changes.
 /// - It never saves, reloads or edits the document and never touches Undo.
 @MainActor final class PreviewCoordinator {
     /// What the coordinator needs to know about its tab. All of it is read at the moment of use.
@@ -45,10 +48,17 @@ import TextTankCore
     /// The revision the scheduled or running render is for.
     private var requestedRevision: UInt?
 
-    /// Renders started, and results applied to the pane, since the coordinator was made.
+    /// How many times the web content process ended while the pane showed `revision`.
+    private var contentLosses: (revision: UInt, count: Int)?
+    /// After this many losses for the same text, the preview stops trying.
+    static let contentLossLimit = 2
+
+    /// Renders started, and results applied to the pane, since the coordinator was made. Read
+    /// only by the checks.
     private(set) var renderCount = 0
     private(set) var appliedCount = 0
-    /// Seconds the main thread spent applying the last result to the pane (DS-101).
+    /// Seconds the main thread spent applying the last result to the pane (DS-101). Read only by
+    /// the checks.
     private(set) var lastApplySeconds = 0.0
     /// True when no render is scheduled or running.
     var isIdle: Bool { debounce == nil && render == nil }
@@ -73,10 +83,27 @@ import TextTankCore
     init(pane: PreviewPane, tab: Tab) {
         self.pane = pane
         self.tab = tab
-        pane.onContentLost = { [weak self] in
-            self?.shown = nil
-            self?.refresh(after: 0)
+        pane.onContentLost = { [weak self] in self?.contentWasLost() }
+    }
+
+    /// The web content process ended. Render again once; a second loss for the same text ends
+    /// the attempts with a sentence, so a page that stops the process cannot do so in a loop.
+    private func contentWasLost() {
+        guard tab.isLive(), let editor = tab.editor(), let kind = tab.kind() else {
+            shown = nil
+            return
         }
+        let revision = editor.revision
+        let count = (contentLosses?.revision == revision ? contentLosses?.count ?? 0 : 0) + 1
+        contentLosses = (revision, count)
+        guard count >= Self.contentLossLimit else {
+            shown = nil
+            refresh(after: 0)
+            return
+        }
+        cancelWork()
+        // Recorded as showing this revision, so nothing renders until the text changes.
+        apply(.message(PreviewMessages.stoppedRepeatedly), revision, kind, tab.documentURL())
     }
 
     // MARK: Triggers
@@ -150,9 +177,11 @@ import TextTankCore
             let content = await work.value
             guard let self, self.generation == requested else { return }
             self.render = nil
-            // Drop a result for text, a kind or a tab state that is no longer the current one.
+            // Drop a result for text, a kind, a location or a tab state that is no longer the
+            // current one. The location decides which local files a page may load, so a page
+            // rendered before Save As must not be shown with the folder it had then.
             guard let content, self.tab.isLive(), let editor = self.tab.editor(), EditorLifetime.isOpen(editor),
-                editor.revision == revision, self.tab.kind() == kind
+                editor.revision == revision, self.tab.kind() == kind, self.tab.documentURL() == documentURL
             else {
                 if self.tab.isLive(), !self.isCurrent { self.refresh(after: 0) }
                 return

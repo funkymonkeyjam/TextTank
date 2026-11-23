@@ -132,8 +132,12 @@ import EditorBridge
         var entries: [Entry] = [], seen: Set<String> = []
         func collect(_ menu: NSMenu, path: [String]) {
             guard menu !== NSApp.servicesMenu else { return }
-            // Macro, language, automation, and group menus populate their items at menu-open time,
-            // at whatever depth the menu bar lists them.
+            // Macro, language, automation and group menus list items that change. Their owners
+            // must build them when the menu is made and rebuild them whenever the list changes:
+            // a key equivalent is matched against the items a menu already has, and pressing one
+            // does not call `menuNeedsUpdate`. Opening a menu is not what populates them. The
+            // call here only brings such a menu up to date before its commands are listed, at
+            // whatever depth the menu bar has it.
             if menu.delegate is MacroController || menu.delegate is AutomationController
                 || menu.delegate is LanguageController || menu.delegate is GroupCommandController
             {
