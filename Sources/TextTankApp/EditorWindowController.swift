@@ -8,7 +8,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
 {
     let split = NSSplitView()
     let findField = NSSearchField()
-    let findCount = NSTextField(labelWithString: "")
+    /// Announced: a count or “No matches” that only changes this label is otherwise silent (DS-36).
+    let findCount = AnnouncingLabel(labelWithString: "")
     private var findPreview: InlineFindPreview?
     let replaceField = NSTextField()
     let caseBox = NSButton(checkboxWithTitle: "Match case", target: nil, action: nil)
@@ -501,7 +502,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             .init(
                 field: .font,
                 text: String(
-                    format: Strings.text("status.basePoints", "Base %@ pt"),
+                    format: Strings.text("status.textSize", "Text size %@ pt"),
                     Strings.points(info.fontSize))),
             .init(field: .indent, text: indentation),
             .init(field: .encoding, text: doc.format.encoding.displayName + (doc.format.bom ? " BOM" : "")),

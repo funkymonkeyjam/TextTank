@@ -62,7 +62,9 @@ import MachO
             NSApp.activationPolicy() == .prohibited, !NSApp.isActive,
             AppStorage.supportDirectory.resolvingSymlinksInPath().path == support.resolvingSymlinksInPath().path
         else { fail("unexpected activation, document controller or support root") }
-        controller.recordsRecentDocuments = false
+        guard !controller.recordsRecentDocuments else {
+            fail("a launch with an isolated support directory must not record recent documents")
+        }
         started = true
         receipt("ready")
         // The app normally receives this lifecycle callback when its first editor is brought

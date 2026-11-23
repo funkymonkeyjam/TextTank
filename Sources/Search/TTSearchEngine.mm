@@ -171,7 +171,7 @@ SearchRegex compiledRegex(const std::wstring &pattern,bool matchCase){
         if(mode<0||mode>2)throw std::runtime_error("Unknown search mode.");
         if(query.length==0)throw std::runtime_error("Enter a nonempty search expression.");
         if(query.length>65536)throw std::runtime_error("The search expression is longer than the 64 Ki UTF-16 limit.");
-        if(text.length>maximumUnits)throw std::runtime_error("The document is larger than the 64 Mi UTF-16 search limit.");
+        if(text.length>maximumUnits)throw std::runtime_error("This document is too large to search. The limit is 64 Mi UTF-16 units.");
         if(replacement.length>1024*1024)throw std::runtime_error("The replacement is longer than the 1 Mi UTF-16 limit.");
         if(maximumMatches<1||maximumMatches>100000)throw std::runtime_error("The result limit must be between 1 and 100,000.");
         if(!(timeLimit>0&&timeLimit<=30))throw std::runtime_error("The search time limit must be more than 0 and at most 30 seconds.");

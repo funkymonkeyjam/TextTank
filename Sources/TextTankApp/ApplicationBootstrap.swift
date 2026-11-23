@@ -42,7 +42,8 @@ package enum TextTankApplication {
         let documents = TextDocumentController()
         let app = NSApplication.shared
         app.setActivationPolicy(smokeFile == nil ? .regular : .prohibited)
-        documents.recordsRecentDocuments = smokeFile == nil
+        // An isolated run (a check against the built app) must not add to the person's recent documents.
+        documents.recordsRecentDocuments = smokeFile == nil && AppStorage.permitsLegacyDefaults
         let delegate = AppDelegate()
         delegate.smokeFile = smokeFile
         delegate.firstLaunchProfile = freshProfile

@@ -308,6 +308,8 @@ __attribute__((objc_subclassing_restricted))
 @property(nonatomic) NSInteger zoomLevel;
 /// Inherit subsequent default changes until the user zooms this view independently.
 - (void)applyDefaultZoomLevel:(NSInteger)level;
+/// Actual Size: returns this view to the default zoom level, which it then follows again.
+- (void)resetZoomLevel;
 - (BOOL)setSyntaxFont:(NSInteger)index faceOverride:(nullable NSString *)name sizeOverride:(nullable NSNumber *)size;
 /// Comparison-only presentation primitives; callers use independent snapshot renderers.
 /// No method below edits text, Undo, savepoint or selections. Indicator21/22 and marker2/3/4

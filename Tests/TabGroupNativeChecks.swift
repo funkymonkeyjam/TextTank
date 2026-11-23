@@ -413,10 +413,27 @@ import Darwin
                 && host.model.activeTab?.documentID == shared.runtimeID,
             "T3 focused Grid Close Group empties pane and focuses resolved destination")
         _ = host.setEditorLayout(.twoColumns)
+        func heading(_ slot: GroupSlot) throws -> NSView {
+            let surface = try requireValue(host.groupSurfaces[slot], "group surface")
+            surface.layoutSubtreeIfNeeded()
+            return try requireValue(
+                surface.subviews.first { $0.identifier?.rawValue == "groups.heading.\(slot.rawValue)" },
+                "group heading")
+        }
+        check(
+            try !heading(.first).isHidden && heading(.first).frame.height == 20,
+            "a group among several keeps its heading")
         host.closeEditorGroup(.first)
         check(
             host.model.layout == .single && shared.isOpen && host.model.groups.count == 1,
             "T3 two-pane Close Group consolidates without closing document")
+        let only = try requireValue(host.groupSurfaces[.first], "single group surface")
+        check(
+            try heading(.first).isHidden && only.strip.frame.maxY == only.bounds.height,
+            "a single group shows no heading and its tab strip takes the row (DS-10)")
+        check(
+            host.layoutPicker.menu?.items.first?.isEnabled == true,
+            "the layout picker's title item stays enabled, so the control does not look unavailable")
         reset()
         // A non-final saved close records that exact view. Missing disk cannot affect live reopen.
         let liveDoc = try saved("history-live", "é\nabcdef\n"), h1 = id(liveDoc)

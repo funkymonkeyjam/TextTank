@@ -600,6 +600,11 @@ static void baseFontMetricsChecks() {
     [clone setBaseFontName:@"Menlo" size:21.5]; [clone adoptSyntaxStylesFrom:editor];
     check(metrics(other, 1, @"Courier", 2150) && metrics(other, 2, @"Menlo", 1225) && clone.zoomLevel == 4 &&
           editor.zoomLevel == 3, "syntax-only propagation preserves independent view base and zoom");
+    clone.zoomLevel = 7;
+    [clone resetZoomLevel];
+    check(clone.zoomLevel == 4, "Actual Size returns a zoomed view to the default zoom, not to zero");
+    [clone applyDefaultZoomLevel:5];
+    check(clone.zoomLevel == 5, "a view reset to the default zoom follows later default changes");
     [editor setSyntaxFont:STYLE_DEFAULT name:@"Courier" size:19];
     [editor setLanguage:@"null"];
     check(metrics(engine, STYLE_DEFAULT, @"Monaco", 3175) && metrics(engine, 3, @"Monaco", 3175) &&
@@ -1188,6 +1193,9 @@ int main(int argc, char **argv) {
         check([rightNative message:SCI_STYLEGETBACK wParam:STYLE_DEFAULT] == 0xF0F6F4, "Light palette restores paper background");
         check(marksAreVisible(rightNative, right), "Light palette: search mark outline and bookmark dot are at least 3:1");
         check([rightNative.content.accessibilityLabel isEqual:@"Document"] && [rightNative.content.accessibilityRoleDescription isEqual:@"text editor"], "The text area is not named after the engine");
+        check([rightNative.scrollView.verticalRulerView.accessibilityLabel isEqual:@"Line numbers and bookmarks"], "The gutter is not named after the engine");
+        check([rightNative message:SCI_INDICGETALPHA wParam:20] == 70 && [rightNative message:SCI_INDICGETALPHA wParam:25] == 70,
+              "Search mark fill keeps the opacity at which the text inside it was measured, whatever the contrast setting");
         right.accessibilityDocumentName = @"notes.txt, second pane";
         check([rightNative.content.accessibilityLabel isEqual:@"notes.txt, second pane"], "The text area takes the document name it is given");
         right.text = @""; [right resetUndoHistory];

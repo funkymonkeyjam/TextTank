@@ -974,10 +974,13 @@ import AppKit
             throw CocoaError(.fileReadNoSuchFile)
         }
         let data = try Data(contentsOf: url)
-        return try DocumentFactory.makeUntitled(prepare: { document in
-            try document.read(from: data, ofType: TextDocument.plainTextType)
-            document.displayName = welcome ? "Welcome to TextTank" : "TextTank User Guide"
-        })
+        return try DocumentFactory.makeUntitled(
+            prepare: { document in
+                try document.read(from: data, ofType: TextDocument.plainTextType)
+                document.displayName = welcome ? "Welcome to TextTank" : "TextTank User Guide"
+            },
+            // Help is prose in long paragraphs; it is read wrapped whatever the wrap setting is.
+            populate: { $0.editor.wrap = true })
     }
     @objc func openUserGuide(_ sender: Any?) {
         do { try openHelpDocument(welcome: false) } catch { TTAlert.present(error) }
@@ -1010,7 +1013,7 @@ import AppKit
         if let comparison = CompareController.key {
             comparison.resetComparisonZoom()
         } else {
-            currentEditor?.zoomLevel = 0
+            currentEditor?.resetZoomLevel()
         }
     }
     @objc func nextDocumentTab(_ sender: Any?) { cycleDocumentTab(1) }

@@ -71,7 +71,9 @@ final class EditorGroupSurface: NSView {
     }
     override func layout() {
         super.layout()
-        let h = min(20, bounds.height)
+        // One group needs no heading: there is nothing to tell apart and nowhere else to focus (DS-10).
+        heading.isHidden = host?.model.layout == .single
+        let h = heading.isHidden ? 0 : min(20, bounds.height)
         heading.frame = NSRect(x: 0, y: bounds.height - h, width: bounds.width, height: h)
         strip.frame = NSRect(x: 0, y: max(0, bounds.height - h - 36), width: bounds.width, height: 36)
         content.frame = NSRect(x: 0, y: 0, width: bounds.width, height: max(0, bounds.height - h - 36))

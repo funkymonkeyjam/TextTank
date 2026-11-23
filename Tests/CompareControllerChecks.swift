@@ -623,6 +623,20 @@ private final class CompareFailingEngine: ReviewDiffing, @unchecked Sendable {
                     "D1 picker Compare action")
                 let reads = pickerClipboardReads
                 check(button.isEnabled, "D1 actual picker source variant \(mode) enabled")
+                let rows = try requireValue(
+                    descendants(root).compactMap { $0 as? NSStackView }.first { $0.superview === root },
+                    "D1 picker rows")
+                root.layoutSubtreeIfNeeded()
+                check(
+                    root.frame.height >= rows.fittingSize.height + 40
+                        && picker.window?.contentMinSize.height == (rows.fittingSize.height + 40).rounded(.up),
+                    "the picker for source pair \(mode) is at least as tall as its visible rows")
+                let captions = descendants(root).compactMap { $0 as? NSTextField }
+                    .filter { ["Original", "Modified"].contains($0.stringValue) && !$0.isHidden }
+                check(
+                    captions.map(\.stringValue)
+                        == (mode == 0 ? ["Original", "Modified"] : mode == 4 ? [] : ["Original"]),
+                    "each visible tab choice in source pair \(mode) is captioned with its side")
                 button.performClick(nil)
                 let deadline = ProcessInfo.processInfo.systemUptime + 8
                 while pickerService.windows.isEmpty && ProcessInfo.processInfo.systemUptime < deadline {

@@ -166,7 +166,7 @@ struct BulkChangeReceipt: Sendable {
     var counts: String { "\(beforeLines) → \(afterLines) lines, \(beforeBytes) → \(afterBytes) bytes"
     }
     var summary: String {
-        return "\(name) · \(counts). " + (before == nil ? "Comparison exceeds the \(SizePolicy.describe(SizePolicy.standard.reviewText)) limit." : "Show Changes in Document status.")
+        return "\(name) · \(counts). " + (before == nil ? "Comparison exceeds the \(SizePolicy.describe(SizePolicy.standard.reviewText)) limit." : "Show Changes is in the save status menu at the left of the status bar.")
     }
 }
 @MainActor struct BulkChangeCapture {

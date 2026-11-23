@@ -2,21 +2,29 @@ Welcome to TextTank
 
 This untitled document is yours to edit. Use Help → Welcome to TextTank to open a fresh copy.
 
-Try a saved automation
+Edit, undo and find
 
-Choose File → New. Copy the two lines below into that blank document.
+Type anywhere in this document, then choose Edit → Undo (Command-Z) to take the change back. Choose Search → Find… (Command-F), type “TextTank” and press Return to step through the matches. Escape closes the find bar. File → Save (Command-S) saves a document where you choose. Until then TextTank keeps a recovery copy of unsaved text in case it stops unexpectedly.
+
+Find any command
+
+Choose Automations → Command Palette… (Shift-Command-P) and type part of a command’s name, such as “sort” or “wrap”. Press Return to run the selected command.
+
+Compare an edit with its saved file
+
+Choose File → New and type the two lines below into that blank document.
 
 - tea
 - milk
-
-Choose Automations → Clean up recipe list. This built-in automation reads the whole document and removes the list markers. The two lines now read “tea” and “milk”. Choose Edit → Undo to restore the markers.
-
-Compare an edit with its saved file
 
 Save your sample in a folder you choose. Change “tea” to “green tea” and leave the edit unsaved. Choose File → Compare with Saved Version. Review the comparison and close its window when finished. Your unsaved edit stays in the original tab.
 
 Use two editor groups
 
 With your sample active, choose View → Editor Group Layout → Two Columns. Choose View → Show Tab in Another Group and select the other group. Edit one view and observe the same document in the other. Choose View → Editor Group Layout → Single Group to return.
+
+Try a saved automation
+
+With your sample active, open the Automations menu and choose the list cleanup automation. A new installation names it Clean up recipe list. It reads the whole document and removes the list markers, so the two lines read “green tea” and “milk”. Choose Edit → Undo to restore the markers. Automations → Manage Automations… lists every saved automation.
 
 Choose Help → TextTank User Guide for more ways to open, search and review text.

@@ -34,8 +34,8 @@ package enum Strings {
                 return (text("count.bookmark.one", "%@ bookmark"), text("count.bookmark.other", "%@ bookmarks"))
             case .character:
                 return (
-                    text("count.character.one", "%@ character (code point)"),
-                    text("count.character.other", "%@ characters (code points)")
+                    text("count.character.one", "%@ character"),
+                    text("count.character.other", "%@ characters")
                 )
             case .line: return (text("count.line.one", "%@ line"), text("count.line.other", "%@ lines"))
             case .selection:

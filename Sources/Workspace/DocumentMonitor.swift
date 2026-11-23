@@ -83,6 +83,10 @@ enum DocumentMonitorStatus: Equatable, Sendable {
     }
     /// `known` is an earlier settled sample of the same file. While the file's metadata still
     /// equals its signature, the file holds the bytes that gave its digest and is not read.
+    /// Shown for a file too large to hash on every check. The status row offers Check Contents… beside it.
+    nonisolated static var unmonitoredNotice: String {
+        "The file is larger than \(SizePolicy.describe(maximumBytes)), so its contents are not checked automatically."
+    }
     nonisolated static func inspect(
         _ url: URL, expected: String?, known: FileSample? = nil, now: Int64? = nil, authorized: FileSignature? = nil
     )
@@ -99,7 +103,7 @@ enum DocumentMonitorStatus: Equatable, Sendable {
             if identity.size > contentLimit {
                 let message =
                     known?.signature == nil
-                    ? "File exceeds the \(SizePolicy.describe(Self.maximumBytes)) monitoring limit. Check disk metadata or open a smaller file."
+                    ? Self.unmonitoredNotice
                     : "Disk metadata changed. The file exceeds the \(SizePolicy.describe(Self.maximumBytes)) content check limit. Review the file before reloading."
                 return Inspection(status: .unavailable(message), sample: nil, readFile: false, identity: identity)
             }
@@ -117,7 +121,7 @@ enum DocumentMonitorStatus: Equatable, Sendable {
             return Inspection(status: .missing, sample: nil, readFile: false)
         } catch WorkspaceError.fileTooLarge {
             return Inspection(
-                status: .unavailable("File exceeds the \(SizePolicy.describe(Self.maximumBytes)) monitoring limit. Check disk metadata or open a smaller file."),
+                status: .unavailable(Self.unmonitoredNotice),
                 sample: nil, readFile: false)
         } catch { return Inspection(status: .unavailable(error.localizedDescription), sample: nil, readFile: false) }
     }
