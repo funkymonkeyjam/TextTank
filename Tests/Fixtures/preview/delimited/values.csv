@@ -1,0 +1,6 @@
+id,name,amount,note
+001,"Smith, Jane",=SUM(A1),"said ""hello"""
+002, padded ,+1,1e5
+003,"multi
+line",-0.50,
+004,,,

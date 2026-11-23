@@ -438,8 +438,10 @@ EditorBridge is now a separate AppKit Objective-C++ framework owning TTEditor an
 ported user lexer. It links Scintilla and Lexilla; it has no dependency on NativeSearch
 or the remaining Swift application target. The application embeds both native frameworks.
 
-TextTankCore owns the36 Foundation model/codec/storage/search-planning sources listed once
-in scripts/core_sources.py. It depends on NativeSearch and system Foundation/Darwin/CryptoKit/
+TextTankCore owns the Foundation model/codec/storage/search-planning sources listed once
+in scripts/core_sources.py, including the preview core in `Sources/Preview/` (Markdown
+rendering, the static HTML policy, the local resource resolver, delimited-text and JSON models and
+the SVG scan; see `docs/preview-model.md`). It depends on NativeSearch and system Foundation/Darwin/CryptoKit/
 zlib interfaces, with no EditorBridge, AppKit or executable dependency. Package access and
 explicit value constructors form the cross-target API; fields retain setter restrictions,
 version decoding requirements and existing defaults. UUID/Date defaults evaluate once per

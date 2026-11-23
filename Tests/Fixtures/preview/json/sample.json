@@ -1,0 +1,15 @@
+{
+  "name": "TextTank",
+  "version": 1.0,
+  "big": 123456789012345678901234567890,
+  "tiny": 1e400,
+  "negative": -0.0,
+  "exp": 6.02E+23,
+  "flags": [true, false, null],
+  "empty": {"object": {}, "array": [], "string": ""},
+  "escapes": "quote \" slash \/ back \\ tab \t line \n unicode \u00e9 pair \ud83d\ude00 lone \ud83d",
+  "ключ": "значение",
+  "dup": 1,
+  "dup": 2,
+  "nested": [[1, [2, [3]]], {"a": {"b": {"c": "deep"}}}]
+}

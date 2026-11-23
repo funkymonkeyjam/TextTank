@@ -30,3 +30,5 @@ The four `recipe-user-sample*` pairs are literal examples supplied by the user; 
 ## Other folders
 
 `persistence/` holds golden files for the persisted formats; see `Tests/DocumentPinningChecks.swift`.
+
+`preview/` holds the inputs and expected outputs of `Tests/PreviewCoreChecks.swift`; see `preview/README.md`.
