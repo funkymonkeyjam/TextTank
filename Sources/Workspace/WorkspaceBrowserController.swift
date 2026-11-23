@@ -14,7 +14,10 @@ import AppKit
 final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate, NSMenuDelegate,
     NSMenuItemValidation
 {
-    func validateMenuItem(_ item: NSMenuItem) -> Bool { !CompareCommandScope.blocksWorkspace }
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(toggleMonitor(_:)) { item.state = monitor.document == nil ? .off : .on }
+        return !CompareCommandScope.blocksWorkspace
+    }
     let store: WorkspaceBrowserStore
     let monitor = DocumentMonitor()
     var chooseEncoding: @MainActor (URL, Error) -> FileEncoding? = EncodingChoice.present
@@ -49,7 +52,6 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
     private var expanded = Set<String>()
     private var reloading = false
     private var recent: [URL] = []
-    private var rootMenu: NSMenu?
     private let recordsSystemRecent: Bool
     init(storeURL: URL? = nil, recordsSystemRecent: Bool = true) {
         self.recordsSystemRecent = recordsSystemRecent
@@ -108,47 +110,47 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
             TTAlert.present(error)
         }
     }
-    func menu() -> NSMenu {
-        let menu = NSMenu(title: "Workspace")
-        menu.delegate = self
-        rootMenu = menu
-        let show = NSMenuItem(title: "Show Workspace Browser", action: #selector(show(_:)), keyEquivalent: "")
-        show.target = self
-        menu.addItem(show)
-        let quick = NSMenuItem(title: "Quick Open…", action: #selector(quickOpen(_:)), keyEquivalent: "")
-        quick.target = self
-        menu.addItem(quick)
-        let add = NSMenuItem(title: "Add Folder to Workspace…", action: #selector(addFolder(_:)), keyEquivalent: "")
-        add.target = self
-        menu.addItem(add)
-        let monitor = NSMenuItem(title: "Monitor Current File", action: #selector(toggleMonitor(_:)), keyEquivalent: "")
-        monitor.target = self
-        menu.addItem(monitor)
-        let reload = NSMenuItem(
-            title: "Reload Monitored File…", action: #selector(reloadMonitored(_:)), keyEquivalent: "")
-        reload.target = self
-        menu.addItem(reload)
-        menu.addItem(.separator())
-        let recent = NSMenuItem(title: "Reopen Recent File", action: nil, keyEquivalent: "")
-        recent.submenu = NSMenu(title: "Recent Files")
-        menu.addItem(recent)
-        return menu
+    /// The browser's menu commands. The menu bar places each where a person looks for it:
+    /// opening files in File, the browser itself in View (DS-23).
+    enum MenuCommand {
+        case show, quickOpen, addFolder, monitor, reloadMonitored
     }
+    func menuItem(_ command: MenuCommand) -> NSMenuItem {
+        let title: String, action: Selector
+        switch command {
+        case .show: (title, action) = ("Workspace Browser", #selector(show(_:)))
+        case .quickOpen: (title, action) = ("Quick Open…", #selector(quickOpen(_:)))
+        case .addFolder: (title, action) = ("Add Folder to Workspace…", #selector(addFolder(_:)))
+        case .monitor: (title, action) = ("Monitor Current File", #selector(toggleMonitor(_:)))
+        case .reloadMonitored: (title, action) = ("Reload Monitored File…", #selector(reloadMonitored(_:)))
+        }
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        return item
+    }
+    /// Recently opened files, listed when the submenu opens.
+    func recentFilesMenuItem() -> NSMenuItem {
+        let recent = NSMenuItem(title: Self.recentFilesTitle, action: nil, keyEquivalent: "")
+        let menu = NSMenu(title: "Recent Files")
+        menu.delegate = self
+        recent.submenu = menu
+        return recent
+    }
+    static let recentFilesTitle = "Reopen Recent File"
     /// No item in this menu has a key equivalent, so a key press never needs it brought up to date.
     func menuHasKeyEquivalent(
         _ menu: NSMenu, for event: NSEvent, target: AutoreleasingUnsafeMutablePointer<AnyObject?>,
         action: UnsafeMutablePointer<Selector?>
     ) -> Bool { false }
+    /// This controller is the delegate of its recent-files submenus only.
     func menuNeedsUpdate(_ menu: NSMenu) {
-        guard menu === rootMenu, let submenu = menu.items.last?.submenu else { return }
-        menu.items.first { $0.action == #selector(toggleMonitor(_:)) }?.state = monitor.document == nil ? .off : .on
-        submenu.removeAllItems()
+        menu.removeAllItems()
         for url in recentURLs() {
             let item = NSMenuItem(title: url.lastPathComponent, action: #selector(openRecent(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = url
             item.toolTip = url.path
-            submenu.addItem(item)
+            menu.addItem(item)
         }
     }
     private func recentURLs() -> [URL] {

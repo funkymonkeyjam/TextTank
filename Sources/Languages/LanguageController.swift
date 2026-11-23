@@ -5,7 +5,7 @@ import NativeSearch
 import AppKit
 import Darwin
 
-/// The Language menu. Its contents follow the catalog, so it is rebuilt only when that changed.
+/// The Syntax Highlighting menu. Its contents follow the catalog, so it is rebuilt only when that changed.
 private final class LanguageMenu: NSMenu {
     var generation = -1
 }
@@ -95,25 +95,92 @@ private final class LanguageMenu: NSMenu {
             storageDamaged = true
         }
     }
+    /// The Syntax Highlighting menu: Normal Text, the languages in alphabetical ranges, then the
+    /// style and profile settings (DS-23).
     func menu() -> NSMenu {
-        let menu = LanguageMenu(title: "Language")
+        let menu = LanguageMenu(title: "Syntax Highlighting")
         menu.delegate = self
         populate(menu)
         return menu
     }
+    func completeWordMenuItem() -> NSMenuItem { commandItem("Complete Word", #selector(complete)) }
+    func functionListMenuItem() -> NSMenuItem { commandItem("Function List…", #selector(functions)) }
+    func keywordHelpMenuItem() -> NSMenuItem { commandItem("Show Keyword Help", #selector(callTip)) }
+    private func commandItem(_ title: String, _ action: Selector) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        return item
+    }
     private func populate(_ menu: LanguageMenu) {
         menu.removeAllItems()
-        menu.addItem(title: "Complete Word", action: #selector(complete), target: self)
-        menu.addItem(title: "Function List…", action: #selector(functions), target: self)
-        menu.addItem(title: "Show Keyword Help", action: #selector(callTip), target: self)
-        menu.addItem(styleSettingsMenuItem())
-        menu.addItem(title: "Edit Language Profiles…", action: #selector(configure), target: self)
-        menu.addItem(title: "Import Notepad++ UDL…", action: #selector(importUDL), target: self)
-        menu.addItem(title: "Edit Current UDL…", action: #selector(editUDL), target: self)
-        menu.addItem(title: "Export Current UDL…", action: #selector(exportUDL), target: self)
+        var languages = languageMenuItems()
+        if let plain = languages.firstIndex(where: { $0.representedObject as? String == LanguageProfile.plainTextID }) {
+            menu.addItem(languages.remove(at: plain))
+            menu.addItem(.separator())
+        }
+        var next = languages.startIndex
+        for range in Self.alphabeticalRanges(languages.map(\.title)) {
+            let parent = NSMenuItem(title: range.title, action: nil, keyEquivalent: "")
+            let submenu = NSMenu(title: range.title)
+            languages[next..<next + range.count].forEach(submenu.addItem)
+            next += range.count
+            parent.submenu = submenu
+            menu.addItem(parent)
+        }
         menu.addItem(.separator())
-        for item in languageMenuItems() { menu.addItem(item) }
+        menu.addItem(styleSettingsMenuItem())
+        menu.addItem(commandItem("Edit Language Profiles…", #selector(configure)))
+        let userDefined = NSMenu(title: "User-Defined Languages")
+        userDefined.addItem(commandItem("Import Notepad++ UDL…", #selector(importUDL)))
+        userDefined.addItem(commandItem("Edit Current UDL…", #selector(editUDL)))
+        userDefined.addItem(commandItem("Export Current UDL…", #selector(exportUDL)))
+        let userDefinedItem = NSMenuItem(title: userDefined.title, action: nil, keyEquivalent: "")
+        userDefinedItem.submenu = userDefined
+        menu.addItem(userDefinedItem)
         menu.generation = generation
+    }
+    /// Splits titles that are already in menu order into runs of at most `limit` (DS-23), titled
+    /// by the initial letters they hold: "A–C" or "S". Initial letters stay whole and the runs
+    /// are evened out, so that the last is not a stub. Only a letter with more than `limit`
+    /// titles of its own is divided, into runs titled by two letters: "Pa–Pe".
+    static func alphabeticalRanges(_ titles: [String], limit: Int = 20) -> [(title: String, count: Int)] {
+        func initial(_ title: String) -> String { String(title.prefix(1)).uppercased() }
+        func twoLetters(_ title: String) -> String { initial(title) + title.dropFirst().prefix(1) }
+        let wanted = max(1, (titles.count + limit - 1) / limit)
+        let even = min(limit, (titles.count + wanted - 1) / wanted)
+        var runs: [(first: String, last: String, count: Int)] = []
+        var start = titles.startIndex
+        while start < titles.endIndex {
+            let letter = initial(titles[start])
+            let end = titles[start...].firstIndex { initial($0) != letter } ?? titles.endIndex
+            let count = end - start
+            if count > limit {
+                let pieces = (count + limit - 1) / limit, size = (count + pieces - 1) / pieces
+                for from in stride(from: start, to: end, by: size) {
+                    let to = min(from + size, end)
+                    runs.append((twoLetters(titles[from]), twoLetters(titles[to - 1]), to - from))
+                }
+            } else if let last = runs.last, last.count + count <= even {
+                runs[runs.count - 1] = (last.first, letter, last.count + count)
+            } else {
+                runs.append((letter, letter, count))
+            }
+            start = end
+        }
+        return runs.map { ($0.first == $0.last ? $0.first : $0.first + "–" + $0.last, $0.count) }
+    }
+    /// Checks the active document's language, and the range that holds it (DS-22).
+    private func markCurrentLanguage(in menu: NSMenu) {
+        let current = editorProvider() == nil ? nil : languageProvider()
+        for item in menu.items {
+            if let range = item.submenu {
+                let languages = range.items.filter { $0.action == #selector(selectLanguage(_:)) }
+                languages.forEach { $0.state = $0.representedObject as? String == current ? .on : .off }
+                if !languages.isEmpty { item.state = languages.contains { $0.state == .on } ? .on : .off }
+            } else if item.action == #selector(selectLanguage(_:)) {
+                item.state = item.representedObject as? String == current ? .on : .off
+            }
+        }
     }
     func styleSettingsMenuItem() -> NSMenuItem {
         let item = NSMenuItem(title: "Syntax Style Settings…", action: #selector(styleSettings), keyEquivalent: "")
@@ -136,8 +203,9 @@ private final class LanguageMenu: NSMenu {
         }
     }
     func menuNeedsUpdate(_ menu: NSMenu) {
-        guard let menu = menu as? LanguageMenu, menu.generation != generation else { return }
-        populate(menu)
+        guard let menu = menu as? LanguageMenu else { return }
+        if menu.generation != generation { populate(menu) }
+        markCurrentLanguage(in: menu)
     }
     /// No item here has a key equivalent, so a key press never needs this menu brought up to date.
     func menuHasKeyEquivalent(

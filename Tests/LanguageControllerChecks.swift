@@ -562,8 +562,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                 editorProvider: { editor }, languageProvider: { selected }, setLanguage: { selected = $0 },
                 bundledCatalog: bundledURL)
             check(restored.catalog == custom, "custom profile persistence and reload exact")
-            let menu = controller.menu()
-            let pythonItem = menu.items.first { ($0.representedObject as? String) == "python" }!
+            let pythonItem = controller.languageMenuItems().first { ($0.representedObject as? String) == "python" }!
             check(
                 NSApp.sendAction(pythonItem.action!, to: pythonItem.target, from: pythonItem) && selected == "python",
                 "real language menu action updates chosen profile")
@@ -682,7 +681,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                         && ![editor, sameProfile, otherProfile].contains { $0.modified },
                     "re-applying a profile to every view never edits a document")
                 // Choosing a language in one pane restyles the other pane from it.
-                let chooser = fanout.menu().items.first { ($0.representedObject as? String) == "python" }!
+                let chooser = fanout.languageMenuItems().first { ($0.representedObject as? String) == "python" }!
                 check(
                     NSApp.sendAction(chooser.action!, to: chooser.target, from: chooser) && installs == ["python"],
                     "fixture: Python chosen from the Language menu with the second pane current")
@@ -1274,7 +1273,7 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                         damaged.catalog == bundledCatalog && damaged.storageDamaged && damaged.loadError != nil
                             && damaged.detect(filename: "a.py", text: "") == "python"
                             && damaged.apply(identifier: "python", to: probe)
-                            && damaged.menu().items.contains { ($0.representedObject as? String) == "python" },
+                            && damaged.languageMenuItems().contains { ($0.representedObject as? String) == "python" },
                         "\(name): the bundled languages still work")
                     rejects("\(name): persist refuses to write over the unreadable file") {
                         try damaged.persist(customCatalog)
@@ -1425,12 +1424,47 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                     "the golden catalog's profiles survive being saved as overrides")
             }
             // F241, F305: one decode, an indexed lookup, and a menu rebuilt only when the catalog changed.
+            // The languages sit one level down, in alphabetical ranges (DS-23).
+            func listed(_ menu: NSMenu) -> [NSMenuItem] {
+                menu.items.flatMap { $0.submenu?.items ?? [$0] }.filter { $0.representedObject is String }
+            }
             let languageMenu = controller.menu(), firstItems = languageMenu.items
             controller.menuNeedsUpdate(languageMenu)
             check(
                 languageMenu.items.count == firstItems.count
                     && zip(languageMenu.items, firstItems).allSatisfy { $0 === $1 },
-                "the Language menu is not rebuilt while the catalog is unchanged")
+                "the Syntax Highlighting menu is not rebuilt while the catalog is unchanged")
+            let ranges = languageMenu.items.filter { $0.submenu?.items.first?.representedObject is String }
+            if !check(
+                languageMenu.title == "Syntax Highlighting"
+                    && languageMenu.items.first?.representedObject as? String == LanguageProfile.plainTextID
+                    && languageMenu.items.dropFirst().first?.isSeparatorItem == true
+                    && languageMenu.items.filter { !$0.isSeparatorItem }.count <= 20
+                    && ranges.count >= 4 && ranges.allSatisfy { ($0.submenu?.items.count ?? 0) <= 20 }
+                    && ranges.map(\.title) == ranges.map(\.title).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+                    && listed(languageMenu).count == controller.languageMenuItems().count,
+                "DS-23 Normal Text is first and every language is in an alphabetical range of at most twenty")
+            {
+                print(
+                    "NOTE Syntax Highlighting: \(languageMenu.items.map { "\($0.title)(\($0.submenu?.items.count ?? 0))" }); listed \(listed(languageMenu).count) of \(controller.languageMenuItems().count)"
+                )
+            }
+            let cut = LanguageController.alphabeticalRanges(["Ada", "Awk", "Bash", "C", "C++", "D", "Go"], limit: 3)
+            check(
+                cut.map(\.title) == ["A–B", "C–D", "G"] && cut.map(\.count) == [3, 3, 1]
+                    && LanguageController.alphabeticalRanges(["x", "xa", "xb"], limit: 2).map(\.title) == ["X–Xa", "Xb"]
+                    && LanguageController.alphabeticalRanges(["x", "xa", "xb"], limit: 2).map(\.count) == [2, 1]
+                    && LanguageController.alphabeticalRanges([]).isEmpty,
+                "alphabetical ranges keep each initial letter whole unless it alone is over the limit, and name what they hold")
+            let chosen = selected
+            selected = "python"
+            controller.menuNeedsUpdate(languageMenu)
+            let currentRange = ranges.first { $0.submenu?.items.contains { $0.representedObject as? String == selected } == true }
+            check(
+                listed(languageMenu).filter { $0.state == .on }.map { $0.representedObject as? String } == [selected]
+                    && ranges.filter { $0.state == .on }.map(\.title) == [currentRange?.title],
+                "DS-22 the document's language and the range that holds it are checked")
+            selected = chosen
             var noTarget: AnyObject?, noAction: Selector?
             let keyDown = try requireValue(
                 NSEvent.keyEvent(
@@ -1440,24 +1474,24 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                 "fixture: key event")
             check(
                 !controller.menuHasKeyEquivalent(languageMenu, for: keyDown, target: &noTarget, action: &noAction)
-                    && languageMenu.items.allSatisfy { $0.keyEquivalent.isEmpty },
-                "the Language menu has no key equivalents and says so without rebuilding")
+                    && languageMenu.items.allSatisfy { $0.keyEquivalent.isEmpty }
+                    && listed(languageMenu).allSatisfy { $0.keyEquivalent.isEmpty },
+                "the Syntax Highlighting menu has no key equivalents and says so without rebuilding")
             let menuProfile = try userProfile("Pin menu refresh", keywords: ["Keywords1": "menu"])
             check(
-                !languageMenu.items.contains { ($0.representedObject as? String) == menuProfile.id },
+                !listed(languageMenu).contains { ($0.representedObject as? String) == menuProfile.id },
                 "fixture: an open menu object is refreshed by its delegate, not behind its back")
             controller.menuNeedsUpdate(languageMenu)
             check(
-                languageMenu.items.contains { ($0.representedObject as? String) == menuProfile.id }
-                    && controller.languageMenuItems().map { $0.representedObject as? String }
-                        == languageMenu.items.filter { $0.representedObject is String }.map {
-                            $0.representedObject as? String
-                        },
-                "an imported language appears in the Language menu at the next update")
+                listed(languageMenu).contains { ($0.representedObject as? String) == menuProfile.id }
+                    && Set(controller.languageMenuItems().map { $0.representedObject as? String })
+                        == Set(listed(languageMenu).map { $0.representedObject as? String })
+                    && listed(languageMenu).count == controller.languageMenuItems().count,
+                "an imported language appears in the Syntax Highlighting menu at the next update")
             let styleItem = controller.styleSettingsMenuItem()
             check(
                 styleItem.target === controller && styleItem.action == #selector(LanguageController.styleSettings)
-                    && styleItem.title == languageMenu.items[3].title,
+                    && languageMenu.items.contains { $0.title == styleItem.title && $0.action == styleItem.action },
                 "the style settings item is made directly, not found by its title")
             check(
                 controller.profile(identifier: menuProfile.id) == menuProfile

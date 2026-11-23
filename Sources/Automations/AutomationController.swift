@@ -321,13 +321,12 @@ private struct AutomationCheckboxEdits {
     private func rebuild() {
         updateSaveAllShortcut()
         automationMenu.removeAllItems()
+        let workflows = NSMenuItem(title: "Run Automation…", action: #selector(showPalette), keyEquivalent: "")
+        workflows.target = self
+        automationMenu.addItem(workflows)
         let manage = NSMenuItem(title: "Manage Automations…", action: #selector(manageAction), keyEquivalent: "")
         manage.target = self
         automationMenu.addItem(manage)
-        // The one entry for the palette, with its shortcut (Shift-Command-P).
-        let palette = NSMenuItem(title: commandDiscovery == nil ? "Automation Palette…" : "Command Palette…", action: #selector(paletteAction), keyEquivalent: "P")
-        palette.target = self
-        automationMenu.addItem(palette)
         let history = NSMenuItem(
             title: "Review Reminder Export History…", action: #selector(reminderHistory), keyEquivalent: "")
         history.target = self
@@ -336,11 +335,6 @@ private struct AutomationCheckboxEdits {
             title: "Restore Default Automations…", action: #selector(restoreDefaultsAction), keyEquivalent: "")
         restore.target = self
         automationMenu.addItem(restore)
-        if commandDiscovery != nil {
-            let workflows = NSMenuItem(title: "Run Automation…", action: #selector(showPalette), keyEquivalent: "")
-            workflows.target = self
-            automationMenu.addItem(workflows)
-        }
         if !library.workflows.isEmpty { automationMenu.addItem(.separator()) }
         for workflow in library.workflows {
             let item = NSMenuItem(
@@ -350,6 +344,15 @@ private struct AutomationCheckboxEdits {
             item.representedObject = workflow.id.uuidString
             automationMenu.addItem(item)
         }
+    }
+    /// The one menu entry for the palette, with its shortcut (Shift-Command-P). The menu bar
+    /// lists it in Help, beside the system's own command search.
+    func paletteMenuItem() -> NSMenuItem {
+        let palette = NSMenuItem(
+            title: commandDiscovery == nil ? "Automation Palette…" : "Command Palette…",
+            action: #selector(paletteAction), keyEquivalent: "P")
+        palette.target = self
+        return palette
     }
     @MainActor @objc private func manageAction() { manage() }
     @MainActor @objc private func paletteAction() {

@@ -1,0 +1,2354 @@
+[
+{
+"action": "about",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "responder"
+},
+{
+"action": "actualSize:",
+"key": "0",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "addFolder:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "addSample:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "arrangeInFront:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "responder"
+},
+{
+"action": "callTip",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "cancel:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "checkExternalChanges:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "responder"
+},
+{
+"action": "clone:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "responder"
+},
+{
+"action": "closeSplit:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "responder"
+},
+{
+"action": "columnInsert:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "addNextOccurrence",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "bookmarkClearAll",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "bookmarkCopyLines",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "bookmarkCutLines",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "bookmarkDeleteLines",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "bookmarkInvert",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "0",
+"object": "bookmarkNext",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "131072",
+"object": "bookmarkPrevious",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "bookmarkToggle",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "clearAdditionalSelections",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "K",
+"modifiers": "262144",
+"object": "deleteLine",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "deleteLineLeft",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "deleteLineRight",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "deleteWordLeft",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "deleteWordRight",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "d",
+"modifiers": "1048576",
+"object": "duplicateLine",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "duplicateSelection",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "foldAll",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "foldCurrent",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "foldLevel1",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "foldLevel2",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "foldLevel3",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "foldLevel4",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "foldLevel5",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "foldLevel6",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "foldLevel7",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "foldLevel8",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "gotoMatchingBrace",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "]",
+"modifiers": "1048576",
+"object": "indent",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "joinLines",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "lower",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1310720",
+"object": "moveLineDown",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1310720",
+"object": "moveLineUp",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "rectangularSelection",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "selectAllOccurrences",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "selectMatchingBrace",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "showWhitespace",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "streamSelection",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "toggleEOL",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "toggleLineNumbers",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "toggleOvertype",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "transform.invertCase",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "transform.removeEmptyLines",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "transform.reverseLines",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "transform.sortAscending",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "transform.sortCaseInsensitive",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "transform.sortDescending",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "transform.sortLength",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "transform.sortLocalized",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "transform.titleCase",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "transform.trimBoth",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "transform.trimLeading",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "transform.uniqueLines",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "transposeLine",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "trimTrailing",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "unfoldAll",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "[",
+"modifiers": "1048576",
+"object": "unindent",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "",
+"modifiers": "1048576",
+"object": "upper",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "+",
+"modifiers": "1048576",
+"object": "zoomIn",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "=",
+"modifiers": "1048576",
+"object": "zoomIn",
+"target": "responder"
+},
+{
+"action": "command:",
+"key": "-",
+"modifiers": "1048576",
+"object": "zoomOut",
+"target": "responder"
+},
+{
+"action": "comment:",
+"key": "",
+"modifiers": "1048576",
+"object": "blockComment",
+"target": "responder"
+},
+{
+"action": "comment:",
+"key": "",
+"modifiers": "1048576",
+"object": "blockUncomment",
+"target": "responder"
+},
+{
+"action": "comment:",
+"key": "",
+"modifiers": "1048576",
+"object": "lineComment",
+"target": "responder"
+},
+{
+"action": "comment:",
+"key": "",
+"modifiers": "1048576",
+"object": "lineUncomment",
+"target": "responder"
+},
+{
+"action": "comment:",
+"key": "/",
+"modifiers": "1048576",
+"object": "toggleLine",
+"target": "responder"
+},
+{
+"action": "compareCurrent:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "compareVisibleTabs:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "compareWithSavedVersion:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "responder"
+},
+{
+"action": "complete",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "configure",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "configure:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "convertEOL:",
+"key": "",
+"modifiers": "1048576",
+"object": "CR",
+"target": "responder"
+},
+{
+"action": "convertEOL:",
+"key": "",
+"modifiers": "1048576",
+"object": "CRLF",
+"target": "responder"
+},
+{
+"action": "convertEOL:",
+"key": "",
+"modifiers": "1048576",
+"object": "LF",
+"target": "responder"
+},
+{
+"action": "convertEncoding:",
+"key": "",
+"modifiers": "1048576",
+"object": "latin1",
+"target": "responder"
+},
+{
+"action": "convertEncoding:",
+"key": "",
+"modifiers": "1048576",
+"object": "utf16BE",
+"target": "responder"
+},
+{
+"action": "convertEncoding:",
+"key": "",
+"modifiers": "1048576",
+"object": "utf16LE",
+"target": "responder"
+},
+{
+"action": "convertEncoding:",
+"key": "",
+"modifiers": "1048576",
+"object": "utf8",
+"target": "responder"
+},
+{
+"action": "convertEncoding:",
+"key": "",
+"modifiers": "1048576",
+"object": "utf8bom",
+"target": "responder"
+},
+{
+"action": "convertEncoding:",
+"key": "",
+"modifiers": "1048576",
+"object": "windows1252",
+"target": "responder"
+},
+{
+"action": "convertNumber:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "copy:",
+"key": "c",
+"modifiers": "1048576",
+"object": "copy",
+"target": "responder"
+},
+{
+"action": "cut:",
+"key": "x",
+"modifiers": "1048576",
+"object": "cut",
+"target": "responder"
+},
+{
+"action": "editUDL",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "exportStyled:",
+"key": "",
+"modifiers": "1048576",
+"object": "{\n    destination = clipboard;\n    format = html;\n}",
+"target": "explicit"
+},
+{
+"action": "exportStyled:",
+"key": "",
+"modifiers": "1048576",
+"object": "{\n    destination = clipboard;\n    format = rtf;\n}",
+"target": "explicit"
+},
+{
+"action": "exportStyled:",
+"key": "",
+"modifiers": "1048576",
+"object": "{\n    destination = file;\n    format = html;\n}",
+"target": "explicit"
+},
+{
+"action": "exportStyled:",
+"key": "",
+"modifiers": "1048576",
+"object": "{\n    destination = file;\n    format = rtf;\n}",
+"target": "explicit"
+},
+{
+"action": "exportUDL",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "findNextShared:",
+"key": "g",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "findPreviousShared:",
+"key": "G",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "functions",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "goToLine:",
+"key": "l",
+"modifiers": "1048576",
+"object": "",
+"target": "responder"
+},
+{
+"action": "hexOptions:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "hide:",
+"key": "h",
+"modifiers": "1048576",
+"object": "",
+"target": "responder"
+},
+{
+"action": "hideOtherApplications:",
+"key": "h",
+"modifiers": "1572864",
+"object": "",
+"target": "responder"
+},
+{
+"action": "importUDL",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "installCommandLine:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "invoke:",
+"key": "",
+"modifiers": "1048576",
+"object": "group.close",
+"target": "explicit"
+},
+{
+"action": "invoke:",
+"key": "1",
+"modifiers": "1310720",
+"object": "group.focus",
+"target": "explicit"
+},
+{
+"action": "invoke:",
+"key": "",
+"modifiers": "1048576",
+"object": "group.layout.grid2x2",
+"target": "explicit"
+},
+{
+"action": "invoke:",
+"key": "",
+"modifiers": "1048576",
+"object": "group.layout.single",
+"target": "explicit"
+},
+{
+"action": "invoke:",
+"key": "",
+"modifiers": "1048576",
+"object": "group.layout.twoColumns",
+"target": "explicit"
+},
+{
+"action": "invoke:",
+"key": "",
+"modifiers": "1048576",
+"object": "group.layout.twoRows",
+"target": "explicit"
+},
+{
+"action": "invoke:",
+"key": "",
+"modifiers": "1048576",
+"object": "group.move",
+"target": "explicit"
+},
+{
+"action": "manage",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "manage:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "manageAction",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "manageAction",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "markCurrent:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "newDocument:",
+"key": "n",
+"modifiers": "1048576",
+"object": "",
+"target": "responder"
+},
+{
+"action": "nextDocumentTab:",
+"key": "\t",
+"modifiers": "262144",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "nextDocumentTab:",
+"key": "}",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "openDocument:",
+"key": "o",
+"modifiers": "1048576",
+"object": "",
+"target": "responder"
+},
+{
+"action": "openOnlineHelp:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "responder"
+},
+{
+"action": "openSession:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "openUserGuide:",
+"key": "?",
+"modifiers": "1048576",
+"object": "",
+"target": "responder"
+},
+{
+"action": "openWelcome:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "responder"
+},
+{
+"action": "paletteAction",
+"key": "P",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "paste:",
+"key": "v",
+"modifiers": "1048576",
+"object": "paste",
+"target": "responder"
+},
+{
+"action": "pasteAction:",
+"key": "",
+"modifiers": "1048576",
+"object": "AE932D35-4371-4D64-9091-95780DCD2441",
+"target": "explicit"
+},
+{
+"action": "performClose:",
+"key": "w",
+"modifiers": "1048576",
+"object": "",
+"target": "responder"
+},
+{
+"action": "performCompareCommand:",
+"key": "",
+"modifiers": "1048576",
+"object": "applySelected",
+"target": "responder"
+},
+{
+"action": "performCompareCommand:",
+"key": "",
+"modifiers": "1048576",
+"object": "cancel",
+"target": "responder"
+},
+{
+"action": "performCompareCommand:",
+"key": "",
+"modifiers": "1048576",
+"object": "chooseDestination",
+"target": "responder"
+},
+{
+"action": "performCompareCommand:",
+"key": "",
+"modifiers": "1048576",
+"object": "clearChangeSelection",
+"target": "responder"
+},
+{
+"action": "performCompareCommand:",
+"key": "",
+"modifiers": "1048576",
+"object": "collapse",
+"target": "responder"
+},
+{
+"action": "performCompareCommand:",
+"key": "",
+"modifiers": "1048576",
+"object": "copyPatch",
+"target": "responder"
+},
+{
+"action": "performCompareCommand:",
+"key": "",
+"modifiers": "1048576",
+"object": "expandAll",
+"target": "responder"
+},
+{
+"action": "performCompareCommand:",
+"key": "",
+"modifiers": "1048576",
+"object": "exportPatch",
+"target": "responder"
+},
+{
+"action": "performCompareCommand:",
+"key": "",
+"modifiers": "1048576",
+"object": "linked",
+"target": "responder"
+},
+{
+"action": "performCompareCommand:",
+"key": "",
+"modifiers": "0",
+"object": "next",
+"target": "explicit"
+},
+{
+"action": "performCompareCommand:",
+"key": "",
+"modifiers": "131072",
+"object": "previous",
+"target": "explicit"
+},
+{
+"action": "performCompareCommand:",
+"key": "",
+"modifiers": "1048576",
+"object": "refresh",
+"target": "responder"
+},
+{
+"action": "performCompareCommand:",
+"key": "",
+"modifiers": "1048576",
+"object": "selectAllChanges",
+"target": "responder"
+},
+{
+"action": "performCompareCommand:",
+"key": "",
+"modifiers": "1048576",
+"object": "selectChanges",
+"target": "responder"
+},
+{
+"action": "performCompareCommand:",
+"key": "",
+"modifiers": "1048576",
+"object": "showDestination",
+"target": "responder"
+},
+{
+"action": "performCompareCommand:",
+"key": "",
+"modifiers": "1048576",
+"object": "sideBySide",
+"target": "responder"
+},
+{
+"action": "performCompareCommand:",
+"key": "",
+"modifiers": "1048576",
+"object": "unified",
+"target": "responder"
+},
+{
+"action": "performCompareCommand:",
+"key": "",
+"modifiers": "1048576",
+"object": "whitespace",
+"target": "responder"
+},
+{
+"action": "performCompareCommand:",
+"key": "",
+"modifiers": "1048576",
+"object": "wrap",
+"target": "responder"
+},
+{
+"action": "performMiniaturize:",
+"key": "m",
+"modifiers": "1048576",
+"object": "",
+"target": "responder"
+},
+{
+"action": "performTabCommand:",
+"key": "",
+"modifiers": "1048576",
+"object": "close",
+"target": "explicit"
+},
+{
+"action": "performTabCommand:",
+"key": "",
+"modifiers": "1048576",
+"object": "closeGroup",
+"target": "explicit"
+},
+{
+"action": "performTabCommand:",
+"key": "",
+"modifiers": "1048576",
+"object": "closeLeft",
+"target": "explicit"
+},
+{
+"action": "performTabCommand:",
+"key": "",
+"modifiers": "1048576",
+"object": "closeOthers",
+"target": "explicit"
+},
+{
+"action": "performTabCommand:",
+"key": "",
+"modifiers": "1048576",
+"object": "closeRight",
+"target": "explicit"
+},
+{
+"action": "performTabCommand:",
+"key": "",
+"modifiers": "1048576",
+"object": "closeSaved",
+"target": "explicit"
+},
+{
+"action": "performTabCommand:",
+"key": "",
+"modifiers": "1048576",
+"object": "copyPath",
+"target": "explicit"
+},
+{
+"action": "performTabCommand:",
+"key": "",
+"modifiers": "1048576",
+"object": "moveLeft",
+"target": "explicit"
+},
+{
+"action": "performTabCommand:",
+"key": "",
+"modifiers": "1048576",
+"object": "moveRight",
+"target": "explicit"
+},
+{
+"action": "performTabCommand:",
+"key": "",
+"modifiers": "1048576",
+"object": "newToRight",
+"target": "explicit"
+},
+{
+"action": "performTabCommand:",
+"key": "",
+"modifiers": "1048576",
+"object": "pin",
+"target": "explicit"
+},
+{
+"action": "performTabCommand:",
+"key": "T",
+"modifiers": "1048576",
+"object": "reopen",
+"target": "explicit"
+},
+{
+"action": "performTabCommand:",
+"key": "",
+"modifiers": "1048576",
+"object": "reveal",
+"target": "explicit"
+},
+{
+"action": "performZoom:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "responder"
+},
+{
+"action": "playAgain",
+"key": "",
+"modifiers": "131072",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "playLast",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "previousDocumentTab:",
+"key": "\t",
+"modifiers": "393216",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "previousDocumentTab:",
+"key": "\u0019",
+"modifiers": "393216",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "previousDocumentTab:",
+"key": "{",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "printDocument:",
+"key": "p",
+"modifiers": "1048576",
+"object": "",
+"target": "responder"
+},
+{
+"action": "quickOpen:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "redo:",
+"key": "Z",
+"modifiers": "1048576",
+"object": "redo",
+"target": "responder"
+},
+{
+"action": "reloadEncoding:",
+"key": "",
+"modifiers": "1048576",
+"object": "latin1",
+"target": "responder"
+},
+{
+"action": "reloadEncoding:",
+"key": "",
+"modifiers": "1048576",
+"object": "utf16BE",
+"target": "responder"
+},
+{
+"action": "reloadEncoding:",
+"key": "",
+"modifiers": "1048576",
+"object": "utf16LE",
+"target": "responder"
+},
+{
+"action": "reloadEncoding:",
+"key": "",
+"modifiers": "1048576",
+"object": "utf8",
+"target": "responder"
+},
+{
+"action": "reloadEncoding:",
+"key": "",
+"modifiers": "1048576",
+"object": "windows1252",
+"target": "responder"
+},
+{
+"action": "reloadMonitored:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "reminderHistory",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "restoreDefaultsAction",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "revertDocumentToSaved:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "responder"
+},
+{
+"action": "run:",
+"key": "",
+"modifiers": "1048576",
+"object": "base64Decode",
+"target": "explicit"
+},
+{
+"action": "run:",
+"key": "",
+"modifiers": "1048576",
+"object": "base64DecodeLines",
+"target": "explicit"
+},
+{
+"action": "run:",
+"key": "",
+"modifiers": "1048576",
+"object": "base64DecodeStrict",
+"target": "explicit"
+},
+{
+"action": "run:",
+"key": "",
+"modifiers": "1048576",
+"object": "base64Encode",
+"target": "explicit"
+},
+{
+"action": "run:",
+"key": "",
+"modifiers": "1048576",
+"object": "base64EncodeLines",
+"target": "explicit"
+},
+{
+"action": "run:",
+"key": "",
+"modifiers": "1048576",
+"object": "base64EncodePadded",
+"target": "explicit"
+},
+{
+"action": "run:",
+"key": "",
+"modifiers": "1048576",
+"object": "base64EncodeUnix",
+"target": "explicit"
+},
+{
+"action": "run:",
+"key": "",
+"modifiers": "1048576",
+"object": "formatJSON",
+"target": "explicit"
+},
+{
+"action": "run:",
+"key": "",
+"modifiers": "1048576",
+"object": "hexDecode",
+"target": "explicit"
+},
+{
+"action": "run:",
+"key": "",
+"modifiers": "1048576",
+"object": "hexEncode",
+"target": "explicit"
+},
+{
+"action": "run:",
+"key": "",
+"modifiers": "1048576",
+"object": "inspectUnicode",
+"target": "explicit"
+},
+{
+"action": "run:",
+"key": "",
+"modifiers": "1048576",
+"object": "quotedPrintableDecode",
+"target": "explicit"
+},
+{
+"action": "run:",
+"key": "",
+"modifiers": "1048576",
+"object": "quotedPrintableEncode",
+"target": "explicit"
+},
+{
+"action": "run:",
+"key": "",
+"modifiers": "1048576",
+"object": "samlDecode",
+"target": "explicit"
+},
+{
+"action": "run:",
+"key": "",
+"modifiers": "1048576",
+"object": "urlDecode",
+"target": "explicit"
+},
+{
+"action": "run:",
+"key": "",
+"modifiers": "1048576",
+"object": "urlEncode",
+"target": "explicit"
+},
+{
+"action": "run:",
+"key": "",
+"modifiers": "1048576",
+"object": "urlEncodeExtended",
+"target": "explicit"
+},
+{
+"action": "run:",
+"key": "",
+"modifiers": "1048576",
+"object": "urlEncodeExtendedLines",
+"target": "explicit"
+},
+{
+"action": "run:",
+"key": "",
+"modifiers": "1048576",
+"object": "urlEncodeFull",
+"target": "explicit"
+},
+{
+"action": "run:",
+"key": "",
+"modifiers": "1048576",
+"object": "urlEncodeFullLines",
+"target": "explicit"
+},
+{
+"action": "run:",
+"key": "",
+"modifiers": "1048576",
+"object": "urlEncodeLines",
+"target": "explicit"
+},
+{
+"action": "run:",
+"key": "",
+"modifiers": "1048576",
+"object": "validateJSON",
+"target": "explicit"
+},
+{
+"action": "runAction:",
+"key": "",
+"modifiers": "1572864",
+"object": "AE932D35-4371-4D64-9091-95780DCD2441",
+"target": "explicit"
+},
+{
+"action": "runPageLayout:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "responder"
+},
+{
+"action": "runToolbarCustomizationPalette:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "responder"
+},
+{
+"action": "saveAllDocuments:",
+"key": "s",
+"modifiers": "1572864",
+"object": "",
+"target": "responder"
+},
+{
+"action": "saveCopy:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "responder"
+},
+{
+"action": "saveDocument:",
+"key": "s",
+"modifiers": "1048576",
+"object": "",
+"target": "responder"
+},
+{
+"action": "saveDocumentAs:",
+"key": "S",
+"modifiers": "1048576",
+"object": "",
+"target": "responder"
+},
+{
+"action": "saveLast",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "saveSession:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "selectAll:",
+"key": "a",
+"modifiers": "1048576",
+"object": "selectAll",
+"target": "responder"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "actionscript",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "ada",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "asm",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "asn1",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "asp",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "autoit",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "avs",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "baanc",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "bash",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "batch",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "blitzbasic",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "c",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "caml",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "cmake",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "cobol",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "coffeescript",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "cpp",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "cs",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "csound",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "css",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "d",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "diff",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "erlang",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "errorlist",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "escript",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "escseq",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "fcST",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "forth",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "fortran",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "fortran77",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "freebasic",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "gdscript",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "go",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "gui4cli",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "haskell",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "hollywood",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "html",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "ihex",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "ini",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "inno",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "java",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "javascript",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "javascript.js",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "json",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "json5",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "jsp",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "kix",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "latex",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "lisp",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "lua",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "makefile",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "markdown",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "matlab",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "mmixal",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "mssql",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "nfo",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "nim",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "nncrontab",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "normal",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "nsis",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "oscript",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "pascal",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "perl",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "php",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "postscript",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "powershell",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "props",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "purebasic",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "python",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "r",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "raku",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "rc",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "rebol",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "registry",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "ruby",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "rust",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "sas",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "scheme",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "smalltalk",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "spice",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "sql",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "srec",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "swift",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "tcl",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "tehex",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "tex",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "toml",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "txt2tags",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "typescript",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "vb",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "verilog",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "vhdl",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "visualprolog",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "xml",
+"target": "explicit"
+},
+{
+"action": "selectLanguage:",
+"key": "",
+"modifiers": "1048576",
+"object": "yaml",
+"target": "explicit"
+},
+{
+"action": "show:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "showDocumentTabs:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "responder"
+},
+{
+"action": "showFind:",
+"key": "f",
+"modifiers": "1048576",
+"object": "",
+"target": "responder"
+},
+{
+"action": "showPalette",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "showPicker:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "showSearch:",
+"key": "F",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "showSearch:",
+"key": "f",
+"modifiers": "1572864",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "showSettings:",
+"key": ",",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "startRecording",
+"key": "",
+"modifiers": "0",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "stopRecording",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "styleSettings",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "terminate:",
+"key": "q",
+"modifiers": "1048576",
+"object": "",
+"target": "responder"
+},
+{
+"action": "toggleAutoIndent:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "toggleAutoPair:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "toggleBraceHighlight:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "toggleCurrentLineHighlight:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "toggleIndentGuides:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "toggleMonitor:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "explicit"
+},
+{
+"action": "toggleReadOnly:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "responder"
+},
+{
+"action": "toggleToolbarShown:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "responder"
+},
+{
+"action": "toggleWrap:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "responder"
+},
+{
+"action": "undo:",
+"key": "z",
+"modifiers": "1048576",
+"object": "undo",
+"target": "responder"
+},
+{
+"action": "unhideAllApplications:",
+"key": "",
+"modifiers": "1048576",
+"object": "",
+"target": "responder"
+},
+{
+"action": "useSelectionForFind:",
+"key": "e",
+"modifiers": "1048576",
+"object": "",
+"target": "responder"
+}
+]

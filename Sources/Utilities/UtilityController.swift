@@ -11,23 +11,57 @@ import AppKit
     /// for the editor, a cancelled dialog, a failed guard and an export leave a macro recording alone.
     var onUnrecordableEdit: () -> Void = {}
     init(activeEditor: @escaping () -> TTEditor?) { self.editorProvider = activeEditor }
-    func makeMenu() -> NSMenu {
+    func menuItem(_ utility: TextUtility) -> NSMenuItem {
+        let item = NSMenuItem(title: utility.title, action: #selector(run(_:)), keyEquivalent: "")
+        item.target = self
+        item.representedObject = utility.rawValue
+        return item
+    }
+    private static let base64: [TextUtility] = [
+        .base64Encode, .base64EncodePadded, .base64EncodeUnix, .base64EncodeLines, .base64Decode, .base64DecodeLines,
+        .base64DecodeStrict
+    ]
+    private static let url: [TextUtility] = [
+        .urlEncode, .urlEncodeExtended, .urlEncodeFull, .urlEncodeLines, .urlEncodeExtendedLines, .urlEncodeFullLines,
+        .urlDecode
+    ]
+    private static let otherEncodings: [TextUtility] = [
+        .quotedPrintableEncode, .quotedPrintableDecode, .samlDecode, .hexEncode, .hexDecode
+    ]
+    /// The utilities that only report on the selection; the menu bar lists them in Tools.
+    static let inspections: [TextUtility] = [.inspectUnicode, .validateJSON]
+    /// The conversions that replace the selection, grouped by format for the Edit menu (DS-23).
+    func encodeAndDecodeMenu() -> NSMenu {
         precondition(Thread.isMainThread)
-        let menu = NSMenu(title: "Text Utilities")
-        for utility in TextUtility.allCases {
-            let item = NSMenuItem(title: utility.title, action: #selector(run(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = utility.rawValue
-            menu.addItem(item)
+        // Every utility has a place here, in Edit as Format JSON, or in Tools; a new case must be given one.
+        assert(
+            Set(TextUtility.allCases)
+                == Set(Self.base64 + Self.url + Self.otherEncodings + Self.inspections + [.formatJSON]),
+            "a TextUtility has no menu item")
+        let menu = NSMenu(title: "Encode and Decode")
+        for (title, utilities) in [("Base64", Self.base64), ("URL", Self.url)] {
+            let parent = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            let submenu = NSMenu(title: title)
+            utilities.forEach { submenu.addItem(menuItem($0)) }
+            parent.submenu = submenu
+            menu.addItem(parent)
         }
+        menu.addItem(.separator())
+        Self.otherEncodings.forEach { menu.addItem(menuItem($0)) }
         let hex = NSMenuItem(title: "UTF-8 to Hex with Options…", action: #selector(hexOptions(_:)), keyEquivalent: "")
         hex.target = self
         menu.addItem(hex)
+        return menu
+    }
+    func numberConversionMenuItem() -> NSMenuItem {
         let conversion = NSMenuItem(
             title: "Number Conversion…", action: #selector(convertNumber(_:)), keyEquivalent: "")
         conversion.target = self
-        menu.addItem(conversion)
-        menu.addItem(.separator())
+        return conversion
+    }
+    /// Copies or exports the styled text; nothing here changes the document.
+    func styledTextMenu() -> NSMenu {
+        let menu = NSMenu(title: "Export Styled Text")
         for format in ["html", "rtf"] {
             for destination in ["clipboard", "file"] {
                 let label = destination == "clipboard" ? "Copy" : "Export"

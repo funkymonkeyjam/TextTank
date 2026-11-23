@@ -84,9 +84,13 @@ import Foundation
             let badge = try requireValue(
                 control("status.macroRecording", NSButton.self, in: descendants(row)), "owned native badge")
             let savedMenu = NSApp.mainMenu
-            let bar = NSMenu(), item = NSMenuItem()
+            // As in the menu bar: Tools > Macros. The record and replay chords must reach a delegate two levels down.
+            let bar = NSMenu(), tools = NSMenuItem(title: "Tools", action: nil, keyEquivalent: "")
+            let item = NSMenuItem(title: "Macros", action: nil, keyEquivalent: "")
             item.submenu = controller.menu()
-            bar.addItem(item)
+            tools.submenu = NSMenu(title: "Tools")
+            tools.submenu?.addItem(item)
+            bar.addItem(tools)
             NSApp.mainMenu = bar
             defer { NSApp.mainMenu = savedMenu }
             func chord(shift: Bool = false) -> Bool {

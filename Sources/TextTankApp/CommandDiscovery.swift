@@ -84,7 +84,8 @@ import EditorBridge
         var entries: [Entry] = [], seen: Set<String> = []
         func collect(_ menu: NSMenu, path: [String]) {
             guard menu !== NSApp.servicesMenu else { return }
-            // Macro, language, automation, and group menus populate their items at menu-open time.
+            // Macro, language, automation, and group menus populate their items at menu-open time,
+            // at whatever depth the menu bar lists them.
             if menu.delegate is MacroController || menu.delegate is AutomationController
                 || menu.delegate is LanguageController || menu.delegate is GroupCommandController
             {
@@ -94,7 +95,7 @@ import EditorBridge
                 let route = path + [item.title]
                 if let child = item.submenu {
                     // Recently opened file names are documents, not commands.
-                    if !(child.delegate is RecentDocumentsMenu) && item.title != "Reopen Recent File" {
+                    if !(child.delegate is RecentDocumentsMenu) && item.title != WorkspaceBrowserController.recentFilesTitle {
                         collect(child, path: route)
                     }
                     continue
@@ -197,21 +198,29 @@ import EditorBridge
                 return ("Reads bookmarked lines • Changes document and clipboard", nil)
             }
         }
+        if selector == "toggleAutoIndent:" || selector == "toggleAutoPair:" {
+            return ("Reads typing settings • Changes them for every editor", nil)
+        }
+        // What the command's owner works on, wherever the menu bar lists it.
         let detail: String
-        switch menu {
-        case "TextTank", "Help": detail = "Uses the application, its windows or settings"
-        case "File": detail = "Reads or changes open documents and files"
-        case "Edit": detail = "Reads active editor • Changes text, marks or selection"
-        case "Encoding": detail = "Active document and on-disk text encoding"
-        case "Search": detail = "Search, editor selection or comparison"
-        case "Workspace", "Window": detail = "Reads workspace state • Changes windows or tabs"
-        case "View": detail = "Reads active view • Changes display or view settings"
-        case "Language": detail = "Reads language profiles • Changes editor assistance or settings"
-        case "Macros": detail = "Reads or changes saved macros and editor recording"
-        case "Automations": detail = "Reads or manages saved automations and history"
-        case "Run": detail = "Reads or manages saved commands and process output"
-        case "Text Utilities": detail = "Active text, utility results or export"
-        default: detail = menu
+        switch item.target {
+        case is LanguageController: detail = "Reads language profiles • Changes editor assistance or settings"
+        case is MacroController: detail = "Reads or changes saved macros and editor recording"
+        case is AutomationController: detail = "Reads or manages saved automations and history"
+        case is RunController: detail = "Reads or manages saved commands and process output"
+        case is UtilityController: detail = "Active text, utility results or export"
+        case is WorkspaceBrowserController: detail = "Reads workspace state • Changes windows or tabs"
+        default:
+            switch menu {
+            case "TextTank", "Help": detail = "Uses the application, its windows or settings"
+            case "File": detail = "Reads or changes open documents and files"
+            case "Edit": detail = "Reads active editor • Changes text, marks or selection"
+            case "Find": detail = "Search, bookmarks or editor selection"
+            case "View": detail = "Reads active view • Changes display or view settings"
+            case "Compare": detail = "Reads open documents or chosen text • Opens a comparison"
+            case "Window": detail = "Reads workspace state • Changes windows or tabs"
+            default: detail = menu
+            }
         }
         return (detail, nil)
     }

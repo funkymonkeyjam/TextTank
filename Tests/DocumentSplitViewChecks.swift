@@ -383,7 +383,7 @@ extension DocumentChecks {
             // A language chosen with the clone focused reaches both panes.
             let python = palette(document.editor)
             let cppItem = try requireValue(
-                delegate.languages.menu().items.first { ($0.representedObject as? String) == "cpp" },
+                delegate.languages.languageMenuItems().first { ($0.representedObject as? String) == "cpp" },
                 "fixture: a C++ item in the Language menu")
             check(
                 NSApp.sendAction(cppItem.action!, to: cppItem.target, from: cppItem)
@@ -396,7 +396,7 @@ extension DocumentChecks {
                 document.editor.revision == revision && !document.isDocumentEdited,
                 "changing the language does not edit the document")
             let pythonItem = try requireValue(
-                delegate.languages.menu().items.first { ($0.representedObject as? String) == "python" },
+                delegate.languages.languageMenuItems().first { ($0.representedObject as? String) == "python" },
                 "fixture: a Python item in the Language menu")
             check(
                 NSApp.sendAction(pythonItem.action!, to: pythonItem.target, from: pythonItem)
@@ -506,7 +506,8 @@ extension DocumentChecks {
             }
             try scramble()
             let editUDL = try requireValue(
-                delegate.languages.menu().items.first { $0.title == "Edit Current UDL…" },
+                delegate.languages.menu().item(withTitle: "User-Defined Languages")?.submenu?
+                    .item(withTitle: "Edit Current UDL…"),
                 "fixture: the Edit Current UDL command")
             let udlSaved = answeringDialogs([button("Save")]) {
                 _ = NSApp.sendAction(editUDL.action!, to: editUDL.target, from: editUDL)

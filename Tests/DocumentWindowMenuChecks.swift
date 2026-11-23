@@ -218,10 +218,27 @@ extension DocumentChecks {
             let entries = palette.commands(in: bar)
             let titles = entries.map { $0.row.title }
             check(Set(entries.map { $0.row.id }).count == entries.count, "palette row identities are unique")
-            check(titles.contains("Edit › Undo") && titles.contains("Automations › Run Automation…")
-                && titles.contains(where: { $0.hasPrefix("Language › ") })
-                && titles.contains(where: { $0.hasPrefix("Macros › ") }),
-                "actual editor, language, saved automation chooser and macro menu routes are discoverable")
+            check(titles.contains("Edit › Undo") && titles.contains("Tools › Automations › Run Automation…")
+                && titles.contains(where: { $0.hasPrefix("View › Syntax Highlighting › ") && $0.hasSuffix(" › Markdown") })
+                && titles.contains("Tools › Macros › Start Recording")
+                && titles.contains("View › Editor Groups › Editor Group Layout › Two Columns")
+                && titles.contains(where: { $0.hasPrefix("Tools › Run Commands › ") }),
+                "actual editor, language, saved automation chooser, macro, group and Run routes are discoverable at any depth")
+            @MainActor func detail(_ title: String) -> String? { entries.first { $0.row.title == title }?.row.detail }
+            check(
+                detail("File › Quick Open…") == "Reads workspace state • Changes windows or tabs"
+                    && detail("Find › Function List…") == "Reads language profiles • Changes editor assistance or settings"
+                    && detail("Edit › Typing › Auto-Indent on Return") == "Reads typing settings • Changes them for every editor"
+                    && detail("Tools › Run Commands › Configure Command…")
+                        == "Reads or manages saved commands and process output"
+                    && detail("Tools › Validate JSON") == "Active text, utility results or export"
+                    && detail("Compare › Compare Text…") == "Reads open documents or chosen text • Opens a comparison"
+                    && detail("Find › Matching Brace") == "Search, bookmarks or editor selection"
+                    && detail("File › Reload with Encoding › UTF-8…")
+                        == "Reads saved file • Reloads document contents after the normal review"
+                    && detail("View › Guides and Highlights › Highlight Current Line")
+                        == "Reads active view • Changes display or view settings",
+                "DS-20 a palette row describes what its command works on, wherever the menu bar lists it")
             check(!titles.contains(where: { $0.contains(" › Services › ") || $0.contains(" › Reopen Recent File › ") || $0.hasSuffix(" › Command Palette…") }),
                 "system services and recursive palette invocation are omitted")
             check(entries.contains { $0.item.action == NSSelectorFromString("runAction:") && $0.row.detail.hasPrefix("Reads ") && $0.row.detail.contains("Writes ") },
@@ -406,21 +423,83 @@ extension DocumentChecks {
                 try colliding.validate()
             }
 
-            let goTo = entry("Search > Go to Line…")
+            let goTo = entry("Find > Go to Line…")
             check(
                 goTo?.action == #selector(EditorWindowController.goToLine(_:)) && goTo?.keyEquivalent == "l"
                     && goTo?.keyEquivalentModifierMask == [.command] && goTo?.target == nil,
-                "Search > Go to Line… is Command-L and goes to the document window")
+                "Find > Go to Line… is Command-L and goes to the document window")
             let palettes = all.filter { $0.item.title == "Command Palette…" }
             check(
-                palettes.map(\.path) == ["Automations > Command Palette…"]
+                palettes.map(\.path) == ["Help > Command Palette…"]
                     && palettes.first?.item.keyEquivalent == "P"
                     && palettes.first?.item.keyEquivalentModifierMask == [.command]
                     && palettes.first?.item.target === sessionDelegate.automations,
-                "Command Palette… is one item, in the Automations menu, with Shift-Command-P")
+                "Command Palette… is one item, in the Help menu, with Shift-Command-P")
             check(
                 !all.contains { $0.item.title == "Choose Automation…" },
                 "the duplicate Choose Automation… item is gone")
+
+            // DS-D4 findability: each command is at the path a person would look in first, with its
+            // shortcut, and is enabled exactly when it can run. AppKit's own rules are followed here:
+            // a menu that does not auto-enable shows its items' own state; otherwise the target (or,
+            // for a responder-chain command, the first responder that implements it) validates.
+            @MainActor func available(_ path: String, responders: [AnyObject]) -> Bool? {
+                // A menu its controller rebuilds holds a new item at the same path, so look twice.
+                guard let menu = walk(bar).first(where: { $0.path == path })?.item.menu else { return nil }
+                menu.delegate?.menuNeedsUpdate?(menu)
+                guard let item = walk(bar).first(where: { $0.path == path })?.item, let action = item.action
+                else { return nil }
+                if !menu.autoenablesItems { return item.isEnabled }
+                guard let target = item.target ?? responders.first(where: { $0.responds(to: action) }) else {
+                    return false
+                }
+                if let validator = target as? NSMenuItemValidation { return validator.validateMenuItem(item) }
+                if let validator = target as? NSUserInterfaceValidations {
+                    return validator.validateUserInterfaceItem(item)
+                }
+                return true
+            }
+            let markdown = all.first {
+                $0.path.hasPrefix("View > Syntax Highlighting > ") && $0.path.hasSuffix(" > Markdown")
+                    && $0.path.components(separatedBy: " > ").count == 4
+            }?.path
+            // Path, key, modifiers, enabled without a document, enabled with one untitled document.
+            let expected: [(String, String, NSEvent.ModifierFlags, Bool, Bool)] = [
+                ("Compare > Compare Two Visible Tabs", "", [.command], false, false),
+                ("File > Quick Open…", "", [.command], true, true),
+                ("Edit > Lines > Sort Lines Ascending", "", [.command], false, true),
+                ("File > Reload with Encoding > UTF-8…", "", [.command], false, true),
+                ("File > Convert to Encoding > UTF-8", "", [.command], false, true),
+                ("Tools > Macros > Start Recording", MenuShortcut.recordMacro.key, [], false, true),
+                ("Help > Command Palette…", "P", [.command], true, true),
+                ("Find > Go to Line…", "l", [.command], false, true),
+                (markdown ?? "View > Syntax Highlighting > (no range) > Markdown", "", [.command], true, true)
+            ]
+            let placed = expected.filter { row in
+                guard let item = entry(row.0) else { return true }
+                return item.keyEquivalent != row.1 || item.keyEquivalentModifierMask != row.2
+            }.map(\.0)
+            check(placed.isEmpty, "DS-D4 each command is at its stated path with its shortcut: \(placed)")
+            sessionDelegate.noteActive(nil)
+            try require(
+                sessionDelegate.currentEditor == nil && NSDocumentController.shared.documents.isEmpty,
+                "fixture: no document is open")
+            let withoutDocument = expected.filter { available($0.0, responders: [sessionDelegate]) != $0.3 }.map(\.0)
+            check(
+                withoutDocument.isEmpty,
+                "DS-21 with no document open, each command is enabled only if it can run: \(withoutDocument)")
+            do {
+                let (document, controller, _) = try tab("findability")
+                defer { document.close() }
+                sessionDelegate.noteActive(controller)
+                try require(sessionDelegate.currentEditor === document.editor, "fixture: the tab is current")
+                let withDocument = expected.filter {
+                    available($0.0, responders: [controller, document, sessionDelegate]) != $0.4
+                }.map(\.0)
+                check(
+                    withDocument.isEmpty,
+                    "DS-21 with one untitled document, each command is enabled only if it can run: \(withDocument)")
+            }
             let shifted = all.filter {
                 $0.item.keyEquivalent == "P" && $0.item.keyEquivalentModifierMask == [.command]
             }
@@ -1730,9 +1809,8 @@ extension DocumentChecks {
             func has(_ path: String) -> Bool { all.contains { $0.path == path } }
             let edit = try requireValue(bar.items.first { $0.title == "Edit" }?.submenu, "fixture: the Edit menu")
             check(
-                edit.items.count <= 20 && edit.items.contains { $0.isSeparatorItem }
-                    && edit.items.allSatisfy { ($0.submenu?.items.count ?? 0) <= 20 },
-                "the Edit menu is grouped: no level lists more than twenty items")
+                edit.items.contains { $0.isSeparatorItem } && menuLevelsOverTwenty(bar).isEmpty,
+                "DS-23 every menu is grouped: no level lists more than twenty items \(menuLevelsOverTwenty(bar))")
             check(
                 has("Edit > Lines > Sort Lines Ascending") && has("Edit > Convert Case > Title Case")
                     && has("Edit > Line Endings > Convert to CRLF") && has("Edit > Comment > Toggle Line Comment"),
@@ -1742,18 +1820,19 @@ extension DocumentChecks {
                     all.contains { ($0.item.representedObject as? String) == "transform." + transform.rawValue }
                 }, "every text transform still has a menu item")
             check(
-                has("Encoding > Reload as UTF-8…") && !all.contains { $0.path.contains("utf8") },
-                "Reload items use encoding names, not stored identifiers")
+                has("File > Reload with Encoding > UTF-8…") && has("File > Convert to Encoding > UTF-8 with BOM")
+                    && !all.contains { $0.path.contains("utf8") },
+                "Reload and Convert items use encoding names, not stored identifiers")
             check(has("File > Open Recent"), "File has Open Recent")
             let recent = NSMenu(title: "Open Recent")
             sessionDelegate.recentDocumentsMenu.menuNeedsUpdate(recent)
             check(recent.items.last?.title == "Clear Menu", "Open Recent ends with Clear Menu")
-            let find = all.first { $0.path == "Search > Find…" }?.item
-            let panel = all.first { $0.path == "Search > Find and Replace…" }?.item
+            let find = all.first { $0.path == "Find > Find…" }?.item
+            let panel = all.first { $0.path == "Find > Find and Replace…" }?.item
             check(
                 find?.keyEquivalent == "f" && find?.keyEquivalentModifierMask == [.command]
                     && panel?.keyEquivalentModifierMask == [.command, .option]
-                    && has("Search > Use Selection for Find"),
+                    && has("Find > Use Selection for Find"),
                 "Command-F is the find bar; Find and Replace has its own shortcut")
             check(all.contains { $0.path.hasPrefix("Help > ") }, "the Help menu has an item of its own")
             // N2: Return never destroys; Escape always has a button.
