@@ -1067,7 +1067,8 @@ extension DocumentChecks {
             }
             // The redesign moved commands; it removed none. Every command of the fourteen-menu bar
             // is still listed exactly as often, with its action, represented object, shortcut and
-            // dispatch role. A deliberate removal or addition is named here with its reason.
+            // dispatch role. A deliberate removal or addition is named here with its reason, and
+            // a removal must be a row of the fixture, so nothing can be left out of it silently.
             func identities(_ rows: [[String: String]]) -> [String] {
                 rows.filter { $0["action"] != "" && $0["action"] != "submenuAction:" }.map { row in
                     ["action", "object", "key", "modifiers", "target"].map { row[$0] ?? "" }.joined(separator: "\u{1F}")
@@ -1078,8 +1079,21 @@ extension DocumentChecks {
                     with: Data(
                         contentsOf: TestPaths.fixtures.appendingPathComponent(
                             "menu-command-identities-before-nine-menus.json"))) as! [[String: String]]
+            // Removed: built-in recipe automation retired. The fourteen-menu bar listed the
+            // installed "Clean up recipe list" automation twice: once to paste with it and once
+            // to run it. The application no longer installs it.
+            let retiredRecipeAutomation = "A931733F-310A-4EBF-9C48-38C59202D586"
+            let deliberatelyRemoved: [[String: String]] = [
+                [
+                    "action": "pasteAction:", "object": retiredRecipeAutomation, "key": "", "modifiers": "1048576",
+                    "target": "explicit",
+                ],
+                [
+                    "action": "runAction:", "object": retiredRecipeAutomation, "key": "", "modifiers": "1572864",
+                    "target": "explicit",
+                ],
+            ]
             // Added with the nine-menu bar: the Source, Preview and Both views of a document.
-            let deliberatelyRemoved: [[String: String]] = []
             let deliberatelyAdded: [[String: String]] = ["source", "preview", "both"].map {
                 [
                     "action": "setDocumentViewMode:", "object": $0, "key": "", "modifiers": "1048576",
@@ -1087,13 +1101,20 @@ extension DocumentChecks {
                 ]
             }
             var accounted = identities(formerCommands + deliberatelyAdded)
+            var removedRowsInFixture = 0
             for removed in identities(deliberatelyRemoved) {
-                if let index = accounted.firstIndex(of: removed) { accounted.remove(at: index) }
+                if let index = accounted.firstIndex(of: removed) {
+                    accounted.remove(at: index)
+                    removedRowsInFixture += 1
+                }
             }
             let current = identities(menuSnapshot)
+            check(
+                formerCommands.count == 338 && removedRowsInFixture == deliberatelyRemoved.count,
+                "DS-D4 the fixture lists all 338 commands of the fourteen-menu bar, the two rows of the retired recipe automation among them")
             if !check(
-                formerCommands.count == 336 && current == accounted.sorted(),
-                "DS-D4 every command of the fourteen-menu bar is listed exactly once more in the nine-menu bar")
+                current == accounted.sorted(),
+                "DS-D4 every command of the fourteen-menu bar is listed exactly once more in the nine-menu bar, apart from the removals named")
             {
                 func show(_ id: String) -> String { id.replacingOccurrences(of: "\u{1F}", with: "|") }
                 var missing = accounted, extra = current

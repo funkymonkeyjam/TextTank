@@ -927,6 +927,13 @@
 "action": "pasteAction:",
 "key": "",
 "modifiers": "1048576",
+"object": "A931733F-310A-4EBF-9C48-38C59202D586",
+"target": "explicit"
+},
+{
+"action": "pasteAction:",
+"key": "",
+"modifiers": "1048576",
 "object": "AE932D35-4371-4D64-9091-95780DCD2441",
 "target": "explicit"
 },
@@ -1446,6 +1453,13 @@
 "key": "",
 "modifiers": "1048576",
 "object": "validateJSON",
+"target": "explicit"
+},
+{
+"action": "runAction:",
+"key": "",
+"modifiers": "1572864",
+"object": "A931733F-310A-4EBF-9C48-38C59202D586",
 "target": "explicit"
 },
 {

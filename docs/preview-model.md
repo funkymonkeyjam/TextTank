@@ -43,6 +43,8 @@ CSV or TSV document must be saved with its extension before it can be previewed.
 | Source size, every kind | 8 MiB | nothing is parsed; `.limited(.sourceTooLarge)` |
 | Markdown output | 16 MiB of HTML | nothing is returned; `.limited(.outputTooLarge)` |
 | Markdown block quote and list nesting | 32 levels | deeper markers are shown as text |
+| Markdown table columns | 4,096 | a wider header is not a table; its lines are shown as text |
+| Markdown table cells, empty ones included, in a document | 1,000,000 | nothing is returned; `.limited(.tooManyTableCells)` |
 | Delimited rows | 100,000 | later rows are left out; `limitsReached` has `.tooManyRows` |
 | Delimited columns | 512 | later cells of a row are left out; `.tooManyColumns` |
 | JSON values | 500,000 | the tree so far is returned with `.tooManyValues` |
@@ -51,8 +53,14 @@ CSV or TSV document must be saved with its extension before it can be previewed.
 
 Further fixed caps keep adversarial Markdown linear: 32 open brackets per paragraph, 2,048 bytes
 for a link destination or title, 999 bytes for a reference label, 32 nested parentheses in a
-destination. At most 1,000 external references and 100 delimited-text diagnostics are listed;
-the totals are still counted.
+destination, and 131,072 bytes read per paragraph by attempts to read `(destination "title")`
+that found no link (after that the paragraph has no more inline links; reference links still
+work). At most 1,000 external references and 100 delimited-text diagnostics are listed; the
+totals are still counted.
+
+A table row is stored with the cells it has. A row shorter than its header is padded with empty
+cells only as it is written, under the output limit, so a wide header with many short rows
+cannot ask for more memory than the limits allow.
 
 ## Markdown
 
@@ -104,9 +112,10 @@ These are decisions, not gaps:
    writes: `p`, `h1`–`h6`, `em`, `strong`, `code`, `pre`, `blockquote`, `ul`, `ol`, `li`, `a`,
    `img`, `br`, `hr`, `table`, `thead`, `tbody`, `tr`, `th`, `td`, `input`.
 2. **Link and image addresses are restricted.** Only `http:`, `https:`, `mailto:` and relative
-   addresses are written. For any other scheme (`javascript:`, `data:`, `file:`, `ftp:`, …), or
-   an address containing a control character, no tag is written: a link keeps its text and an
-   image keeps its description. An autolink with another scheme stays literal text.
+   addresses are written. For any other scheme (`javascript:`, `data:`, `file:`, `ftp:`, …), an
+   address that starts with `//` (another computer, with no scheme named), or an address
+   containing a control character, no tag is written: a link keeps its text and an image keeps
+   its description. An autolink with another scheme stays literal text.
 3. **Entities are not decoded.** A well-formed entity reference is copied to the output rather
    than replaced by its character, and its name is not checked against the HTML list. Entities are
    never recognized inside a link destination (`&amp;` there is the five characters), so that an
@@ -137,7 +146,18 @@ Places where rare input renders differently from CommonMark:
 
 `StaticHTMLPolicy` supplies the text-level half of a static, offline page. The web view supplies
 the other half and must not rely on this half alone: JavaScript disabled, a content rule list that
-blocks all network loads, and a handler for the `texttank-preview` scheme (`PreviewScheme.name`).
+blocks all network loads, and a handler for the `texttank-preview` scheme (`PreviewScheme.name`)
+that sends the content security policy as a response header.
+
+**Which layer enforces the policy.** The policy in force is the `Content-Security-Policy`
+response header (see [The web view](#the-web-view-markdown-html-svg)). The `<meta>` tag that
+`prepare` and `wrapFragment` write is a second copy and is not relied on, because markup in a
+user's document can defeat a `<meta>`: a browser honours one only inside the real head, and the
+scan below is a tokenizer, not an HTML parser. It takes for the head a `<head>` written after the
+body has begun, inside a title, a text area, a template, a comment in a script or an `svg`
+element, or one that is never finished, and it adds a head after an `<html>` tag that follows
+content. A `<base>` written before the tag is also out of the tag's reach. The checks load each
+of these documents and observe the header's policy refusing what it should.
 
 - `contentSecurityPolicy(scheme:)` is
   `default-src 'none'; img-src texttank-preview:; style-src texttank-preview: 'unsafe-inline'; font-src 'none'; script-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'`.
@@ -146,9 +166,9 @@ blocks all network loads, and a handler for the `texttank-preview` scheme (`Prev
   stylesheet is the bundled `Resources/Preview/preview.css`
   (`PreviewStylesheet.resourceName`/`resourceExtension`), which uses system colours and the system
   font and loads nothing.
-- `prepare(html:)` takes the user's HTML document and inserts the policy `<meta>` as the first
-  thing in `<head>`. Without a `<head>`, one is created after the `<html>` start tag, else after the
-  doctype, else at the start. Nothing else is rewritten. It also returns a
+- `prepare(html:)` takes the user's HTML document and inserts the policy `<meta>` after the first
+  `<head>` tag the scan finds. Without one, a head is created after the `<html>` start tag, else
+  after the doctype, else at the start. Nothing else is rewritten. It also returns a
   `PreviewContentReport`:
   - `externalReferences`: `http:`, `https:` and `//` addresses the page asks to load — `src`,
     `href`, `xlink:href`, `poster`, `data`, `background`, `srcset` and `imagesrcset` of `link`,
@@ -157,10 +177,13 @@ blocks all network loads, and a handler for the `texttank-preview` scheme (`Prev
     `style` attributes. Ordinary links (`<a href>`) and form targets are not loaded resources.
   - `scriptCount`: `<script>` elements, `on…` event-handler attributes, and `javascript:`
     addresses.
-  - `hasBaseTag`: a `<base>` tag exists (the policy ignores it).
+  - `hasBaseTag`: a `<base>` tag exists. The header's `base-uri 'none'` makes the browser ignore
+    it wherever it is written; the `<meta>` copy alone would not stop one written before it.
 
 The scan uses a tolerant tokenizer, not a parser: it reads tags and attributes in any case, quoted
-or not, and skips comments, CDATA sections and the text of script and style elements. It reports
+or not, and skips comments, CDATA sections and the text of script and style elements. A script or
+style element ends at its end tag's name followed by a space, a slash or `>`; `</scriptx` does
+not end a script. It reports
 what the *source* asks for; the web view's own rules are what actually block it. Serve the
 prepared document as `text/html; charset=utf-8`.
 
@@ -175,6 +198,9 @@ URL and the path of a requested preview URL (still percent-encoded), it answers
 `.allowed(fileURL, mimeType:)` only when all of these hold:
 
 - the document is a saved local file (otherwise `.untitledDocument`);
+- the document is not saved directly in the person's home folder or at the top of the disk
+  (otherwise `.documentFolderTooBroad`): "the document's folder" would then be everything the
+  person owns, or the whole disk. A subfolder of the home folder is an ordinary folder;
 - the path, after percent-decoding and removing `.` and `..`, is inside the folder that contains
   the document, subfolders included (otherwise `.outsideDocumentFolder`). A leading slash does not
   make a path absolute;
@@ -183,16 +209,19 @@ URL and the path of a requested preview URL (still percent-encoded), it answers
   `webp`, `svg`, `bmp`, `ico`, `avif`, `heic` (otherwise `.typeNotAllowed`);
 - it is a regular file (otherwise `.missing`) of at most 8 MiB (otherwise `.tooLarge`).
 
-A null byte or malformed percent-encoding is `.missing`. Symbolic-link resolution and file size are
-injected closures with real defaults, so the rules are tested without touching the disk. SVG is
-served only as `image/svg+xml` for use in `<img>`; the policy's `frame-src` and `object-src`
-refuse it anywhere it could act as a document.
+A null byte or malformed percent-encoding is `.missing`. Symbolic-link resolution, file size and
+the home folder are injected with real defaults, so the rules are tested without touching the
+disk. SVG is served only as `image/svg+xml` for use in `<img>`. Anywhere it could act as a
+document it is refused twice: by `frame-src 'none'` and `object-src 'none'` of the policy in the
+response header, and by the navigation rule, which cancels every load into a frame.
 
 ## Delimited text
 
 `DelimitedTable.parse(_:delimiter:)` reads comma- or tab-separated text in the style of RFC 4180:
 values may be wrapped in double quotes; inside quotes a doubled quote is one quote, and
-delimiters and line breaks (LF, CRLF, CR) are text. A byte order mark is skipped. A line break at
+delimiters and line breaks (LF, CRLF, CR) are text. The delimiter must be an ASCII character;
+any other is a programming error and stops the program (`PreviewKind` only ever gives a comma or
+a tab). A byte order mark is skipped. A line break at
 the very end does not start another row; an empty line elsewhere is a row with one empty cell.
 
 **Every value stays text exactly as written.** Nothing is trimmed, converted or evaluated:
@@ -207,8 +236,10 @@ Malformed quoting is tolerated and reported with 1-based row numbers:
 
 - a quoted value that is never closed takes the rest of the document as one value
   (`.unterminatedQuote`);
-- a quote inside an unquoted value, or text after a closing quote, is kept literally
-  (`.strayQuote`).
+- a quote inside an unquoted value is kept literally (`.strayQuote`);
+- a value with text after its closing quote is every byte between its delimiters, quotes
+  included (`.strayQuote`): `"a"b` is shown as `"a"b`, not `ab`. The sentence for it says "It
+  is shown as written", and that is what is done.
 
 Bytes that are not valid UTF-8 are shown as the replacement character. The first row is data;
 there is no header detection.
@@ -232,7 +263,9 @@ Outcomes:
 - `.parsed(tree)`;
 - `.invalid(partial:error:)` — the tree of everything read before the error, with containers that
   were still open closed at the error, and a `JSONSyntaxError` with kind, byte offset, line,
-  column and a message such as "Expected a comma or closing brace at line 12, column 5.";
+  column and a message such as "Expected a comma or closing brace at line 12, column 5.". The
+  offset is that of the offending byte, or the length of the document when the text ends too
+  soon (`unexpectedEnd`), which is where Go to Error then puts the caret;
 - `.limited(partial:limit:)`;
 - `.cancelled`.
 
@@ -277,15 +310,21 @@ Preview hides it. Nothing is saved, reloaded or shared again and Undo is not tou
 bytes, revision, selection, scroll position, clone split, Undo history and file are the same
 after any number of changes. In Both each pane keeps at least 120 points while there is room for
 two; below that the width is shared equally, so nothing overlaps (DS-67). The divider's position
-is a fraction of the width and changes only when it is dragged.
+is a fraction of the width and changes only when it is dragged. In a preview narrower than 320
+points the Go to Error button goes under its sentence instead of beside it, so the sentence
+keeps the width of the pane and may use six lines instead of three.
 
 Keyboard: showing Preview moves the keyboard to the preview. In Both, choosing View → Both
 again moves it from the source to the preview or back; Tab from the table or the tree goes to
 the source. While only the preview shows, Find, Find and Replace, Go to Line and Go to Error
 first put the source beside it, and so does anything else that puts the keyboard in a source
-pane. Commands that change text still act on the document, and Undo and Redo chosen from the
-preview go to the document. The pane and each presenter are labelled "Preview of <name>"
-(DS-70, DS-71), and the message row announces its changes (DS-72).
+pane. Making the tab active through its own chrome, such as a status-row menu opened while
+another editor group has the keyboard, is not one of those: the keyboard then goes to the
+preview and the tab keeps showing Preview. Commands that change text still act on the document,
+and Undo and Redo chosen from the preview go to the document. The pane and each presenter are
+labelled "Preview of <name>" (DS-70, DS-71). The message row announces its changes, and so does
+every sentence shown in place of the content: an empty document, a limit, "not ready yet",
+"cannot be shown" and "stopped twice" (DS-72).
 
 The mode is part of a tab's session record (see [tab-model](tab-model.md)). A restored mode is
 applied only to a document that still has a preview.
@@ -303,7 +342,14 @@ applied only to a document that still has a preview.
 - A render takes one immutable copy of the unsaved text on the main actor and runs the core in a
   detached task, at most one per tab. A newer request cancels the older one through the core's
   `isCancelled` hook. The result is applied only if the tab is still live and the document's
-  revision and preview kind are the ones it was started for; otherwise it is dropped.
+  revision, preview kind and saved location are the ones it was started for; otherwise it is
+  dropped and, if the tab is still live, rendered again. The location matters because it decides
+  which local files a page may load: a page rendered before Save As is not shown with the
+  folder the document had then.
+- When the web content process ends, the page is rendered again, once. If the process ends a
+  second time while showing the same text, the pane says "The preview stopped twice while showing
+  this document, so it is not shown. The document is not changed. Edit the document to try the
+  preview again." and nothing more is rendered until the text changes.
 - The last good rendering stays in place until the next is ready. Nothing says "updating".
 - A document over 8 MiB is not copied or parsed; the pane shows the core's limit sentence.
 - Returning to Source, closing the tab or closing the document cancels the work and releases the
@@ -315,11 +361,12 @@ One `WKWebView` per tab, made on first use.
 
 | Rule | How it is enforced |
 | --- | --- |
-| No page script runs | `allowsContentJavaScript = false`, and the page's content security policy has `script-src 'none'`. |
-| No network request | A compiled `WKContentRuleList` blocks every load and exempts only the `texttank-preview:` scheme. The content security policy allows images and stylesheets from that scheme only. |
+| No page script runs | `allowsContentJavaScript = false`, and the content security policy in the response header has `script-src 'none'`. |
+| No network request | A compiled `WKContentRuleList` blocks every load and exempts only the `texttank-preview:` scheme. The content security policy in the response header allows images and stylesheets from that scheme only. |
+| The policy cannot be written around | `PreviewSchemeHandler` sends `Content-Security-Policy` as a response header with every response: the page, the SVG image and each local file. WebKit enforces a header policy on this scheme; the checks observe it refusing a `data:` image, a frame, an object and a `<base>` in documents whose markup defeats the `<meta>` copy. |
 | Nothing is kept | A non-persistent `WKWebsiteDataStore`; responses are served `no-store`. |
 | No inspector, no link preview, no back/forward gestures | Web view settings. |
-| No load before the rules exist | The rule list is compiled once for the application, asynchronously, into the application's private folder. The web view is created only after it is ready. While it is compiling the pane says the preview is not ready and loads nothing; if it cannot be compiled the pane says so and never loads anything. |
+| No load before the rules exist | The rule list is compiled once for the application, asynchronously, into the application's private folder. The web view is created only after it is ready. While it is compiling the pane says the preview is not ready and loads nothing; if it cannot be compiled the pane says so, says to quit and reopen the application, and never loads anything. |
 
 `PreviewSchemeHandler` answers the scheme. It never looks at the URL's host. It serves:
 
@@ -337,17 +384,28 @@ Local files are allowed so that a page's own stylesheet and pictures appear as t
 browser; the folder rule keeps a page from reading anything else on the Mac.
 
 The message row above the preview is one sentence list: the core's summary of external resources
-and scripts (`PreviewSummary`), the number of local files that were missing, and the number that
+and scripts (`PreviewSummary`), the number of local files that were missing, the number that
 were refused ("3 local files were not loaded. Only stylesheets and images in the document's
-folder are loaded."). For Markdown the rendered fragment is scanned only to count remote images.
+folder are loaded."), and the number not loaded because the document is saved directly in the
+home folder or at the top of the disk, with what to do about it. A file read that finishes after
+its page was replaced is not counted against the new page. For Markdown the rendered fragment is
+scanned only to count remote images.
 
 Navigation is decided by `PreviewNavigationPolicy`: the presenter's own load of the page and
 moves to an anchor inside it are allowed; everything else is cancelled, including reloads, meta
 refresh, `file:`, `javascript:`, `data:`, relative page links, frames and new windows. Forms are
-stopped by the policy's `form-action 'none'`. A click on an `http`, `https` or `mailto` link is
-caught by the application's own script, in its own script world, before the web view starts a
-navigation, and is opened in the person's browser or mail application (an explicit action,
-DS-97). The context menu keeps only Copy and Copy Link.
+stopped twice: by `form-action 'none'` of the policy in the response header, and by the
+navigation rule.
+
+An `http`, `https` or `mailto` link is opened in the person's browser or mail application only
+by a pointer press and release on that link (an explicit action, DS-97). The application's own
+script, in its own script world, catches every activation of such a link before the web view
+starts a navigation, and reports it only when a press on the same link came first and the click
+has a click count. **Return on a focused link opens nothing.** A page can give a link the
+keyboard focus by itself (`autofocus`), so an activation from the keyboard cannot be told from
+one the page arranged; it is stopped and not reported. The navigation delegate opens nothing
+either: a link activation that reaches it is cancelled. Without a pointer, the address is still
+available through Copy Link. The context menu keeps only Copy and Copy Link.
 
 The application's own scripts (reading and restoring the scroll position across a new
 rendering, and the link catcher) run in `WKContentWorld.defaultClient`. Page scripts being off
@@ -369,33 +427,48 @@ keeps the selection where the rows still exist.
 An `NSOutlineView` with Name and Value columns over `JSONTree`. Rows are made when their parent
 is opened. The outermost value is the row "Document", open at first. An array item is named by
 its position; a container's value is its count ("3 items"); other values are `displayValue`, and
-the tooltip is the literal as written. When the document is parsed again, open rows and the
-selected row are found by their path of names and positions (at most 2,000 rows and 200,000 name
-comparisons; beyond that rows are left closed). Invalid JSON shows the tree read before the
+the tooltip is the literal as written. The first tree that has a value starts with its
+outermost row open, also when the text before it was not JSON at all. When the document is
+parsed again, the rows that were open (at most 2,000) and the selected row are found again in
+the new tree: an array item at the same position, an object member at the same position when
+that one has the same name. A member whose position changed is found by name, counting earlier
+members of that name where names repeat; that reads every name of the object, so it is limited
+to 100,000 names for one new parse, and rows beyond that are left closed. Invalid JSON shows the tree read before the
 error, the error sentence with its line and column in the message row, and Go to Error, which
 shows the source and puts the caret on the byte where the text stopped being valid.
 
 ### Measurements
 
-From `scripts/test-preview-ui.sh` on the unoptimized Debug build, 5 MiB documents in Both, one
-arm64 Mac, 23 November 2026. They are observations, not budgets (DS-101).
+From `scripts/test-preview-ui.sh` on the unoptimized Debug build, in Both, one arm64 Mac,
+23 November 2026. They are observations, not budgets (DS-101).
 
-| Document | Render, off the main thread | Applying the result, main thread | Longest main-thread gap while rendering | One keystroke |
-| --- | --- | --- | --- | --- |
-| Markdown | 1.9–2.1 s | 0.1 ms | 12 ms | 0.7 ms |
-| CSV | 0.42–0.48 s | 0.5 ms | 12 ms | 0.3 ms |
-| JSON | 0.41–0.47 s | 0.1 ms | 12 ms | 0.3 ms |
+| Document | Render, off the main thread | Applying the result, main thread | Applying again after an edit | Longest main-thread gap while rendering | One keystroke |
+| --- | --- | --- | --- | --- | --- |
+| Markdown, 5 MiB | 1.9–2.0 s | 0.1–0.2 ms | 0.1–0.2 ms | 12 ms | 0.4–0.9 ms |
+| CSV, 5 MiB | 0.42–0.44 s | 0.5–0.6 ms | under 0.1 ms | 12 ms | 0.3 ms |
+| JSON, 5 MiB: an array of about 71,000 objects, 50 of them open | 0.40 s | 22–23 ms | 23–25 ms | 12 ms | 0.3–0.5 ms |
+| JSON, 3.8 MiB: one object of 200,000 members, 50 of them open | 0.33 s | 55–56 ms | 59–61 ms | 12 ms | 0.3 ms |
+| JSON, 0.4 MiB: one object of 24,000 members, 50 of them open; the edit adds a member at the top | 0.04 s | 7 ms | 42 ms | 12 ms | 0.7 ms |
 
 "Applying" is handing the result to the presenter. For the web view the page then loads and is
-laid out in WebKit's own process, which is not included.
+laid out in WebKit's own process, which is not included. For the table, rows are asked for as
+they are drawn. For the tree the figure includes making a row for every item of each open value
+and opening the rows that were open before; drawing them is not included. The JSON documents
+are measured with the outermost row open, which is how a tree is first shown. The last row is
+the costliest edit for the tree: every member moves down one place, so each open row is looked
+for by name until the allowance of 100,000 names is spent; two of the fifty rows are found and
+the others are left closed.
 
 ### Not verified
 
 - Anything that needs an unlocked screen and a person: dragging the divider, physical Tab and
   arrow keys, VoiceOver speech, the look in light appearance, and the context menu as WebKit
   builds it (the check removes items from a menu it builds itself).
-- That WebKit makes no connection for a link the person clicks is checked for an ordinary click
-  only, not for a middle click or a drag.
+- A physical click on a link. The checks make the press and the click with the application's
+  own script (a `mousedown` and a `click` with a click count), and observe that this opens the
+  link through the opener, that the web view makes no connection, and that an activation with
+  no press opens nothing. A real pointer click, a middle click and a drag are not exercised, and
+  neither is Return typed on a focused link.
 - A load started through the web view's own API with an `http` address is cancelled by the
   navigation rule, but WebKit opens a connection to the server before it asks. Nothing in the
   application makes such a load.

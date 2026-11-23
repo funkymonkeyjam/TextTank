@@ -122,7 +122,7 @@ Earlier builds installed a second starting automation, a recipe cleanup named Cl
 - there is no shortcut (a stored empty shortcut counts as none) and no destination;
 - preview is stored as off and favorite is stored as on.
 
-Anything else is the user's and is kept: a renamed or edited copy, one with a shortcut, one removed from the favorites, a duplicate under another identifier, and any other automation that happens to use the same name. An automation is never removed by its name alone.
+Anything else is the user's and is kept: a renamed or edited copy, one with a shortcut, one removed from the favorites, a duplicate under another identifier, and any other automation that happens to use the same name. An automation is never removed by its name alone. One copy cannot be told apart: Insert Example in earlier builds added this automation under the same identifier with the same content, so a copy added again that way and left untouched is indistinguishable from the installed one and is removed with it.
 
 The removal is decided from the content each time, with no marker that it has run, so repeating it is harmless and a library with nothing to remove is not rewritten. Every other automation keeps its content and position. A library that held only that automation becomes an empty library; the starting automation is not installed again. A library that cannot be read is not examined and not written.
 

@@ -31,7 +31,7 @@ The four `recipe-user-sample*` pairs are literal examples supplied by the user; 
 
 `menu-tree.json` is the whole nine-menu tree (DS-D4) as `Tests/DocumentPinningChecks.swift` reads it from the built menu bar: position, title, action, shortcut, dispatch role and represented object of every item. `TEXTTANK_WRITE_MENU_FIXTURE=1` rewrites it; do that only for a reviewed change to the menu map.
 
-`menu-command-identities-before-nine-menus.json` lists the 336 commands of the earlier fourteen-menu bar by action, represented object, shortcut and dispatch role. It was derived from the golden fixtures of that bar before they were replaced, and is never regenerated: the same check requires every one of those commands to be listed exactly as often today, apart from differences it names.
+`menu-command-identities-before-nine-menus.json` lists the 338 commands of the earlier fourteen-menu bar by action, represented object, shortcut and dispatch role. It was derived from the golden fixtures of that bar before they were replaced, and is never regenerated: the same check requires every one of those commands to be listed exactly as often today, apart from differences it names. Two of the 338 are the rows of the built-in recipe automation ("Clean up recipe list", listed once to paste with it and once to run it), taken from the golden fixture as it was before that automation was retired. The check names both as deliberate removals with the reason "built-in recipe automation retired"; the other 336 must all be listed today.
 
 ## Other folders
 

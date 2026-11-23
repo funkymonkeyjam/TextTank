@@ -130,6 +130,30 @@ private final class RenderGate: @unchecked Sendable {
     }
 }
 
+/// A scheme task that records what the handler answers, so a response can be read without a
+/// web view in between. Used on the main thread only.
+private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
+    let request: URLRequest
+    private(set) var response: HTTPURLResponse?
+    private(set) var body = Data()
+    private(set) var failure: (any Error)?
+    private(set) var isDone = false
+
+    init(_ address: String, page: String) {
+        var request = URLRequest(url: URL(string: address)!)
+        request.mainDocumentURL = URL(string: page)
+        self.request = request
+    }
+
+    func didReceive(_ response: URLResponse) { self.response = response as? HTTPURLResponse }
+    func didReceive(_ data: Data) { body.append(data) }
+    func didFinish() { isDone = true }
+    func didFailWithError(_ error: any Error) {
+        failure = error
+        isDone = true
+    }
+}
+
 @MainActor private final class PreviewCheckContext {
     let isolated: IsolatedSupportDirectory
     init() throws { isolated = try IsolatedSupportDirectory("PreviewNativeProcess") }
@@ -332,11 +356,17 @@ private final class RenderGate: @unchecked Sendable {
         Checks.section("mode round trip") { try modeRoundTrip(root: root, app: app) }
         Checks.section("unsaved Markdown") { try unsavedMarkdown(root: root, listener: listener) }
         Checks.section("static HTML") { try staticHTML(root: root, listener: listener, opened: opened) }
+        Checks.section("scheme handler responses") { try schemeHandlerResponses(root: root) }
+        Checks.section("policy header") { try policyHeader(root: root, listener: listener) }
         Checks.section("SVG") { try svg(root: root, listener: listener) }
         Checks.section("delimited text") { try delimited(root: root) }
         Checks.section("JSON") { try json(root: root) }
         Checks.section("staleness and lifetime") { try stalenessAndLifetime(root: root, host: host) }
         Checks.section("close during a render") { try closeMidRender(root: root) }
+        Checks.section("delivery guard") { try deliveryGuard(root: root) }
+        Checks.section("content process loss") { try contentProcessLoss(root: root) }
+        Checks.section("status row of a Preview tab") { try statusRowKeepsPreview(root: root, host: host) }
+        Checks.section("narrow pane") { try narrowPane() }
         Checks.section("limits and timing") { try limitsAndTiming(root: root) }
         Checks.section("session capture and restore") { try sessionRestore(root: root, host: host) }
         Checks.section("fail closed") { try failClosed(root: root) }
@@ -345,6 +375,22 @@ private final class RenderGate: @unchecked Sendable {
             listener.connections == allowedConnections,
             "no preview made any network connection in the whole run (listener saw \(listener.connections - allowedConnections))"
         )
+        // Last, because it makes connections on purpose: the same listener does see a web view
+        // that has no rule list, so the zero above is an observation and not a blind spot.
+        Checks.section("listener sees an unprotected web view") {
+            let configuration = WKWebViewConfiguration()
+            configuration.websiteDataStore = .nonPersistent()
+            let unprotected = WKWebView(frame: NSRect(x: 0, y: 0, width: 50, height: 50), configuration: configuration)
+            unprotected.loadHTMLString("<img src=\"\(listener.base)/control.png\">", baseURL: nil)
+            wait("unprotected web view reaches the listener", timeout: 20) {
+                listener.connections > allowedConnections
+            }
+            check(
+                listener.connections > allowedConnections,
+                "control: a web view without the rule list does connect to the listener for the same kind of image (\(listener.connections - allowedConnections) connections)"
+            )
+            unprotected.stopLoading()
+        }
     }
 
     // MARK: Session record (Core)
@@ -474,6 +520,11 @@ private final class RenderGate: @unchecked Sendable {
         check(
             decide("texttank-preview://preview/abc/", own: true, main: false) == .cancel,
             "navigation: a frame or new window is cancelled")
+        check(
+            decide("texttank-preview://another-host/abc/") == .cancel
+                && decide("texttank-preview://another-host/abc/", own: true) == .allow
+                && decide("texttank-preview://another-host/abc/other.html", click: true) == .cancel,
+            "navigation: the host of a preview address is never looked at; only its path decides")
         check(
             decide("https://example.com/a", click: true) == .openExternally(URL(string: "https://example.com/a")!)
                 && decide("mailto:a@example.com", click: true, main: false)
@@ -772,7 +823,6 @@ private final class RenderGate: @unchecked Sendable {
             <link rel="stylesheet" href="style.css">
             <link rel="stylesheet" href="\(base)/remote.css">
             <link rel="preconnect" href="\(base)">
-            <link rel="dns-prefetch" href="\(base)">
             <link rel="prefetch" href="\(base)/prefetch">
             <style>
             @import url("\(base)/import.css");
@@ -810,7 +860,7 @@ private final class RenderGate: @unchecked Sendable {
         let web = try requireValue(presenter.webView, "web view")
         let handler = presenter.handler
         check(
-            tab.previewCoordinator?.renderCount == 1 && presenter.loadCount == 1 && presenter.contentLostCount == 0,
+            tab.previewCoordinator?.renderCount == 1 && presenter.checkRecord.loadCount == 1 && presenter.checkRecord.contentLostCount == 0,
             "showing Preview rendered and loaded the page once")
 
         picture(tab, "html")
@@ -828,7 +878,7 @@ private final class RenderGate: @unchecked Sendable {
         check(
             script(web, "document.getElementById('heading').textContent") as? String == "Static page",
             "the application's own script world can read the page although page scripts are off")
-        let served = handler.servedLocalFiles.map(\.lastPathComponent).sorted()
+        let served = handler.checkRecord.servedLocalFileNames.sorted()
         check(
             served == ["ok.png", "style.css"],
             "the scheme handler served exactly the local image and stylesheet: \(served)")
@@ -856,22 +906,26 @@ private final class RenderGate: @unchecked Sendable {
         check(
             NativeFixtureEnvironment.announcements.contains(message),
             "DS-72 the message row's sentence is announced")
+        let decisions = presenter.checkRecord.recentDecisions
         check(
-            handler.pageServeCount == 1,
-            "the meta refresh did not reload the page: \(handler.recentRequestPaths.count) requests, \(presenter.recentDecisions.map { "\($0.url?.absoluteString ?? "nil") \($0.decision)" })"
+            decisions.contains { $0.url?.absoluteString == "\(base)/refresh" && $0.decision == .cancel },
+            "the meta refresh was attempted and cancelled by the navigation rule: \(decisions.map { "\($0.url?.absoluteString ?? "nil") \($0.decision)" })"
         )
+        check(
+            handler.checkRecord.pageServeCount == 1 && web.url?.scheme == PreviewScheme.name,
+            "and the page was neither left nor loaded again (\(handler.checkRecord.recentRequestPaths.count) requests)")
 
         // Navigation: nothing leaves the page except a clicked external link, through the opener.
         let pageURL = web.url
         opened.value = []
         func unchanged(_ label: String) {
             settle(0.3)
-            let trace = presenter.recentDecisions.suffix(3).map { "\($0.url?.absoluteString ?? "nil") \($0.decision)" }
+            let trace = presenter.checkRecord.recentDecisions.suffix(3).map { "\($0.url?.absoluteString ?? "nil") \($0.decision)" }
             check(
                 (script(web, "location.href") as? String) == pageURL?.absoluteString && web.title == "Fixture"
                     && opened.value.isEmpty
-                    && handler.pageServeCount == 1 && listener.connections == 1,
-                "navigation cancelled, nothing loaded, no connection: \(label) \(trace) served \(handler.pageServeCount) connections \(listener.connections - 1) title \(web.title ?? "nil")"
+                    && handler.checkRecord.pageServeCount == 1 && listener.connections == 1,
+                "navigation cancelled, nothing loaded, no connection: \(label) \(trace) served \(handler.checkRecord.pageServeCount) connections \(listener.connections - 1) title \(web.title ?? "nil")"
             )
         }
         _ = script(web, "document.getElementById('form').submit(); 1")
@@ -882,23 +936,43 @@ private final class RenderGate: @unchecked Sendable {
         unchanged("a file: load")
         web.load(URLRequest(url: URL(string: "javascript:document.title='url ran'")!))
         unchanged("a javascript: load")
+        // An external link opens only after a pointer press and release on it. The events below
+        // are made by the application's own script; a physical click is not exercised here.
+        let press = """
+            function pointer(type, id, count) {
+              return document.getElementById(id).dispatchEvent(
+                new MouseEvent(type, {bubbles: true, cancelable: true, view: window, detail: count}));
+            }
+            """
+        _ = script(web, "document.getElementById('external').click(); 1")
+        unchanged("an external link activated with no pointer press, as Return on a focused link does")
+        _ = script(web, press + "pointer('click', 'external', 0); 1")
+        unchanged("a click event with a click count of zero")
+        _ = script(web, press + "pointer('mousedown', 'local', 1); pointer('click', 'external', 1); 1")
+        unchanged("a press on one link and a click on another")
         _ = script(web, "document.getElementById('anchor').click(); 1")
         settle(0.2)
         check(
-            web.url?.fragment == "heading" && handler.pageServeCount == 1,
+            web.url?.fragment == "heading" && handler.checkRecord.pageServeCount == 1,
             "an anchor inside the page is followed without a reload")
         _ = script(web, "document.getElementById('pinged').click(); 1")
         settle(0.4)
         check(listener.connections == 1, "a link's ping is not sent (\(listener.connections - 1))")
-        _ = script(web, "document.getElementById('external').click(); 1")
+        _ = script(
+            web, press + "pointer('mousedown', 'external', 1); pointer('mouseup', 'external', 1); pointer('click', 'external', 1); 1")
         wait("external link routed") { !opened.value.isEmpty }
-        check(
-            opened.value == [URL(string: "\(base)/clicked")!],
-            "a clicked http link is handed to the opener, once: \(opened.value)")
         settle(0.5)
         check(
-            listener.connections == 1,
-            "and the web view itself made no connection for the click or its ping (\(listener.connections - 1))")
+            opened.value == [URL(string: "\(base)/clicked")!],
+            "a press and release of the pointer on an http link hands it to the opener, once: \(opened.value)")
+        check(
+            (script(web, "location.href") as? String)?.hasPrefix("texttank-preview:") == true
+                && handler.checkRecord.pageServeCount == 1 && listener.connections == 1,
+            "and the web view itself neither navigated nor made a connection for the click or its ping (\(listener.connections - 1))")
+        opened.value = []
+        _ = script(web, "document.getElementById('external').click(); 1")
+        settle(0.3)
+        check(opened.value.isEmpty, "the earlier press does not carry over to a later activation without one")
         // An http: load started through the web view's own API is not checked against the
         // listener: WebKit connects ahead of asking the navigation delegate for such a load, and
         // nothing in the application makes one. The rule itself is checked above as a function.
@@ -931,7 +1005,7 @@ private final class RenderGate: @unchecked Sendable {
         settle(0.3)
         let untitledHandler = try requireValue(untitledTab.previewCoordinator?.pane.webPresenter?.handler, "handler")
         check(
-            untitledHandler.servedLocalFiles.isEmpty && untitledHandler.refusedLocalFiles == 2
+            untitledHandler.checkRecord.servedLocalFileNames.isEmpty && untitledHandler.refusedLocalFiles == 2
                 && pageText(untitledTab).contains("Untitled page"),
             "an untitled HTML document is previewed and is served no local file (refused \(untitledHandler.refusedLocalFiles))"
         )
@@ -965,8 +1039,9 @@ private final class RenderGate: @unchecked Sendable {
             listener.connections == 1,
             "SVG with a script, an external image, use and @import made no network connection")
         check(
-            presenter.handler.imageServeCount == 1 && presenter.handler.lastServedImage == Data(image.utf8),
-            "the image is the document's current text, served from memory as an image")
+            presenter.handler.checkRecord.imageServeCount == 1
+                && presenter.handler.checkRecord.lastImageLength == image.utf8.count,
+            "the image is served once, from memory, at the length of the document's current text")
         check(
             (script(web, "document.querySelector('img').naturalWidth") as? Int ?? 0) == 40 && web.title == "art.svg",
             "it is shown through an img element at its own size, and its script did not run")
@@ -978,17 +1053,19 @@ private final class RenderGate: @unchecked Sendable {
         try replace("fill=\"red\"", with: "fill=\"blue\" rx=\"4\"", in: tab.primaryEditor)
         waitCurrent(tab, "SVG after edit")
         picture(tab, "svg")
-        let servedText = String(decoding: presenter.handler.lastServedImage ?? Data(), as: UTF8.self)
+        let edited = tab.primaryEditor.text
         check(
-            presenter.handler.imageServeCount == 2 && servedText.contains("fill=\"blue\" rx=\"4\"")
-                && !servedText.contains("fill=\"red\""),
-            "editing the fill renders again and serves the new image bytes")
+            presenter.handler.checkRecord.imageServeCount == 2 && edited.contains("fill=\"blue\" rx=\"4\"")
+                && presenter.handler.checkRecord.lastImageLength == edited.utf8.count
+                && edited.utf8.count != image.utf8.count,
+            "editing the fill renders again and serves an image of the new text's length")
+        // The served bytes themselves are compared in "scheme handler responses".
 
         tab.primaryEditor.text = "<?xml version=\"1.0\"?>\n<note><to>someone</to></note>\n"
         waitCurrent(tab, "not an SVG")
         check(
             pane.explanation == SVGPolicy.notSVGMessage && presenter.view.isHidden
-                && presenter.handler.imageServeCount == 2,
+                && presenter.handler.checkRecord.imageServeCount == 2,
             "XML that is not SVG shows the sentence instead of an image: \(pane.explanation ?? "nil")")
         tab.primaryEditor.text = ""
         waitCurrent(tab, "empty document")
@@ -1179,6 +1256,25 @@ private final class RenderGate: @unchecked Sendable {
             pane.message == nil && pane.goToErrorButton.isHidden && rows().contains(["f", "1.0"])
                 && rows().contains(["deep", "xé"]),
             "repairing the text clears the error and keeps the tree open")
+
+        // Text that is not JSON from its first byte gives a tree with no value at all. The first
+        // tree that has one still starts with its outermost row open.
+        tab.primaryEditor.text = "x\n"
+        waitCurrent(tab, "not JSON at all")
+        check(
+            presenter.tree != nil && presenter.tree?.root == nil && outline.numberOfRows == 0
+                && !pane.goToErrorButton.isHidden,
+            "text that is not JSON shows no rows and the error")
+        tab.primaryEditor.text = "{\"a\":1,\"b\":[1,2]}\n"
+        waitCurrent(tab, "first valid JSON after text that was not")
+        check(
+            rows() == [["Document", "2 items"], ["a", "1"], ["b", "2 items"]],
+            "the first tree with a value opens its outermost row, even after a tree without one: \(rows())")
+        // A row the person closed stays closed.
+        outline.collapseItem(outline.item(atRow: 0))
+        try replace("\"a\":1", with: "\"a\":12", in: tab.primaryEditor)
+        waitCurrent(tab, "edit with the outermost row closed")
+        check(rows() == [["Document", "2 items"]], "a row the person closed stays closed across a new parse: \(rows())")
         document.close()
     }
 
@@ -1340,8 +1436,11 @@ private final class RenderGate: @unchecked Sendable {
         large.close()
 
         // 5 MiB in Both: the parse runs off the main thread; applying the result is short.
-        func measure(_ name: String, _ text: String) throws {
-            let (document, tab) = try open(name, "x\n", in: folder)
+        /// `secondEdit` is typed at byte 2 in place of the single space at the start.
+        func measure(
+            _ name: String, _ text: String, seed: String = "x\n", openRows: Int = 0, secondEdit: String? = nil
+        ) throws {
+            let (document, tab) = try open(name, seed, in: folder)
             tab.setViewMode(.both)
             waitCurrent(tab, "\(name) small")
             let coordinator = try requireValue(tab.previewCoordinator, "coordinator")
@@ -1361,21 +1460,52 @@ private final class RenderGate: @unchecked Sendable {
                 last = now
                 return coordinator.isIdle && coordinator.isCurrent
             }
-            _ = tab.primaryEditor.setSelectionAnchor(0, caret: 0)
+            let firstApply = coordinator.lastApplySeconds
+            // The JSON tree is measured as a person sees it: its outermost row open, with every
+            // one of its items a row, and some rows inside open as well.
+            let outline = coordinator.pane.outlinePresenter?.outlineView
+            if let outline {
+                check(
+                    outline.numberOfRows > 1 && outline.isItemExpanded(outline.item(atRow: 0)),
+                    "\(name): the outermost row is open (\(outline.numberOfRows) rows)")
+                // Open the last rows of the first level: the costliest to find again by name.
+                for row in (outline.numberOfRows - openRows..<outline.numberOfRows).reversed() where openRows > 0 {
+                    outline.expandItem(outline.item(atRow: row))
+                }
+            }
+            let rowsBefore = outline?.numberOfRows ?? 0
+            // One more character, which keeps every kind of document well formed, and the
+            // rendering it causes: the ordinary case of typing with the preview open.
+            let editOffset = secondEdit == nil ? 0 : 2
+            _ = tab.primaryEditor.setSelectionAnchor(editOffset, caret: editOffset)
             let typingStart = ProcessInfo.processInfo.systemUptime
-            _ = tab.primaryEditor.replaceSelection("y")
+            _ = tab.primaryEditor.replaceSelection(secondEdit ?? " ")
             let typing = ProcessInfo.processInfo.systemUptime - typingStart
+            wait("\(name) rendered again", timeout: 180) { coordinator.isIdle && coordinator.isCurrent }
+            let secondApply = coordinator.lastApplySeconds
             print(
                 String(
                     format:
-                        "TIMING %@ %.1f MiB: render %.3f s off the main thread; apply on main %.4f s; longest main-thread gap while rendering %.3f s over %d turns; one keystroke %.4f s (Debug build)",
-                    name, Double(bytes) / 1_048_576, gate.seconds.value, coordinator.lastApplySeconds, longestGap,
+                        "TIMING %@ %.1f MiB: render %.3f s off the main thread; apply on main %.4f s the first time and %.4f s after an edit; longest main-thread gap while rendering %.3f s over %d turns; one keystroke %.4f s (Debug build)",
+                    name, Double(bytes) / 1_048_576, gate.seconds.value, firstApply, secondApply, longestGap,
                     turns, typing))
             check(!gate.ranOnMainThread.value && gate.started.value >= 1, "\(name): the parse ran off the main thread")
             check(
-                coordinator.lastApplySeconds < 0.25,
-                "\(name): applying the result took \(String(format: "%.4f", coordinator.lastApplySeconds)) s of main-thread time"
+                firstApply < 0.25 && secondApply < 0.25,
+                "\(name): applying the result took \(String(format: "%.4f", firstApply)) s, then \(String(format: "%.4f", secondApply)) s after an edit, of main-thread time"
             )
+            if let outline, secondEdit == nil {
+                check(
+                    outline.numberOfRows == rowsBefore && outline.isItemExpanded(outline.item(atRow: 0)),
+                    "\(name): the tree is as open after the edit as before it (\(outline.numberOfRows) of \(rowsBefore) rows)")
+            } else if let outline {
+                // Every member moved down one place, so each open row had to be found by name,
+                // until the allowance for that was used up.
+                let stillOpen = outline.numberOfRows - 2 - outline.numberOfChildren(ofItem: outline.item(atRow: 0)) + 1
+                check(
+                    outline.isItemExpanded(outline.item(atRow: 0)) && (1..<openRows).contains(stillOpen),
+                    "\(name): after a member is added at the top, the outermost row stays open and as many rows inside as the allowance covers (\(stillOpen) of \(openRows))")
+            }
             check(typing < 0.25, "\(name): a keystroke in Both returned in \(String(format: "%.4f", typing)) s")
             document.close()
         }
@@ -1386,7 +1516,19 @@ private final class RenderGate: @unchecked Sendable {
         try measure("big.csv", String(repeating: row, count: fiveMiB / row.utf8.count))
         let member = "{\"id\": 1001, \"name\": \"Some Name\", \"tags\": [\"a\", \"b\"], \"ok\": true},\n"
         let count = fiveMiB / member.utf8.count
-        try measure("big.json", "[\n" + String(repeating: member, count: count - 1) + "{\"last\": null}\n]\n")
+        try measure(
+            "big.json", "[\n" + String(repeating: member, count: count - 1) + "{\"last\": null}\n]\n",
+            seed: "[true]\n", openRows: 50)
+        // One object with 200,000 members, fifty of them open: finding a member again by name is
+        // the costly case.
+        let members = (0..<200_000).map { "\"k\($0)\": [\($0)]" }.joined(separator: ",\n")
+        try measure("wide.json", "{\n" + members + "\n}\n", seed: "{\"seed\": true}\n", openRows: 50)
+        // The costliest edit for the tree: a member added at the top of a large object moves every
+        // other member, so open rows are found by name until the allowance is spent.
+        let fewer = (0..<24_000).map { "\"k\($0)\": [\($0)]" }.joined(separator: ",\n")
+        try measure(
+            "moved.json", "{\n" + fewer + "\n}\n", seed: "{\"seed\": true}\n", openRows: 50,
+            secondEdit: "\"added\": [0],\n")
     }
 
     // MARK: Session
@@ -1443,6 +1585,407 @@ private final class RenderGate: @unchecked Sendable {
         plain.close()
     }
 
+    // MARK: Scheme handler responses
+
+    private static func schemeHandlerResponses(root: URL) throws {
+        let folder = root.appendingPathComponent("responses")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try pixel.write(to: folder.appendingPathComponent("ok.png"))
+        let handler = PreviewSchemeHandler()
+        // The handler never looks at the web view it is called for; this one loads nothing.
+        let unused = WKWebView(frame: .zero)
+        let image = Data("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"3\" height=\"2\"/>".utf8)
+        func site(_ token: String, document: URL) -> PreviewSchemeHandler.Site {
+            PreviewSchemeHandler.Site(
+                page: PreviewPage(
+                    pagePath: "/\(token)/", html: Data("<p>page \(token)</p>".utf8), imagePath: "/\(token).svg",
+                    image: image, report: PreviewContentReport()),
+                resolver: PreviewResourceResolver(documentURL: document))
+        }
+        func request(_ path: String, page token: String) -> RecordingSchemeTask {
+            let task = RecordingSchemeTask(
+                "texttank-preview://preview\(path)", page: "texttank-preview://preview/\(token)/")
+            handler.webView(unused, start: task)
+            wait("response for \(path)") { task.isDone }
+            return task
+        }
+        let policy = StaticHTMLPolicy.contentSecurityPolicy()
+        handler.site = site("first", document: folder.appendingPathComponent("page.html"))
+
+        let page = request("/first/", page: "first")
+        let picture = request("/first.svg", page: "first")
+        let file = request("/first/ok.png", page: "first")
+        for (name, task, type, body) in [
+            ("the page", page, "text/html; charset=utf-8", Data("<p>page first</p>".utf8)),
+            ("the SVG image", picture, "image/svg+xml", image), ("a local file", file, "image/png", pixel)
+        ] {
+            let headers = task.response
+            check(
+                task.failure == nil && headers?.statusCode == 200 && task.body == body
+                    && headers?.value(forHTTPHeaderField: "Content-Type") == type,
+                "\(name) is served with its bytes and type")
+            check(
+                headers?.value(forHTTPHeaderField: "Content-Security-Policy") == policy,
+                "\(name) carries the content security policy as a response header")
+            check(
+                headers?.value(forHTTPHeaderField: "X-Content-Type-Options") == "nosniff"
+                    && headers?.value(forHTTPHeaderField: "Cache-Control") == "no-store",
+                "\(name) is served no-store and nosniff")
+        }
+        check(
+            handler.checkRecord.servedLocalFileNames == ["ok.png"] && handler.checkRecord.lastImageLength == image.count
+                && handler.checkRecord.pageServeCount == 1 && handler.checkRecord.imageServeCount == 1,
+            "the handler's record for the checks holds names, counts and a length, not bytes")
+        let otherHost = RecordingSchemeTask(
+            "texttank-preview://another-host/first/", page: "texttank-preview://another-host/first/")
+        handler.webView(unused, start: otherHost)
+        check(
+            otherHost.body == page.body && otherHost.failure == nil,
+            "the handler answers by path alone; the host of the address is not looked at")
+
+        // Counts belong to the page that asked.
+        let missing = request("/first/none.png", page: "first")
+        check(
+            missing.failure != nil && handler.missingLocalFiles == 1,
+            "control: a file the current page asks for that is not there is counted")
+        let late = RecordingSchemeTask(
+            "texttank-preview://preview/first/also-none.png", page: "texttank-preview://preview/first/")
+        handler.webView(unused, start: late)
+        // The read is still running on its background task when the next page replaces this one.
+        handler.site = site("second", document: folder.appendingPathComponent("page.html"))
+        check(!late.isDone && handler.missingLocalFiles == 0, "fixture: the page was replaced while the file was read")
+        wait("late read answered") { late.isDone }
+        settle(0.1)
+        check(
+            late.failure != nil && handler.missingLocalFiles == 0 && handler.refusedLocalFiles == 0,
+            "a file read that finishes after its page was replaced is not counted against the new page")
+        _ = request("/second/none.png", page: "second")
+        check(handler.missingLocalFiles == 1, "the new page's own missing file is counted")
+
+        // A document saved directly in the home folder has no folder of its own.
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        handler.site = site("third", document: home.appendingPathComponent("texttank-check-page.html"))
+        let broad = request("/third/anything.png", page: "third")
+        check(
+            broad.failure != nil && handler.broadFolderLocalFiles == 1 && handler.refusedLocalFiles == 0
+                && handler.missingLocalFiles == 0 && handler.checkRecord.servedLocalFileNames.isEmpty,
+            "a document saved directly in the home folder is served no local file, and that is counted on its own")
+        check(
+            PreviewMessages.broadFolderLocalFiles(1)
+                == "1 local file was not loaded because this document is saved directly in your home folder or at the top of the disk. Save the document in a folder of its own to load it."
+                && PreviewMessages.broadFolderLocalFiles(2)?.hasPrefix("2 local files were not loaded because") == true
+                && PreviewMessages.broadFolderLocalFiles(0) == nil,
+            "DS-81 DS-83 its sentence says why and what to do next")
+    }
+
+    // MARK: Policy header
+
+    /// Documents whose markup keeps the policy `<meta>` tag from taking effect. The policy must
+    /// hold for each of them all the same, because the scheme handler sends it as a header.
+    private static func policyHeader(root: URL, listener: LoopbackListener) throws {
+        let folder = root.appendingPathComponent("policy")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try pixel.write(to: folder.appendingPathComponent("ok.png"))
+        try Data("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"9\" height=\"9\"/>".utf8).write(
+            to: folder.appendingPathComponent("local.svg"))
+        let (document, tab) = try open("policy.html", "<p id=\"marker\">start</p>\n", in: folder)
+        check(tab.setViewMode(.preview), "fixture: Preview")
+        waitCurrent(tab, "policy start")
+        let presenter = try requireValue(tab.previewCoordinator?.pane.webPresenter, "web presenter")
+        let web = try requireValue(presenter.webView, "web view")
+        let handler = presenter.handler
+        // The checks' own listener for what the policy refuses, in the application's script world.
+        web.configuration.userContentController.addUserScript(
+            WKUserScript(
+                source: """
+                    window.textTankViolations = [];
+                    document.addEventListener('securitypolicyviolation', function (event) {
+                      window.textTankViolations.push(event.violatedDirective + ' ' + event.blockedURI);
+                    }, true);
+                    """, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .defaultClient))
+
+        let dataImage = "data:image/png;base64," + pixel.base64EncodedString()
+        let tail = """
+            <p id="marker">shown</p>
+            <img id="probe" src="\(dataImage)">
+            <img id="ok" src="ok.png">
+            <a id="rel" href="next.html">relative link</a>
+            <iframe src="local.svg"></iframe>
+            <object data="local.svg" type="image/svg+xml"></object>
+            <form id="form" action="next.html"><input name="q" value="1"></form>
+
+            """
+        let cases: [(name: String, html: String)] = [
+            ("a head tag after the body began", "<html><body><p>hi</p><head>" + tail),
+            ("a head tag inside a title", "<title><head></title>" + tail),
+            ("a head tag inside a text area", "<textarea><head></textarea>" + tail),
+            ("an html tag after content", "<p>x</p><html>" + tail),
+            ("a head tag inside a comment in a script", "<script><!--<script></script><head>--></script>" + tail),
+            ("a head tag inside a template", "<template><head></template>" + tail),
+            ("a head tag inside an svg element", "<svg><head></svg>" + tail),
+            ("a head tag that is never finished", tail + "<head"),
+            ("a base tag before the head", "<html><base href=\"\(listener.base)/\"><head>" + tail),
+            ("an ordinary document", "<!DOCTYPE html><html><head><title>t</title></head><body>" + tail + "</body></html>")
+        ]
+        for (name, html) in cases {
+            tab.primaryEditor.text = html
+            waitCurrent(tab, name)
+            settle(0.4)
+            func value(_ source: String) -> Any? { script(web, source) }
+            let violations = value("window.textTankViolations.join('|')") as? String ?? "none recorded"
+            check(
+                value("document.getElementById('marker').textContent") as? String == "shown",
+                "\(name): the page is shown")
+            check(
+                violations.contains("img-src") && (value("document.getElementById('probe').naturalWidth") as? Int) == 0,
+                "\(name): the policy is in force; it refused an image from a data: address (\(violations))")
+            check(
+                (value("document.getElementById('ok').naturalWidth") as? Int) == 1,
+                "\(name): an image beside the document still loads, so the page is not simply blank")
+            check(
+                (value("document.getElementById('rel').href") as? String)?.hasPrefix("texttank-preview://") == true,
+                "\(name): a relative address resolves inside the preview; no base tag is in effect")
+            let paths = handler.checkRecord.recentRequestPaths
+            check(
+                !paths.contains { $0.hasSuffix("local.svg") }
+                    && !handler.checkRecord.servedLocalFileNames.contains("local.svg"),
+                "\(name): the frame and the object were not loaded: \(paths.map { $0.split(separator: "/").last ?? "" })")
+            let served = handler.checkRecord.pageServeCount
+            _ = value("document.getElementById('form').submit(); 1")
+            settle(0.2)
+            check(
+                handler.checkRecord.pageServeCount == served
+                    && (value("document.getElementById('marker').textContent") as? String) == "shown",
+                "\(name): submitting the form goes nowhere")
+        }
+        settle(0.3)
+        check(listener.connections == 1, "none of these documents made a network connection")
+        document.close()
+    }
+
+    // MARK: Delivery guard
+
+    /// A coordinator of its own, told about nothing: its tab's revision, kind and location are
+    /// changed behind its back while a render is held, so that only the check made when the
+    /// result arrives can notice.
+    private static func deliveryGuard(root: URL) throws {
+        let folder = root.appendingPathComponent("guard")
+        let (document, _) = try open("guard.json", "{\"first\": 1}\n", in: folder)
+        let editor: TTEditor = document.editor
+        let kind = Box<PreviewKind?>(.json)
+        let location = Box<URL?>(document.fileURL)
+        let pane = PreviewPane(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        let coordinator = PreviewCoordinator(
+            pane: pane,
+            tab: PreviewCoordinator.Tab(
+                editor: { editor }, kind: { kind.value }, isLive: { true }, documentName: { "guard.json" },
+                documentURL: { location.value }))
+        coordinator.debounceInterval = { _ in 0 }
+        func idleAndCurrent(_ label: String) -> Bool {
+            wait("delivery guard: \(label)", timeout: 8) { coordinator.isIdle && coordinator.isCurrent }
+        }
+        /// Starts a render and holds it; `change` then alters the tab without telling the coordinator.
+        func renderHeld(_ label: String, change: () -> Void) -> (started: Int, applied: Int) {
+            let gate = RenderGate()
+            coordinator.renderer = gate.renderer(holding: true)
+            let applied = coordinator.appliedCount
+            coordinator.tabStateChanged()
+            wait("\(label): render started") { gate.started.value == 1 }
+            let rendersBefore = coordinator.renderCount
+            change()
+            check(
+                coordinator.renderCount == rendersBefore && !coordinator.isIdle,
+                "\(label): fixture: the coordinator was not told, and the first render is still the one in flight")
+            gate.open.value = true
+            _ = idleAndCurrent(label)
+            return (gate.started.value, coordinator.appliedCount - applied)
+        }
+        coordinator.tabStateChanged()
+        _ = idleAndCurrent("first render")
+        check(pane.outlinePresenter?.tree?.nodes.count == 2, "fixture: the first tree is shown")
+
+        // Each case starts stale, so that tabStateChanged starts a render.
+        editor.text = "{\"second\": [1, 2]}\n"
+        var outcome = renderHeld("revision") { editor.text = "[1, 2, 3, 4]\n" }
+        check(
+            outcome.started == 2 && outcome.applied == 1 && pane.outlinePresenter?.tree?.nodes.count == 5,
+            "a result for an older revision is dropped and the current text is rendered instead (\(outcome))")
+
+        editor.text = "a,b\n1,2\n"
+        outcome = renderHeld("kind") { kind.value = .delimited(",") }
+        check(
+            outcome.started == 2 && outcome.applied == 1 && pane.tablePresenter?.table?.rowCount == 2
+                && pane.outlinePresenter?.scrollView.isHidden == true,
+            "a result for a preview kind the document no longer has is dropped; the table is shown, not a tree (\(outcome))"
+        )
+
+        editor.text = "c,d\n3,4\n5,6\n"
+        let savedAs = folder.appendingPathComponent("elsewhere/renamed.csv")
+        outcome = renderHeld("location") { location.value = savedAs }
+        check(
+            outcome.started == 2 && outcome.applied == 1 && coordinator.isCurrent
+                && pane.tablePresenter?.table?.rowCount == 3,
+            "a result started before the document was saved somewhere else is dropped and rendered again for the new location (\(outcome))"
+        )
+        coordinator.invalidate()
+        document.close()
+    }
+
+    // MARK: Content process loss
+
+    private static func contentProcessLoss(root: URL) throws {
+        let (document, tab) = try open("stops.md", "# Stops\n", in: root.appendingPathComponent("loss"))
+        tab.setViewMode(.both)
+        waitCurrent(tab, "before any loss")
+        let coordinator = try requireValue(tab.previewCoordinator, "coordinator")
+        let pane = coordinator.pane
+        let presenter = try requireValue(pane.webPresenter, "web presenter")
+        let web = try requireValue(presenter.webView, "web view")
+        let renders = coordinator.renderCount
+        check(PreviewCoordinator.contentLossLimit == 2, "fixture: the preview gives up at the second loss")
+
+        // What WebKit calls when the web content process ends.
+        presenter.webViewWebContentProcessDidTerminate(web)
+        waitCurrent(tab, "after one loss")
+        check(
+            coordinator.renderCount == renders + 1 && pane.explanation == nil && pageText(tab).contains("Stops"),
+            "after the web content process ends once, the page is rendered and shown again")
+        presenter.webViewWebContentProcessDidTerminate(web)
+        settle(0.5)
+        check(
+            coordinator.renderCount == renders + 1 && coordinator.isIdle
+                && pane.explanation == PreviewMessages.stoppedRepeatedly,
+            "after it ends a second time for the same text, nothing more is rendered and the pane says so: \(pane.explanation ?? "nil")"
+        )
+        check(
+            NativeFixtureEnvironment.announcements.filter { $0 == PreviewMessages.stoppedRepeatedly }.count == 1,
+            "DS-72 the sentence is announced, once")
+        presenter.webViewWebContentProcessDidTerminate(web)
+        tab.previewVisibilityChanged()
+        settle(0.5)
+        check(
+            coordinator.renderCount == renders + 1 && presenter.checkRecord.contentLostCount == 3,
+            "a third loss, and showing the tab again, still start no render: there is no loop")
+        try replace("# Stops", with: "# Starts again", in: tab.primaryEditor)
+        waitCurrent(tab, "edit after the losses")
+        check(
+            coordinator.renderCount == renders + 2 && pane.explanation == nil && pageText(tab).contains("Starts again"),
+            "the next edit renders and shows the preview again")
+        presenter.webViewWebContentProcessDidTerminate(web)
+        waitCurrent(tab, "one loss of the new text")
+        check(
+            coordinator.renderCount == renders + 3 && pane.explanation == nil,
+            "and a loss while showing the new text counts from one again")
+        document.close()
+    }
+
+    // MARK: Status row of a Preview tab
+
+    private static func descendants<View: NSView>(of view: NSView, as type: View.Type) -> [View] {
+        view.subviews.flatMap { [$0 as? View].compactMap { $0 } + descendants(of: $0, as: type) }
+    }
+
+    /// Opening a status-row menu of a tab in the other editor group makes that tab the active
+    /// one. A tab that shows Preview alone must take the keyboard in its preview, not in its
+    /// hidden source, which would make it show Both.
+    private static func statusRowKeepsPreview(root: URL, host: WorkspaceWindowController) throws {
+        let folder = root.appendingPathComponent("status")
+        let (previewed, previewTab) = try open("previewed.md", "# Previewed\n", in: folder)
+        let (other, otherTab) = try open("other.md", "# Other\n", in: folder)
+        check(host.setEditorLayout(.twoColumns), "fixture: two editor groups")
+        let otherID = try requireValue(otherTab.tabID, "tab id")
+        host.moveTabs([otherID], target: otherID, to: .second)
+        let moved = try requireValue(
+            host.model.groups.first { $0.slot == .second }?.tabs.first { $0.documentID == other.runtimeID }?.id,
+            "moved tab")
+        let second = try requireValue(host.presentation(for: moved), "tab in the second group")
+        host.activate(previewTab)
+        check(previewTab.setViewMode(.preview), "fixture: the first group's tab shows Preview")
+        waitCurrent(previewTab, "previewed tab")
+        host.activate(second)
+        host.window?.makeFirstResponder(second.primaryEditor)
+        settle(0.1)
+        check(
+            host.active === second && previewTab.isPresented && previewTab.viewMode == .preview
+                && !previewTab.previewHasFocus,
+            "fixture: the keyboard is in the other group; the Preview tab is on screen and not active")
+
+        let row = try requireValue(
+            descendants(of: previewTab.presentationRoot, as: StatusBadgeRow.self).first, "the tab's status row")
+        let menu = row.menuProvider?(.encoding)
+        settle(0.1)
+        check(menu != nil && host.active === previewTab, "opening a status-row menu makes its tab the active one")
+        check(
+            previewTab.viewMode == .preview && previewTab.split.isHidden,
+            "and a tab that shows Preview keeps showing Preview: \(previewTab.viewMode.rawValue)")
+        check(
+            previewTab.previewHasFocus,
+            "the keyboard goes to the tab's preview, the view its typing would be seen in")
+        // A tab that shows its source still takes the keyboard in its editor.
+        let menuOfSource = descendants(of: second.presentationRoot, as: StatusBadgeRow.self).first?.menuProvider?(
+            .encoding)
+        settle(0.1)
+        check(
+            menuOfSource != nil && host.active === second
+                && (host.window?.firstResponder as? NSView)?.isDescendant(of: second.split) == true,
+            "a tab that shows Source takes the keyboard in its editor, as before")
+        check(host.setEditorLayout(.single), "fixture: back to one group")
+        previewed.close()
+        other.close()
+    }
+
+    // MARK: Narrow pane
+
+    /// At the narrowest pane the Go to Error button must not take the sentence's width (DS-67).
+    private static func narrowPane() throws {
+        guard case .invalid(let partial, let error) = JSONTree.parse("{\"a\": 1,\n\"b\": oops}", isCancelled: { false })
+        else {
+            Checks.fail("fixture: invalid JSON with an error", file: #filePath, line: #line)
+            return
+        }
+        let minimum = DocumentViewContainer.minimumPaneWidth
+        check(
+            PreviewPane.stacksMessage(width: minimum, hasButton: true)
+                && !PreviewPane.stacksMessage(width: minimum, hasButton: false)
+                && !PreviewPane.stacksMessage(width: PreviewPane.stackedMessageWidth, hasButton: true),
+            "the button goes under the sentence only when there is a button and the pane is narrow")
+        func frames(width: CGFloat) -> (pane: PreviewPane, label: NSRect, button: NSRect, textHeight: CGFloat) {
+            let pane = PreviewPane(frame: NSRect(x: 0, y: 0, width: width, height: 400))
+            pane.show(.tree(partial, error: error, limit: nil), documentURL: nil)
+            pane.layoutSubtreeIfNeeded()
+            let label = pane.messageLabel.convert(pane.messageLabel.bounds, to: pane)
+            let button = pane.goToErrorButton.convert(pane.goToErrorButton.bounds, to: pane)
+            let needed =
+                pane.messageLabel.cell?.cellSize(
+                    forBounds: NSRect(x: 0, y: 0, width: label.width, height: 10_000)
+                ).height ?? 0
+            return (pane, label, button, needed)
+        }
+        let narrow = frames(width: minimum)
+        check(
+            narrow.pane.message == error.message && !narrow.pane.goToErrorButton.isHidden,
+            "fixture: the pane shows the error sentence and Go to Error")
+        check(
+            narrow.label.width >= minimum - 21 && narrow.label.height + 0.5 >= narrow.textHeight,
+            "DS-67 at \(Int(minimum)) points the sentence keeps the pane's width and shows all its lines: \(narrow.label) for text \(narrow.textHeight) pt tall"
+        )
+        check(
+            !narrow.label.intersects(narrow.button) && narrow.button.maxY <= narrow.label.minY + 0.5
+                && narrow.button.minX >= 0 && narrow.button.maxX <= minimum
+                && narrow.button.width >= narrow.pane.goToErrorButton.fittingSize.width - 0.5,
+            "DS-67 the button is under the sentence, whole and inside the pane: \(narrow.button)")
+        let wide = frames(width: 600)
+        check(
+            wide.button.minX >= wide.label.maxX && wide.button.maxX <= 600 && wide.label.intersects(
+                NSRect(x: 0, y: wide.button.minY, width: 600, height: wide.button.height)),
+            "in a pane with room the button stays beside the sentence: \(wide.label) \(wide.button)")
+        // The same pane follows a change of width.
+        wide.pane.setFrameSize(NSSize(width: minimum, height: 400))
+        wide.pane.layoutSubtreeIfNeeded()
+        let relaid = wide.pane.messageLabel.convert(wide.pane.messageLabel.bounds, to: wide.pane)
+        check(relaid.width >= minimum - 21, "a pane made narrow lays the row out again: \(relaid)")
+    }
+
     // MARK: Fail closed
 
     private static func failClosed(root: URL) throws {
@@ -1457,11 +2000,16 @@ private final class RenderGate: @unchecked Sendable {
                 && PreviewContentRules.source.contains("^texttank-preview:"),
             "the rule list blocks every load and exempts only the preview scheme")
         defer { rules.replaceStateForChecks(.ready(compiled)) }
+        check(
+            PreviewMessages.unavailable.contains("Nothing was loaded.")
+                && PreviewMessages.unavailable.hasSuffix("Quit TextTank and open it again to try once more."),
+            "DS-81 the sentence for rules that could not be prepared says what to do next")
         for (state, sentence) in [
             (PreviewContentRules.State.failed, PreviewMessages.unavailable),
             (PreviewContentRules.State.compiling, PreviewMessages.notReady)
         ] {
             rules.replaceStateForChecks(state)
+            let announcedBefore = NativeFixtureEnvironment.announcements.filter { $0 == sentence }.count
             let (document, tab) = try open(
                 "closed-\(sentence.count).md", "# Must not load\n", in: root.appendingPathComponent("closed"))
             tab.setViewMode(.both)
@@ -1471,9 +2019,12 @@ private final class RenderGate: @unchecked Sendable {
             settle(0.3)
             let pane = try requireValue(tab.previewCoordinator?.pane, "pane")
             check(
-                pane.webPresenter?.webView == nil && pane.webPresenter?.handler.pageServeCount == 0
+                pane.webPresenter?.webView == nil && pane.webPresenter?.handler.checkRecord.pageServeCount == 0
                     && pane.explanation == sentence,
                 "without the rule list no web view is made and nothing is loaded: \(pane.explanation ?? "nil")")
+            check(
+                NativeFixtureEnvironment.announcements.filter { $0 == sentence }.count == announcedBefore + 1,
+                "DS-72 the sentence shown in place of the page is announced, once")
             if case .compiling = state {
                 rules.replaceStateForChecks(.ready(compiled))
                 wait("page loads once the rules are ready") {
