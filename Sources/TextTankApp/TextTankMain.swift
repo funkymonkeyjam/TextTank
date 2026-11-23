@@ -7,12 +7,13 @@ import TextTankRuntime
 import AppIntents
 import Foundation
 import TextTankCore
+import UniformTypeIdentifiers
 
 struct OpenTextTankFileIntent: AppIntent {
     static var title: LocalizedStringResource { "Open a Text File in TextTank" }
     static var openAppWhenRun: Bool { true }
 
-    @Parameter(title: "File", supportedTypeIdentifiers: ["public.text", "public.plain-text"])
+    @Parameter(title: "File", supportedContentTypes: [.text, .plainText])
     var file: IntentFile
 
     @MainActor func perform() async throws -> some IntentResult {

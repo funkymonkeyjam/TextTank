@@ -78,7 +78,7 @@ class CIEvidenceChecks(unittest.TestCase):
             (self.run, 'name', 'other'), (self.run, 'workflow_id', 11), (self.run['repository'], 'full_name', 'fork/repo'),
             (self.run, 'run_attempt', 1), (self.run, 'pull_requests', []),
             (self.responses[f'git/commits/{self.commit}']['tree'], 'sha', self.commit),
-            (self.job, 'name', 'native-advisory-16.4'), (self.job, 'labels', ['macos-15']),
+            (self.job, 'name', 'native-other'), (self.job, 'labels', ['other-runner']),
             (self.job, 'started_at', '2026-11-19T12:00:00Z'), (self.job['steps'][0], 'conclusion', 'skipped'),
             (self.job, 'conclusion', 'failure'), (self.artifact, 'expired', True), (self.artifact, 'digest', 'sha256:'+'f'*64),
             (self.artifact['workflow_run'], 'id', 77), (self.artifact, 'size_in_bytes', 65537)]
@@ -88,7 +88,7 @@ class CIEvidenceChecks(unittest.TestCase):
 
     def test_receipt_and_archive_negatives(self):
         for key, bad in [('source_tree', self.commit), ('checkout_commit', self.merge), ('run_attempt', 1),
-                         ('xcode', 'Xcode 16.4\nBuild version abc'), ('native_conclusion', 'failure'),
+                         ('xcode', 'Xcode 0.0\nBuild version abc'), ('native_conclusion', 'failure'),
                          ('native', {'passed': 0, 'failed': 0}), ('image_version', 'x\nextra'),
                          ('pr_number', 20), ('event', 'push')]:
             with self.subTest(key=key), patch.dict(self.receipt, {key: bad}), self.assertRaises(ValueError):

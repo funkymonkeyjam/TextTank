@@ -41,7 +41,7 @@ To package a committed clean source tree:
 
 Build identity is shared by `scripts/env.sh`, the dependency lock and the generator. `CONFIGURATION=Debug` is the default; set `CONFIGURATION=Release` for **each** build, test, performance and package command to exercise the independent optimized engine/app outputs. Only arm64 is supported by this build workflow. Debug and Release Lexilla sources/objects and Scintilla outputs are isolated under `build/vendor/<configuration>/`; changing the configuration cannot reuse the other configuration's objects.
 
-The minimum deployment target remains macOS 14. Local testing used the current arm64 host; a deployment target is not macOS 14 runtime evidence. Ad-hoc signing is for local review and is not notarized public distribution. Initial pinned dependency downloads need network access; ordinary editing and deterministic automations do not need an account or paid service.
+The minimum deployment target is macOS 27.0. Local testing used an arm64 host running macOS 27.0.1; a separate macOS 27.0 host was not tested, so the deployment target is not macOS 27.0 runtime evidence. Ad-hoc signing is for local review and is not notarized public distribution. Initial pinned dependency downloads need network access; ordinary editing and deterministic automations do not need an account or paid service.
 
 ## Low-code automation rules
 
@@ -103,6 +103,6 @@ Synthetic native performance checks covered 1/10/100 MiB loading, literal find, 
 - Advanced editor command variants, full macro command coverage, document-map behavior, all preference/shortcut/context customization, reference toolbar variants and localization remain incomplete. Native toolbar arrangement customization is implemented; running-app customization and VoiceOver tasks remain unverified.
 - Imported language configurations are not full semantic tests. Objective-C and internal SearchResult-specific patched lexer factories are not supplied by stock Lexilla. Complex embedded/substyle/UDL nesting/folding/number/lifetime behavior, API-signature completion/call tips and upstream function-list XML semantics remain incomplete or unverified.
 - The version 1 text-extension interface is a tested Mac equivalent for explicit text transforms, not the entire Notepad++ plugin event/message ecosystem. Utility reference malformed/binary/options semantics have documented differences in [the utility notes](research/utility-audit.md).
-- Live connector failure/retry verification needs a designated scratch Reminders list. User-confirmed success closes only that observed happy path. IME/dead keys, VoiceOver, complete keyboard/light/dark/high-contrast checks and actual macOS 14/Intel runtimes remain unverified.
+- Live connector failure/retry verification needs a designated scratch Reminders list. User-confirmed success closes only that observed happy path. IME/dead keys, VoiceOver, complete keyboard/light/dark/high-contrast checks and an actual macOS 27.0 host remain unverified; earlier systems and Intel are not supported.
 
 This walkthrough and local checks do not imply a merge, tagged release, public-release certification or full-parity claim. Running-app GUI, VoiceOver and real connector failure scenarios still need explicitly authorized observation.

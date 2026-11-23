@@ -18,6 +18,14 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
+from build_config import load_identity
+
+# The one supported minimum system version; fixtures follow the dependency lock.
+DEPLOYMENT_TARGET = load_identity(ROOT)['deploymentTarget']
+MACOS_TARGET = 'arm64-apple-macos' + DEPLOYMENT_TARGET
+# A different, still valid version for checks that the lock value is really consumed.
+ALTERNATE_TARGET = f"{int(DEPLOYMENT_TARGET.split('.')[0]) + 1}.0"
+OLDER_TARGET = f"{int(DEPLOYMENT_TARGET.split('.')[0]) - 1}.0"
 
 
 def module(name, filename):
@@ -38,7 +46,7 @@ class BuildPipelineChecks(unittest.TestCase):
             return subprocess.run(
                 ['xcrun', '--sdk', 'macosx', 'swiftc', '-swift-version', '5', '-strict-concurrency=complete', '-warnings-as-errors',
                  '-sdk', json.loads(Path(os.environ['TEXTTANK_ARTIFACT_MANIFEST']).read_text())['toolchain']['sdk'],
-                 '-target', 'arm64-apple-macos14.0', '-module-cache-path',
+                 '-target', MACOS_TARGET, '-module-cache-path',
                  str(ROOT / 'build/ModuleCache'), '-typecheck',
                  '-import-objc-header', str(copied), str(probe)],
                 text=True, capture_output=True)
@@ -80,7 +88,7 @@ func rawMode() throws {
             probe.write_text('#import "EditorBridge/TTEditor.h"\nTTEditor *editor;\n')
             result = subprocess.run(
                 ['xcrun', 'clang', '-fsyntax-only', '-fobjc-arc', '-fmodules',
-                 '-isysroot', sdk, '-mmacosx-version-min=14.0', str(probe)],
+                 '-isysroot', sdk, '-mmacosx-version-min=' + DEPLOYMENT_TARGET, str(probe)],
                 text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -136,11 +144,14 @@ func rawMode() throws {
             app = fixture / 'Fixture.app'
             executable = app / 'Contents/MacOS/TextTank'
             executable.parent.mkdir(parents=True)
-            (app / 'Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleExecutable': 'TextTank'}))
+            def declare(minimum):
+                (app / 'Contents/Info.plist').write_bytes(plistlib.dumps(
+                    {'CFBundleExecutable': 'TextTank', **({} if minimum is None else {'LSMinimumSystemVersion': minimum})}))
+            declare(DEPLOYMENT_TARGET)
             images = {}
             sources = {}
-            def build(arguments):
-                result = subprocess.run(['xcrun', '--sdk', 'macosx', 'clang', '-target', 'arm64-apple-macos14.0', *arguments], capture_output=True, text=True)
+            def build(arguments, target=MACOS_TARGET):
+                result = subprocess.run(['xcrun', '--sdk', 'macosx', 'clang', '-target', target, *arguments], capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
             for name in ['Scintilla', 'NativeSearch', 'EditorBridge', 'TextTankCore', 'TextTankRuntime']:
                 images[name] = app / f'Contents/Frameworks/{name}.framework/Versions/A/{name}'
@@ -163,23 +174,24 @@ func rawMode() throws {
                 build(['-dynamiclib', str(sources['NativeSearch']), '-install_name', identity, '-o', str(images['NativeSearch'])])
                 link(['@executable_path/../Frameworks'])
                 if accepted:
-                    closure = linkage.verify(app)
+                    closure = linkage.verify(app, DEPLOYMENT_TARGET)
                     self.assertEqual(len(closure['runtime_images']), 6)
                     self.assertEqual(closure['command_line_images'], ['Contents/Helpers/tt'])
                     self.assertEqual(len(closure['images']), 7)
                     helper.rename(fixture / 'saved-tt')
                     with self.assertRaisesRegex(ValueError, 'missing code images'):
-                        linkage.verify(app)
+                        linkage.verify(app, DEPLOYMENT_TARGET)
                     (fixture / 'saved-tt').rename(helper)
+                    self.reject_other_minimum_systems(linkage, app, declare, build, images, sources, helper, helper_source)
                 else:
                     with self.assertRaisesRegex(ValueError, 'install name'):
-                        linkage.verify(app)
+                        linkage.verify(app, DEPLOYMENT_TARGET)
             link([])
             with self.assertRaisesRegex(ValueError, 'Unresolved'):
-                linkage.verify(app)
+                linkage.verify(app, DEPLOYMENT_TARGET)
             link(['/Library/Frameworks', '@executable_path/../Frameworks'])
             with self.assertRaisesRegex(ValueError, 'Runpath leaves'):
-                linkage.verify(app)
+                linkage.verify(app, DEPLOYMENT_TARGET)
             link(['@executable_path/../Frameworks'])
             for escaped in ['/usr/lib/../../Library/Frameworks/Other.framework/Other',
                             '/System/Library/Frameworks/../../../Library/Other.dylib']:
@@ -189,7 +201,7 @@ func rawMode() throws {
                 self.assertEqual(changed.returncode, 0, changed.stderr)
                 try:
                     with self.assertRaisesRegex(ValueError, 'Unresolved|leaves selected bundle'):
-                        linkage.verify(app)
+                        linkage.verify(app, DEPLOYMENT_TARGET)
                 finally:
                     restored = subprocess.run(['install_name_tool', '-change', escaped,
                         '/usr/lib/libSystem.B.dylib', str(target)], capture_output=True, text=True)
@@ -197,13 +209,33 @@ func rawMode() throws {
             extra = app / 'Contents/MacOS/unclassified.dylib'
             shutil.copyfile(images['NativeSearch'], extra)
             with self.assertRaisesRegex(ValueError, 'Unclassified'):
-                linkage.verify(app)
+                linkage.verify(app, DEPLOYMENT_TARGET)
             extra.unlink()
             sources['EditorBridge'].write_text('extern int fixture_NativeSearch(void); int fixture_EditorBridge(void) { return fixture_NativeSearch(); }\n')
             build(['-dynamiclib', str(sources['EditorBridge']), str(images['NativeSearch']), '-install_name',
                    '@rpath/EditorBridge.framework/Versions/A/EditorBridge', '-o', str(images['EditorBridge'])])
             with self.assertRaisesRegex(ValueError, 'snapshot search engine'):
-                linkage.verify(app)
+                linkage.verify(app, DEPLOYMENT_TARGET)
+
+    def reject_other_minimum_systems(self, linkage, app, declare, build, images, sources, helper, helper_source):
+        # Every code image and the property list must state the locked minimum, not an older or newer one.
+        with self.assertRaisesRegex(ValueError, 'locked minimum macOS is ' + ALTERNATE_TARGET):
+            linkage.verify(app, ALTERNATE_TARGET)
+        for minimum in [OLDER_TARGET, ALTERNATE_TARGET, '', None]:
+            declare(minimum)
+            with self.assertRaisesRegex(ValueError, 'Info.plist LSMinimumSystemVersion'):
+                linkage.verify(app, DEPLOYMENT_TARGET)
+        declare(DEPLOYMENT_TARGET)
+        framework = ['-dynamiclib', str(sources['Scintilla']), '-install_name',
+                     '@rpath/Scintilla.framework/Versions/A/Scintilla', '-o', str(images['Scintilla'])]
+        tool = [str(helper_source), '-o', str(helper)]
+        for arguments, offender in [(framework, 'Contents/Frameworks/Scintilla.framework/Versions/A/Scintilla'),
+                                    (tool, 'Contents/Helpers/tt')]:
+            build(arguments, 'arm64-apple-macos' + OLDER_TARGET)
+            with self.assertRaisesRegex(ValueError, offender + ' is built for minimum macOS ' + OLDER_TARGET):
+                linkage.verify(app, DEPLOYMENT_TARGET)
+            build(arguments)
+        linkage.verify(app, DEPLOYMENT_TARGET)
 
     def test_signing_cleans_metadata_at_each_boundary_and_keeps_failures_fatal(self):
         # Simulate metadata arriving between signing steps; this does not attribute
@@ -216,9 +248,9 @@ func rawMode() throws {
             scripts.mkdir()
             shutil.copyfile(ROOT / 'scripts/build.sh', scripts / 'build.sh')
             shutil.copyfile(ROOT / 'scripts/compile_diagnostics.py', scripts / 'compile_diagnostics.py')
-            (scripts / 'env.sh').write_text('''CONFIGURATION=Debug
+            (scripts / 'env.sh').write_text(f'''CONFIGURATION=Debug
 ARCH=arm64
-DEPLOYMENT_TARGET=14.0
+DEPLOYMENT_TARGET={DEPLOYMENT_TARGET}
 VENDOR_BUILD="$PWD/build/vendor/Debug"
 APP_PATH="$PWD/build/Fixture App.app"
 export APP_PATH
@@ -460,8 +492,8 @@ sys.exit(93)
             (fixture / 'Dependencies.lock.json').write_text(json.dumps({**lock, 'architecture': 'x86_64'}))
             with self.assertRaisesRegex(ValueError, 'arm64'):
                 config.load_identity(fixture)
-            (fixture / 'Dependencies.lock.json').write_text(json.dumps({**lock, 'deploymentTarget': '15.0'}))
-            self.assertEqual(config.load_identity(fixture)['deploymentTarget'], '15.0')
+            (fixture / 'Dependencies.lock.json').write_text(json.dumps({**lock, 'deploymentTarget': ALTERNATE_TARGET}))
+            self.assertEqual(config.load_identity(fixture)['deploymentTarget'], ALTERNATE_TARGET)
             for relative in ['scripts/env.sh', 'scripts/build_config.py', 'scripts/generate-project.py', 'scripts/core_sources.py', 'scripts/user-lexer-flags.txt']:
                 destination = fixture / relative
                 destination.parent.mkdir(parents=True, exist_ok=True)
@@ -477,12 +509,12 @@ sys.exit(93)
             shell = subprocess.run(['bash', '-c', 'source scripts/env.sh; printf "%s %s" "$DEPLOYMENT_TARGET" "$ARCH"'],
                                    cwd=fixture, env=environment, capture_output=True, text=True)
             self.assertEqual(shell.returncode, 0, shell.stderr)
-            self.assertEqual(shell.stdout, '15.0 arm64')
+            self.assertEqual(shell.stdout, ALTERNATE_TARGET + ' arm64')
             generated = subprocess.run([sys.executable, 'scripts/generate-project.py'], cwd=fixture,
                                        env=environment, capture_output=True, text=True)
             self.assertEqual(generated.returncode, 0, generated.stderr)
             project = (fixture / 'TextTank.xcodeproj/project.pbxproj').read_text()
-            self.assertIn('"MACOSX_DEPLOYMENT_TARGET" = "15.0"', project)
+            self.assertIn(f'"MACOSX_DEPLOYMENT_TARGET" = "{ALTERNATE_TARGET}"', project)
             self.assertIn('"ARCHS" = "arm64"', project)
             (fixture / 'Dependencies.lock.json').write_text(json.dumps({**lock, 'architecture': 'x86_64'}))
             for command in [['bash', '-c', 'source scripts/env.sh'], [sys.executable, 'scripts/generate-project.py']]:
@@ -738,7 +770,7 @@ sys.exit(93)
             subprocess.run(['xattr', '-w', 'com.apple.fileprovider.ignore#P', '1', str(fixture)], check=True)
             self.assertEqual(subprocess.check_output(['xattr', '-p', 'com.apple.fileprovider.ignore#P', str(fixture)]).strip(), b'1')
             subprocess.run(['git', 'init', '-q', str(fixture)], check=True, capture_output=True)
-            inputs = {'Dependencies.lock.json': json.dumps({'architecture': 'arm64', 'deploymentTarget': '14.0'})}
+            inputs = {'Dependencies.lock.json': json.dumps({'architecture': 'arm64', 'deploymentTarget': DEPLOYMENT_TARGET})}
             for name, folder, header in [('NativeSearch', 'Search', 'TTSearchEngine.h'),
                                           ('EditorBridge', 'EditorBridge', 'TTEditor.h')]:
                 inputs[f'Sources/{folder}/{header}'] = f'// fixture public {name} header\n'
@@ -757,7 +789,8 @@ sys.exit(93)
             app = products / 'TextTank.app'
             (app / 'Contents/MacOS').mkdir(parents=True)
             (app / 'Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleExecutable': 'TextTank',
-                'CFBundleIdentifier': 'fixture.texttank.artifacts', 'CFBundlePackageType': 'APPL', 'CFBundleVersion': '1'}))
+                'CFBundleIdentifier': 'fixture.texttank.artifacts', 'CFBundlePackageType': 'APPL', 'CFBundleVersion': '1',
+                'LSMinimumSystemVersion': DEPLOYMENT_TARGET}))
             embedded = app / 'Contents/Frameworks'
             embedded.mkdir()
             before_path = fixture / 'build/artifacts/Debug/before.json'
@@ -801,7 +834,7 @@ sys.exit(93)
                 directory = fixture / 'build/objects' / name / 'Objects-normal/arm64'
                 directory.mkdir(parents=True)
                 obj = directory / (name+'.o')
-                arguments = [compiler, '-target', 'arm64-apple-macos14.0', '-isysroot', sdk,
+                arguments = [compiler, '-target', MACOS_TARGET, '-isysroot', sdk,
                              '-c', str(sources[name]), '-o', str(obj)]
                 execute(arguments)
                 lane = 'scintilla' if name == 'Scintilla' else 'app'
@@ -813,7 +846,7 @@ sys.exit(93)
                 filelist = obj.parent / (name+'.LinkFileList')
                 filelist.write_text(str(obj)+'\n')
                 response = obj.parent / 'link.rsp'
-                response.write_text(shlex.join(['-target', 'arm64-apple-macos14.0', '-isysroot', sdk])+'\n')
+                response.write_text(shlex.join(['-target', MACOS_TARGET, '-isysroot', sdk])+'\n')
                 arguments = [compiler, '@'+str(response),
                     '-filelist', str(filelist), '-Xlinker', '-dependency_info', '-Xlinker', str(obj.parent/'dependencies.dat'),
                     *extra, '-o', str(image)]
@@ -938,7 +971,7 @@ sys.exit(93)
                                 cwd=ROOT, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('/Release/TextTank.app', result.stdout)
-        self.assertIn('14.0', result.stdout)
+        self.assertEqual(result.stdout.splitlines()[1], DEPLOYMENT_TARGET)
 
     def test_validation_arguments_fail_cleanly_before_writing(self):
         for args in [[], ['record'], ['record', '--exit-code', 'bad'], ['record', '--exit-code', '-1']]:

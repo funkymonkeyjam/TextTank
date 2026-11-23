@@ -336,7 +336,7 @@ final package class RunExecution: @unchecked Sendable {
         posix_spawn_file_actions_addclose(&actions, fileno(file))
         // Per-child only. The process-wide working directory is never changed: this runs on a
         // worker thread and the working directory is shared by the whole app.
-        if let workingDirectory { posix_spawn_file_actions_addchdir_np(&actions, workingDirectory.path) }
+        if let workingDirectory { posix_spawn_file_actions_addchdir(&actions, workingDirectory.path) }
         posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT))
         posix_spawnattr_setpgroup(&attributes, 0)
         var argv = ([command.executable] + command.arguments).map { strdup($0) } + [nil]

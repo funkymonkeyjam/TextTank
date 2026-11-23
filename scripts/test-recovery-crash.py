@@ -14,6 +14,8 @@ import time
 import uuid
 from urllib.parse import unquote, urlsplit
 
+from build_config import load_identity
+
 
 def sha(data):
     return hashlib.sha256(data).hexdigest()
@@ -70,7 +72,7 @@ def main():
         plist.write_bytes(plistlib.dumps(metadata))
         flags = ["xcrun", "swiftc", "-parse-as-library", "-swift-version", "5", "-strict-concurrency=complete",
                  "-warnings-as-errors", "-package-name", "TextTank", "-sdk", record["toolchain"]["sdk"],
-                 "-target", "arm64-apple-macos14.0"]
+                 "-target", "arm64-apple-macos" + load_identity()["deploymentTarget"]]
         for directory in dict.fromkeys(roots):
             flags += ["-F", str(directory)]
         for directory in dict.fromkeys(runtime_roots):

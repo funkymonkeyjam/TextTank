@@ -1,6 +1,6 @@
 # Native build and evidence
 
-Only arm64 is currently built and checked. The minimum system version and canonical architecture come from `Dependencies.lock.json`, validated by `scripts/build_config.py` for the shell, generator and engine builder; it does not certify an older macOS runtime. No Developer ID identity, entitlement or notarization flow is configured. Review bundles remain ad-hoc signed, incomplete previews.
+Only arm64 is currently built and checked. The minimum system version and canonical architecture come from `Dependencies.lock.json`, validated by `scripts/build_config.py` for the shell, generator and engine builder; the minimum is macOS 27.0. `scripts/check-runtime-linkage.py` runs in every build and rejects, by name, any code image in the bundle (the app, its Debug dylib, each embedded framework and the `tt` helper) whose `LC_BUILD_VERSION` minimum differs from the lock, and an `Info.plist` whose `LSMinimumSystemVersion` differs. Testing ran on macOS 27.0.1; a separate macOS 27.0 host was not tested. No Developer ID identity, entitlement or notarization flow is configured. Review bundles remain ad-hoc signed, incomplete previews.
 
 Run `scripts/build.sh`, `scripts/test.sh` and `scripts/test-performance.sh` in that order. Debug is the default. Use `CONFIGURATION=Release` for the production build and matching packaging. Native check clients use Debug module metadata with testability; Release keeps optimization and `ENABLE_TESTABILITY=NO`. The generator and Info.plist use matching configuration paths and deployment settings. Regenerate with `python3 scripts/generate-project.py` after adding or moving sources; CI rejects project drift.
 
@@ -91,7 +91,7 @@ complete concurrency checking. `compile_diagnostics.py` also rejects emitted fir
 Swift warning/error headers when a Swift 5 compiler returns zero. The guard suite runs an
 actual good/bad AppKit actor-access compiler pair and checks the resolved producer settings;
 intentional negative compiler output is retained separately from normal build diagnostics.
-This does not certify other toolchains or macOS runtimes.
+This does not certify other toolchains or macOS runtimes. CI has one job, the required `native` check on Xcode 27.2. The advisory Xcode 16.4 job on a macOS 15 runner was retired with the macOS 27.0 minimum because it cannot launch the app; `scripts/build.sh --advisory-swift-warnings` and `TEXTTANK_WARNINGS_AS_ERRORS=0` remain only for inspecting a new toolchain by hand and never produce acceptance evidence.
 
 Before signing, canonical builds retain immutable per-image link records: the real Ld event,
 working directory, driver and expanded response arguments, exact file-list bytes/order,

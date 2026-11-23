@@ -120,7 +120,7 @@ package enum FileCodec {
         if data.starts(with: [0xFE, 0xFF]) { return .utf16BE }
         return .utf8
     }
-    /// Strict UTF-8 content with no external BOM interpretation. Works on the macOS 14 deployment target.
+    /// Strict UTF-8 content with no external BOM interpretation.
     package static func decodeUTF8Content(_ bytes: UnsafeRawBufferPointer) -> String? {
         var decoded = String(decoding: bytes, as: UTF8.self)
         let exact = decoded.withUTF8 { utf8 in

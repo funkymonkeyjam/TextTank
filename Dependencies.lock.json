@@ -1,5 +1,5 @@
 {
-  "deploymentTarget": "14.0",
+  "deploymentTarget": "27.0",
   "dependencies": [
     {
       "url": "https://www.scintilla.org/scintilla569.tgz",
