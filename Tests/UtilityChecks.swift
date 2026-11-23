@@ -248,10 +248,24 @@ import zlib
             editor.resetUndoHistory()
             editor.setSavePoint()
             check(editor.setSelectionAnchor(7, caret: 12), "native Unicode selection")
-            let menu = controller.makeMenu()
+            // Every item the controller builds, wherever the menu bar lists it.
+            let encodings = controller.encodeAndDecodeMenu()
+            let menuItems =
+                encodings.items.flatMap { $0.submenu?.items ?? [$0] }
+                + UtilityController.inspections.map(controller.menuItem)
+                + [controller.menuItem(.formatJSON), controller.numberConversionMenuItem()]
+                + controller.styledTextMenu().items
+            check(
+                Set(menuItems.compactMap { $0.representedObject as? String })
+                    == Set(TextUtility.allCases.map(\.rawValue))
+                    && menuItems.filter { !$0.isSeparatorItem }.allSatisfy { $0.target === controller }
+                    && encodings.items.filter { !$0.isSeparatorItem }.count <= 20
+                    && encodings.items.allSatisfy { ($0.submenu?.items.count ?? 0) <= 20 },
+                "DS-23 every text utility has one grouped menu item that the controller owns")
             let item = try requireValue(
-                menu.items.first { ($0.representedObject as? String) == TextUtility.base64EncodePadded.rawValue },
-                "fixture: padded Base64 menu item exists")
+                encodings.item(withTitle: "Base64")?.submenu?.items.first {
+                    ($0.representedObject as? String) == TextUtility.base64EncodePadded.rawValue
+                }, "fixture: padded Base64 menu item exists")
             check(NSApplication.shared.sendAction(item.action!, to: item.target, from: item), "menu dispatch")
             check(editor.text == "before Y2Fmw6k= after", "menu changes selected UTF8")
             check(unrecordableEdits == 1, "a utility that changes the document reports one unrecordable edit")
@@ -381,7 +395,7 @@ import zlib
                 }
                 RunLoop.main.add(timer, forMode: .modalPanel)
                 defer { timer.invalidate() }
-                guard let item = menu.items.first(where: { $0.title == title }), let action = item.action else {
+                guard let item = menuItems.first(where: { $0.title == title }), let action = item.action else {
                     return false
                 }
                 return NSApp.sendAction(action, to: item.target, from: item) && dialog.remaining.isEmpty
@@ -466,7 +480,7 @@ import zlib
                 }
             }
             RunLoop.main.add(hexRetry, forMode: .modalPanel)
-            let hexItem = menu.items.first { $0.title == "UTF-8 to Hex with Options…" }!
+            let hexItem = menuItems.first { $0.title == "UTF-8 to Hex with Options…" }!
             _ = NSApp.sendAction(hexItem.action!, to: hexItem.target, from: hexItem)
             hexRetry.invalidate()
             check(hex.stage == 2 && hex.draftKept, "F214 invalid Hex options retain their input for correction")

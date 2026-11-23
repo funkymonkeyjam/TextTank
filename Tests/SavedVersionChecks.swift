@@ -28,7 +28,7 @@ actor CompareFileGate {
             EditorServices.current = previous
             NSApp.mainMenu = priorMenu
         }
-        let menu = try requireValue(NSApp.mainMenu?.item(withTitle: "File")?.submenu, "built File menu")
+        let menu = try requireValue(NSApp.mainMenu?.item(withTitle: "Compare")?.submenu, "built Compare menu")
         let action = try requireValue(
             menu.item(withTitle: "Compare with Saved Version"), "one-step saved version control")
         let blank = DocumentFactory.makeUntitled(display: false)

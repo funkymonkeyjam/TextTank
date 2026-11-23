@@ -1,10 +1,10 @@
 import AppKit
 import TextTankCore
 
-/// One command owner for View, the trailing picker and captured tab menus (DS-20-24).
+/// One command owner for View > Editor Groups, the trailing picker and captured tab menus (DS-20-24).
 @MainActor final class GroupCommandController: NSObject, NSMenuDelegate, NSMenuItemValidation {
     private unowned let host: WorkspaceWindowController
-    private weak var viewMenu: NSMenu?
+    private weak var groupsMenu: NSMenu?
     private enum Action { case layout(LayoutKind), move, additional, close, focus }
     @MainActor private final class Invocation: NSObject {
         nonisolated let commandID: String
@@ -40,24 +40,25 @@ import TextTankCore
         }
     }
     init(host: WorkspaceWindowController) { self.host = host }
-    func install(in menu: NSMenu) {
-        viewMenu = menu
+    /// The View menu's Editor Groups submenu. Its items follow the layout and the active tab, so
+    /// they are rebuilt in place and never touch the rest of View.
+    func menu() -> NSMenu {
+        let menu = NSMenu(title: "Editor Groups")
         menu.delegate = self
-        refreshViewMenu()
+        groupsMenu = menu
+        refreshMenu()
+        return menu
     }
     func menuNeedsUpdate(_ menu: NSMenu) {
-        if menu === viewMenu {
-            refreshViewMenu()
+        if menu === groupsMenu {
+            refreshMenu()
         } else {
             for item in menu.items { item.isEnabled = validateMenuItem(item) }
         }
     }
-    func refreshViewMenu() {
-        guard let menu = viewMenu else { return }
-        for item in menu.items where item.identifier?.rawValue.hasPrefix("groups.") == true { menu.removeItem(item) }
-        let separator = NSMenuItem.separator()
-        separator.identifier = .init("groups.separator")
-        menu.addItem(separator)
+    func refreshMenu() {
+        guard let menu = groupsMenu else { return }
+        menu.removeAllItems()
         for item in items(target: host.model.activeTab?.id, includeLayout: true, includeFocus: true) {
             menu.addItem(item)
         }

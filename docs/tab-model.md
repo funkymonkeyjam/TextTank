@@ -120,7 +120,7 @@ left-to-right then top-to-bottom). Each group has its own stable strip, active t
 selection and focusable empty placeholder. Several group-active presentations may be
 visible; exactly one focused group supplies global commands. A known empty focused
 group returns nil, never the last occupied group's document. New/Open stay available.
-Native Focus Group menus/AX actions provide a keyboard route without unverified keys.
+Native Focus Group menus (View > Editor Groups > Focus Group) and AX actions provide a keyboard route without unverified keys.
 
 Runtime document registration is by DocumentID, presentation ownership by TabID.
 Every tab owns a distinct primary TTEditor, optional in-tab Clone, Find/status tree

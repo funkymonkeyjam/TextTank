@@ -10,6 +10,53 @@ import EditorBridge
         let item: NSMenuItem
         weak var target: AnyObject?
         let externalNotice: String?
+        /// Where the command used to be listed, matched by the filter but never shown.
+        var legacyPath = ""
+    }
+
+    /// Where commands were listed before the nine-menu bar of 23 November 2026 (DS-D4), by the
+    /// start of today's path. The first entry that fits is used, so an exception precedes the
+    /// menu it is in. A person who types the old place or the old name still finds the command.
+    static let legacyLocations: [(current: [String], legacy: String)] = [
+        (["File", "Quick Open…"], "Workspace"),
+        (["File", "Reload with Encoding"], "Encoding › Reload as"),
+        (["File", "Convert to Encoding"], "Encoding › Convert to"),
+        (["File", "Monitor Current File"], "Workspace"),
+        (["File", "Reload Monitored File…"], "Workspace"),
+        (["File", "Workspace", "Add Folder to Workspace…"], "Workspace"),
+        (["File", "Workspace"], "File"),
+        (["Edit", "Encode and Decode"], "Text Utilities"),
+        (["Edit", "Format JSON"], "Text Utilities"),
+        (["Edit", "Complete Word"], "Language"),
+        (["Edit", "Typing", "Toggle Overtype"], "Edit"),
+        (["Edit", "Typing"], "View"),
+        (["Find", "Bookmarks"], "Search › Bookmarked Lines"),
+        (["Find", "Function List…"], "Language"),
+        (["Find"], "Search"),
+        (["View", "Guides and Highlights"], "View"),
+        (["View", "Syntax Highlighting"], "Language"),
+        (["View", "Workspace Browser"], "Workspace › Show"),
+        (["View", "Editor Groups"], "View"),
+        (["Compare", "Compare with Saved Version"], "File"),
+        (["Compare"], "Search › Compare"),
+        (["Tools", "Macros"], "Macros"),
+        (["Tools", "Automations"], "Automations"),
+        (["Tools", "Run Commands"], "Run"),
+        (["Tools"], "Text Utilities"),
+        (["Help", "Show Keyword Help"], "Language")
+    ]
+    static func legacyPath(for route: [String]) -> String {
+        guard let old = legacyLocations.first(where: { route.starts(with: $0.current) }), let title = route.last
+        else { return "" }
+        return old.legacy + " " + title
+    }
+    /// The rows whose path, or former path, contains every word typed, in any order.
+    static func rows(_ entries: [Entry], matching query: String) -> [ChoicePanel.Row] {
+        let words = query.split(whereSeparator: \.isWhitespace)
+        return entries.filter { entry in
+            let text = entry.row.title + " " + entry.legacyPath
+            return words.allSatisfy { text.localizedCaseInsensitiveContains($0) }
+        }.map(\.row)
     }
 
     private var panel: ChoicePanel?
@@ -30,6 +77,7 @@ import EditorBridge
             filterLabel: "Search commands by name or menu")
         panel = chooser
         chooser.rows = { entries.map(\.row) }
+        chooser.filteredRows = { Self.rows(entries, matching: $0) }
         chooser.onClose = { [weak self] in self?.panel = nil }
         let hadWindow = window != nil
         chooser.choose = { [weak self, weak chooser, weak menu, weak window, weak expectedEditor] id in
@@ -84,7 +132,8 @@ import EditorBridge
         var entries: [Entry] = [], seen: Set<String> = []
         func collect(_ menu: NSMenu, path: [String]) {
             guard menu !== NSApp.servicesMenu else { return }
-            // Macro, language, automation, and group menus populate their items at menu-open time.
+            // Macro, language, automation, and group menus populate their items at menu-open time,
+            // at whatever depth the menu bar lists them.
             if menu.delegate is MacroController || menu.delegate is AutomationController
                 || menu.delegate is LanguageController || menu.delegate is GroupCommandController
             {
@@ -94,7 +143,7 @@ import EditorBridge
                 let route = path + [item.title]
                 if let child = item.submenu {
                     // Recently opened file names are documents, not commands.
-                    if !(child.delegate is RecentDocumentsMenu) && item.title != "Reopen Recent File" {
+                    if !(child.delegate is RecentDocumentsMenu) && item.title != WorkspaceBrowserController.recentFilesTitle {
                         collect(child, path: route)
                     }
                     continue
@@ -122,7 +171,8 @@ import EditorBridge
                 entries.append(
                     Entry(
                         row: .init(id: id, title: pathLabel, detail: scope, enabled: enabled),
-                        item: item, target: target, externalNotice: destination))
+                        item: item, target: target, externalNotice: destination,
+                        legacyPath: Self.legacyPath(for: route)))
             }
         }
         collect(bar, path: [])
@@ -197,21 +247,29 @@ import EditorBridge
                 return ("Reads bookmarked lines • Changes document and clipboard", nil)
             }
         }
+        if selector == "toggleAutoIndent:" || selector == "toggleAutoPair:" {
+            return ("Reads typing settings • Changes them for every editor", nil)
+        }
+        // What the command's owner works on, wherever the menu bar lists it.
         let detail: String
-        switch menu {
-        case "TextTank", "Help": detail = "Uses the application, its windows or settings"
-        case "File": detail = "Reads or changes open documents and files"
-        case "Edit": detail = "Reads active editor • Changes text, marks or selection"
-        case "Encoding": detail = "Active document and on-disk text encoding"
-        case "Search": detail = "Search, editor selection or comparison"
-        case "Workspace", "Window": detail = "Reads workspace state • Changes windows or tabs"
-        case "View": detail = "Reads active view • Changes display or view settings"
-        case "Language": detail = "Reads language profiles • Changes editor assistance or settings"
-        case "Macros": detail = "Reads or changes saved macros and editor recording"
-        case "Automations": detail = "Reads or manages saved automations and history"
-        case "Run": detail = "Reads or manages saved commands and process output"
-        case "Text Utilities": detail = "Active text, utility results or export"
-        default: detail = menu
+        switch item.target {
+        case is LanguageController: detail = "Reads language profiles • Changes editor assistance or settings"
+        case is MacroController: detail = "Reads or changes saved macros and editor recording"
+        case is AutomationController: detail = "Reads or manages saved automations and history"
+        case is RunController: detail = "Reads or manages saved commands and process output"
+        case is UtilityController: detail = "Active text, utility results or export"
+        case is WorkspaceBrowserController: detail = "Reads workspace state • Changes windows or tabs"
+        default:
+            switch menu {
+            case "TextTank", "Help": detail = "Uses the application, its windows or settings"
+            case "File": detail = "Reads or changes open documents and files"
+            case "Edit": detail = "Reads active editor • Changes text, marks or selection"
+            case "Find": detail = "Search, bookmarks or editor selection"
+            case "View": detail = "Reads active view • Changes display or view settings"
+            case "Compare": detail = "Reads open documents or chosen text • Opens a comparison"
+            case "Window": detail = "Reads workspace state • Changes windows or tabs"
+            default: detail = menu
+            }
         }
         return (detail, nil)
     }

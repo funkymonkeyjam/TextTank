@@ -27,6 +27,12 @@ The four `recipe-user-sample*` pairs are literal examples supplied by the user; 
 
 `recipe-user-samples.rules.json` is the rule set that turns the four inputs into their expected outputs: the bundled Recipe ingredient cleanup template (`Resources/AutomationTemplates/recipe-ingredient-cleanup.rules.json`) plus eight literal rules for headings and note suffixes found only in those samples. It is test data in the format Export Rules writes; the app ships the template without the literals.
 
+## Menu fixtures
+
+`menu-tree.json` is the whole nine-menu tree (DS-D4) as `Tests/DocumentPinningChecks.swift` reads it from the built menu bar: position, title, action, shortcut, dispatch role and represented object of every item. `TEXTTANK_WRITE_MENU_FIXTURE=1` rewrites it; do that only for a reviewed change to the menu map.
+
+`menu-command-identities-before-nine-menus.json` lists the 336 commands of the earlier fourteen-menu bar by action, represented object, shortcut and dispatch role. It was derived from the golden fixtures of that bar before they were replaced, and is never regenerated: the same check requires every one of those commands to be listed exactly as often today, apart from differences it names.
+
 ## Other folders
 
 `persistence/` holds golden files for the persisted formats; see `Tests/DocumentPinningChecks.swift`.
