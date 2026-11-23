@@ -1210,7 +1210,8 @@ extension DocumentChecks {
             unplaced.orderFront(nil)
             let placedOnce = unplaced.frame
             unplaced.orderOut(nil)
-            let movedTo = NSPoint(x: placedOnce.minX + 40, y: placedOnce.minY + 40)
+            // Sideways only: on showing a window AppKit keeps it between the top and bottom of the screen.
+            let movedTo = NSPoint(x: placedOnce.minX + 40, y: placedOnce.minY)
             unplaced.setFrameOrigin(movedTo)
             unplaced.orderFront(nil)
             check(
