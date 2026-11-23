@@ -31,7 +31,7 @@ package struct SearchOptions: Codable, Equatable, Sendable {
             switch self {
             case .normal: return Strings.text("search.mode.normal", "Normal")
             case .extended: return Strings.text("search.mode.extended", "Extended (\\n, \\t, \\xNN)")
-            case .regularExpression: return Strings.text("search.mode.regex", "Regular expression (Boost)")
+            case .regularExpression: return Strings.text("search.mode.regex", "Regular expression")
             }
         }
     }

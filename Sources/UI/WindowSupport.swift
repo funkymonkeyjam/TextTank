@@ -75,18 +75,31 @@ final class ToolPanel: NSPanel {
     /// (the Function List, a Run result) sets this, so that it can still be reached when the
     /// document window covers it. AppKit removes the item when the panel is hidden or closed.
     var listedInWindowMenu = false
+    /// True until the panel is first shown or a saved frame is applied. A panel that has never
+    /// been placed opens over the document window, not at the screen origin it was created at.
+    var awaitsFirstPlacement = true
     init(contentRect: NSRect, styleMask: NSWindow.StyleMask) {
         super.init(contentRect: contentRect, styleMask: styleMask, backing: .buffered, defer: false)
         hidesOnDeactivate = false
         isFloatingPanel = false
     }
     override func orderFront(_ sender: Any?) {
+        placeOverDocumentWindow()
         super.orderFront(sender)
         listInWindowMenu()
     }
     override func makeKeyAndOrderFront(_ sender: Any?) {
+        placeOverDocumentWindow()
         super.makeKeyAndOrderFront(sender)
         listInWindowMenu()
+    }
+    private func placeOverDocumentWindow() {
+        guard awaitsFirstPlacement else { return }
+        awaitsFirstPlacement = false
+        guard let host = NSApp.mainWindow, host !== self, let screen = host.screen ?? NSScreen.main else { return }
+        setFrameOrigin(WindowFrames.centredOrigin(for: frame.size, over: host.frame, within: screen.visibleFrame))
+        // The position is chosen; a cascade would move it off centre.
+        windowController?.shouldCascadeWindows = false
     }
     private func listInWindowMenu() {
         // Adds the item, or only renames it when the panel already has one.
@@ -152,6 +165,14 @@ final class ActivatingTableView: NSTableView {
             return visible.width >= 100 && visible.height >= 100 && frame.maxY <= screen.visibleFrame.maxY + 1
         }
     }
+    /// The origin that centres a window of `size` over `host`, moved only as far as needed to keep
+    /// it inside `visible`. A window larger than `visible` keeps its title bar on screen.
+    nonisolated static func centredOrigin(for size: NSSize, over host: NSRect, within visible: NSRect) -> NSPoint {
+        let right = max(visible.minX, visible.maxX - size.width), top = visible.maxY - size.height
+        let x = min(max(host.midX - size.width / 2, visible.minX), right)
+        let y = max(min(host.midY - size.height / 2, top), min(visible.minY, top))
+        return NSPoint(x: x.rounded(), y: y.rounded())
+    }
     /// Applies the frame saved under `name`, if there is one, and keeps it saved from now on.
     static func track(_ window: NSWindow, as name: String) {
         guard let defaults else { return }
@@ -159,6 +180,7 @@ final class ActivatingTableView: NSTableView {
             window.setFrame(saved, display: false)
             // A restored position is where the person left the window; do not offset it.
             window.windowController?.shouldCascadeWindows = false
+            (window as? ToolPanel)?.awaitsFirstPlacement = false
         }
         objc_setAssociatedObject(
             window, &trackerKey, FrameTracker(window: window, name: name, defaults: defaults),

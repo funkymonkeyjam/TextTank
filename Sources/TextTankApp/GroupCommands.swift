@@ -173,7 +173,9 @@ import TextTankCore
     }
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         guard !CompareCommandScope.blocksWorkspace else { return false }
-        guard let call = item.representedObject as? Invocation else { return item.action == nil }
+        // An item that is not a group command is the layout picker's title. The pop-up button gives
+        // it an action of its own, and disabling it would draw the whole control as unavailable.
+        guard let call = item.representedObject as? Invocation else { return true }
         guard !host.isMutatingGroups, !host.tabCommands.isBusy, !host.tabCommands.isReopening,
             host.window?.attachedSheet == nil
         else { return false }

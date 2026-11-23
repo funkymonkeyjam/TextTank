@@ -194,7 +194,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "%@ character (code point)"
+            "value": "%@ character"
           }
         }
       }
@@ -205,7 +205,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "%@ characters (code points)"
+            "value": "%@ characters"
           }
         }
       }
@@ -1052,7 +1052,7 @@
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Regular expression (Boost)"
+            "value": "Regular expression"
           }
         }
       }
@@ -1145,13 +1145,13 @@
         }
       }
     },
-    "status.basePoints": {
+    "status.textSize": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Base %@ pt"
+            "value": "Text size %@ pt"
           }
         }
       }

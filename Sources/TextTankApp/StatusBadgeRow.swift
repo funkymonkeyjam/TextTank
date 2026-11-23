@@ -168,7 +168,7 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
         needsLayout = true
     }
 
-    let largeFileButton = NSButton(title: "Enable Full Editing", target: nil, action: nil)
+    let largeFileButton = NSButton(title: "Apply Language and Wrap Settings", target: nil, action: nil)
     var showsLargeFileAction: Bool {
         get { !largeFileButton.isHidden }
         set {

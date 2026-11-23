@@ -50,7 +50,7 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
     let recursiveButton = NSButton(checkboxWithTitle: "Include subfolders", target: nil, action: nil)
     let folderLabel = NSTextField(labelWithString: "Choose a folder to search")
     let status = AnnouncingLabel(
-        labelWithString: "Normal / Extended / Regular expression (Boost) · UTF-8/UTF-16 · symlinks skipped")
+        labelWithString: "Normal / Extended / Regular expression · UTF-8/UTF-16 · symlinks skipped")
     let table = ActivatingTableView(), details = NSTextView()
     private var folder: URL?
     private var searchedFolder: URL?

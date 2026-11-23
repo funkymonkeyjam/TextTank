@@ -19,6 +19,9 @@ import EditorBridge
     let kind = NSPopUpButton(), original = NSPopUpButton(), modified = NSPopUpButton()
     let originalEncoding = NSPopUpButton(), modifiedEncoding = NSPopUpButton()
     private let savedEncodingCaption = NSTextField(labelWithString: "Saved file encoding")
+    /// Visible names for the two tab choices, which otherwise show only document names.
+    private let tabCaptions = [NSTextField(labelWithString: "Original"), NSTextField(labelWithString: "Modified")]
+    private let stack = NSStackView()
     private let fileA = NSButton(title: "Choose Original File…", target: nil, action: nil)
     private let fileB = NSButton(title: "Choose Modified File…", target: nil, action: nil)
     private let fileLabels = [
@@ -40,12 +43,13 @@ import EditorBridge
     init(service: CompareService, preferred: TTEditor?) {
         self.service = service
         let panel = ToolPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 600, height: 620), styleMask: [.titled, .closable, .resizable])
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 240), styleMask: [.titled, .closable, .resizable])
         super.init(window: panel)
         panel.title = "Choose Comparison Sources"
         panel.delegate = self
         panel.listedInWindowMenu = true
-        panel.contentMinSize = NSSize(width: 560, height: 560)
+        // The minimum height follows the rows the chosen source pair shows; see fitToContent().
+        panel.contentMinSize = NSSize(width: 560, height: 240)
         panel.animationBehavior = .none
         kind.addItems(withTitles: [
             "Two Tabs", "Tab and Saved File", "Tab and Clipboard", "Selection and Clipboard", "Two Files"
@@ -109,11 +113,11 @@ import EditorBridge
         spinner.isDisplayedWhenStopped = false
         let buttons = NSStackView(views: [spinner, NSView(), cancel, start])
         buttons.orientation = .horizontal
-        let stack = NSStackView(views: [
-            NSTextField(labelWithString: "Compare captured text without changing either source."), kind, original,
-            modified, fileA, fileLabels[0], originalEncoding, fileB, fileLabels[1], savedEncodingCaption,
-            modifiedEncoding, status, buttons
-        ])
+        [
+            NSTextField(labelWithString: "Comparing never changes either source."), kind, tabCaptions[0], original,
+            tabCaptions[1], modified, fileA, fileLabels[0], originalEncoding, fileB, fileLabels[1],
+            savedEncodingCaption, modifiedEncoding, status, buttons
+        ].forEach(stack.addArrangedSubview)
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 10
@@ -166,6 +170,8 @@ import EditorBridge
         let type = kind.indexOfSelectedItem
         original.isHidden = type == 4
         modified.isHidden = type != 0
+        tabCaptions[0].isHidden = original.isHidden
+        tabCaptions[1].isHidden = modified.isHidden
         savedEncodingCaption.isHidden = type != 1
         originalEncoding.isHidden = type != 4
         modifiedEncoding.isHidden = type != 4 && type != 1
@@ -226,8 +232,23 @@ import EditorBridge
         fileB.isEnabled = !busy
         if !busy {
             status.stringValue =
-                available ? (failure ?? "Both sources will be captured when you choose Compare.") : reason
+                available ? (failure ?? "Compare uses the text as it is when you choose Compare.") : reason
         }
+        fitToContent()
+    }
+    /// Keeps every visible row inside the window: the window grows from its top edge when a source
+    /// pair needs more rows, and is never made smaller than the person left it.
+    private func fitToContent() {
+        guard let window, let content = window.contentView else { return }
+        let needed = (stack.fittingSize.height + 40).rounded(.up)
+        guard window.contentMinSize.height != needed else { return }
+        window.contentMinSize.height = needed
+        let growth = needed - content.frame.height
+        guard growth > 0 else { return }
+        var frame = window.frame
+        frame.origin.y -= growth
+        frame.size.height += growth
+        window.setFrame(frame, display: window.isVisible)
     }
     @objc private func chooseFile(_ sender: NSButton) {
         guard !busy, filePanel == nil, let window else { return }

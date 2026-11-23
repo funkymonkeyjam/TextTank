@@ -52,7 +52,7 @@ Open Automations → Manage Automations → Edit → Edit Rules & Test. The nati
 Use synthetic scratch files, not personal documents.
 
 1. **Editing and files:** paste `café · ½ cup · 👩🏽‍💻`, save, clone in split view, edit either pane and Undo from the other. Try line transforms, rectangular/multiple selections, Column Insert / Number, language-specific comments, and EOL conversion. Encoding conversion retains text; Reload As reinterprets disk bytes and confirms discarding dirty text. Read Only prevents mutation. Each tab's own close button (and ⌘W) retains native Save/Discard/Cancel review; the toolbar has no separate Close Tab button.
-2. **Search:** use Search → Find and Replace. Select Normal, Extended or Regular expression (Boost); test `([a-z]+)=(\d+)` → `$1:$2`, count/results, selection/current/all-open scopes and Undo. Folder search supports explicit saved workspace roots, include/exclude filters and skipped/partial outcomes. Disk replacement is separately confirmed, skips open documents, makes private recovery copies/reports, and reports each file; it is not atomic across files.
+2. **Search:** use Search → Find and Replace. Select Normal, Extended or Regular expression; test `([a-z]+)=(\d+)` → `$1:$2`, count/results, selection/current/all-open scopes and Undo. Folder search supports explicit saved workspace roots, include/exclude filters and skipped/partial outcomes. Disk replacement is separately confirmed, skips open documents, makes private recovery copies/reports, and reports each file; it is not atomic across files.
 3. **Languages:** choose Python, paste a class with a function, open Function List and double-click the symbol. Try keyword completion, syntax font/color settings and synthetic UDL XML import/edit/export. A real ported LexUser handles tested keyword/comment/delimiter cases; complete language/UDL/API semantics are still open.
 4. **Workspace:** open the document/folder/recent browser, save/reopen a session snapshot, and explicitly enable Monitor Current File. Monitoring reports changes without replacing editor text. Reload remains explicit and protects dirty buffers. Printing uses a detached representation rather than a second editable model.
 5. **Macros and automations:** record a named editing/search macro, play it and Undo. Test repeat/Stop. Create or rename an automation, edit/reorder its rules, choose runtime parameters, and verify labels follow its saved name. Import/open/restore never executes a shell command or connector output.
@@ -80,7 +80,10 @@ A short inventory of features that the walkthrough above does not name, and of w
 - **Save state.** The status line reads Edited from the moment a document changes, then “Edited — recovery copy kept” once the crash-recovery copy is written. It reads Saved only for an unchanged saved document.
 - **Confirmations.** Where the first button deletes or replaces something on disk, Return is Cancel and the action needs a click. Settings → Reset Defaults asks first. Saving Settings leaves indentation or wrapping chosen for one document in the status bar as it was.
 - **Standard menus.** TextTank → Services, Hide TextTank, Hide Others and Show All; Window → Bring All to Front; Help, whose search field finds any menu command.
-- **Window positions.** The workspace window and each tool window reopen where they were left.
+- **Window positions.** The workspace window and each tool window reopen where they were left. A tool window that has never been moved opens centred over the workspace window.
+- **Editor groups.** With a single group there is no group heading; the tab strip is the first row. Headings appear when a layout has two or four groups.
+- **Text size.** View → Actual Size returns a view to the default zoom set in Settings. The status bar shows the size in use, including zoom.
+- **Help documents.** Help → Welcome to TextTank and TextTank User Guide open with line wrapping on, whatever the Wrap setting is.
 
 ## Evidence and repaired findings
 

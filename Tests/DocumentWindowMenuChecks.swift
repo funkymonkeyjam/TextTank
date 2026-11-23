@@ -183,15 +183,25 @@ extension DocumentChecks {
                 check(doc.fileURL == nil && doc.displayName == item.title && !doc.isDocumentEdited
                     && !doc.editor.modified && !doc.editor.readOnly && doc.editor.checkedUTF8Data == bytes,
                     "offline help has exact bundled text and a clean editable untitled identity")
+                check(doc.editor.wrap, "offline help opens wrapped so that its paragraphs are readable")
                 doc.editor.replaceSelection("sample edit")
                 check(doc.isDocumentEdited && doc.editor.checkedUTF8Data != bytes, "typing marks the help draft edited")
                 doc.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 check(try doc.editor.checkedUTF8Data == bytes && Data(contentsOf: source) == bytes,
                     "one Undo restores the original text and bundled help remains untouched")
             }
-            let sample = "- tea\n- milk"
-            check(try AutomationDefinition.example.testSample(sample) == "tea\nmilk",
+            let sample = "- green tea\n- milk"
+            check(try AutomationDefinition.example.testSample(sample) == "green tea\nmilk",
                 "the welcome's worked example yields the documented result with the real built-in recipe")
+            let welcome = try String(
+                contentsOf: TestPaths.resources.appendingPathComponent("TextTank-Welcome.txt"), encoding: .utf8)
+            let exercises = ["Edit, undo and find", "Find any command", "Try a saved automation"].compactMap {
+                welcome.range(of: $0)?.lowerBound
+            }
+            check(
+                exercises.count == 3 && exercises == exercises.sorted()
+                    && welcome.contains("A new installation names it " + AutomationDefinition.example.name + "."),
+                "the welcome starts with editing and finding, and names the built-in automation as a default only")
         }
 
         section("command discovery uses ordinary menu validation", #line) {
@@ -1178,6 +1188,36 @@ extension DocumentChecks {
                 defaults.string(forKey: WindowFrames.defaultsKey("TextTank.FindInFolder")) == nil
                     && FolderSearchController(defaults: searchDefaults).shouldCascadeWindows,
                 "a tool window without a saved frame opens as before")
+            // A tool window that has never been placed opens over the document window.
+            let visible = NSRect(x: 0, y: 0, width: 1440, height: 900)
+            let host = NSRect(x: 200, y: 100, width: 1000, height: 700)
+            check(
+                WindowFrames.centredOrigin(for: NSSize(width: 600, height: 400), over: host, within: visible)
+                    == NSPoint(x: 400, y: 250),
+                "an unplaced tool window is centred over the document window")
+            check(
+                WindowFrames.centredOrigin(
+                    for: NSSize(width: 600, height: 400), over: NSRect(x: 1200, y: 700, width: 400, height: 300),
+                    within: visible) == NSPoint(x: 840, y: 500)
+                    && WindowFrames.centredOrigin(for: NSSize(width: 600, height: 1000), over: host, within: visible).y
+                        == -100,
+                "centring keeps the tool window on screen, and its title bar when it is taller than the screen")
+            let unplaced = try requireValue(
+                FolderSearchController(defaults: searchDefaults).window as? ToolPanel, "fixture: unplaced tool window")
+            check(
+                unplaced.awaitsFirstPlacement && (reopened.window as? ToolPanel)?.awaitsFirstPlacement == false,
+                "only a tool window without a saved frame waits to be placed")
+            unplaced.orderFront(nil)
+            let placedOnce = unplaced.frame
+            unplaced.orderOut(nil)
+            // Sideways only: on showing a window AppKit keeps it between the top and bottom of the screen.
+            let movedTo = NSPoint(x: placedOnce.minX + 40, y: placedOnce.minY)
+            unplaced.setFrameOrigin(movedTo)
+            unplaced.orderFront(nil)
+            check(
+                !unplaced.awaitsFirstPlacement && unplaced.frame.origin == movedTo,
+                "a tool window is placed once; showing it again keeps where it was moved to")
+            unplaced.close()
         }
 
         // G402, G403
@@ -1473,6 +1513,8 @@ extension DocumentChecks {
             spinUntil("inline count publication") { !controller.findCount.stringValue.isEmpty }
             check(document.editor.selectedText.lowercased() == "alpha" && !controller.findCount.stringValue.isEmpty,
                   "live Find publishes a native selection and its count")
+            check(NativeFixtureEnvironment.announcements.contains(controller.findCount.stringValue),
+                  "the live Find count is announced, not only shown (DS-36)")
             controller.hideFind(nil)
             check(document.editor.selectionAnchor == 3 && document.editor.selectionCaret == 1,
                   "closing an uncommitted live Find restores the reversed opening selection")

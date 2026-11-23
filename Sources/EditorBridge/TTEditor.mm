@@ -751,6 +751,8 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         _basePointSize = 14;
         [self applyPalette];
         self.accessibilityDocumentName = nil;
+        // The ruler otherwise announces the engine's own name for it.
+        _engine.scrollView.verticalRulerView.accessibilityLabel = @"Line numbers and bookmarks";
         [_engine message:SCI_SETMARGINTYPEN wParam:0 lParam:SC_MARGIN_NUMBER];
         [self updateLineNumberMargin:YES];
         [_engine message:SCI_MARKERDEFINE wParam:TTBookmarkMarker lParam:SC_MARK_CIRCLE];
@@ -829,13 +831,13 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 // background was about 1.05:1. The outline is drawn at full strength in a colour that is at least
 // 3:1 against the editor background (olive on paper about 5.6:1, citrus on carbon about 15:1); the
 // fill stays light enough for the text inside to keep its own contrast. Increase Contrast darkens
-// the light outline and strengthens the fill.
+// the light outline only: a stronger fill would lower the contrast of the text it covers.
 - (void)applySearchIndicatorStyle {
     const BOOL dark = [self usesDarkPalette], highContrast = NSWorkspace.sharedWorkspace.accessibilityDisplayShouldIncreaseContrast;
     for (int indicator : {TTSearchIndicator, TTFindPreviewIndicator}) {
         [_engine message:SCI_INDICSETSTYLE wParam:indicator lParam:INDIC_ROUNDBOX];
         [_engine message:SCI_INDICSETFORE wParam:indicator lParam:dark ? 0x5BF4C7 : (highContrast ? 0x00402E : 0x006B4D)];
-        [_engine message:SCI_INDICSETALPHA wParam:indicator lParam:highContrast ? 110 : 70];
+        [_engine message:SCI_INDICSETALPHA wParam:indicator lParam:70];
         [_engine message:SCI_INDICSETOUTLINEALPHA wParam:indicator lParam:255];
     }
 }
@@ -2595,6 +2597,11 @@ static sptr_t TTMacWordDestination(ScintillaView *engine, sptr_t caret, bool rig
     if (level < -10 || level > 60) return;
     _defaultZoomLevel = level;
     if (_followsDefaultZoom) self.zoomLevel = level;
+}
+- (void)resetZoomLevel {
+    [self assertThread];
+    _followsDefaultZoom = YES;
+    self.zoomLevel = _defaultZoomLevel;
 }
 - (void)applyFontToStyle:(NSInteger)index name:(NSString *)name size:(NSNumber *)size {
     NSString *face = name ?: _baseFontName;

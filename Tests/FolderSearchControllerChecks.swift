@@ -116,7 +116,7 @@ import NativeSearch
             let controller = FolderSearchController(defaults: isolated)
             check(
                 controller.window?.title == "Find in Folder"
-                    && controller.status.stringValue.contains("Regular expression (Boost)"),
+                    && controller.status.stringValue.contains("Regular expression ·"),
                 "native title and status expose search modes")
             check(
                 controller.table.tableColumns.count == 3 && controller.details.isSelectable,
