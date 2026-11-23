@@ -44,6 +44,26 @@ package struct EditorSettings: Codable, Equatable {
     package var appearance: String
     package var externalChangePolicy: ExternalChangePolicy?
     package var diskChangeBehavior: ExternalChangePolicy { externalChangePolicy ?? .ask }
+    /// What a document of each preview format shows when it is opened into a new tab: a
+    /// `PreviewFormat` raw value to a `DocumentViewMode` raw value. Stored as text so that a file
+    /// written by a later build, or edited by hand, still loads: a missing format, a missing
+    /// member and a value this build does not know all read as Source.
+    package var previewOpenModes: [String: String]?
+    package func previewOpenMode(for format: PreviewFormat) -> DocumentViewMode {
+        (previewOpenModes?[format.rawValue]).flatMap(DocumentViewMode.init(rawValue:)) ?? .source
+    }
+    /// Source is recorded by leaving the format out, as a tab's session record does.
+    mutating package func setPreviewOpenMode(_ mode: DocumentViewMode, for format: PreviewFormat) {
+        var modes = previewOpenModes ?? [:]
+        modes[format.rawValue] = mode == .source ? nil : mode.rawValue
+        previewOpenModes = modes.isEmpty ? nil : modes
+    }
+    /// Preview or Both, whichever the person chose last; Toggle Preview returns to it. Anything
+    /// else, including a missing member, reads as Both.
+    package var lastRenderedPreviewMode: String?
+    package var toggledPreviewMode: DocumentViewMode {
+        lastRenderedPreviewMode == DocumentViewMode.preview.rawValue ? .preview : .both
+    }
     // Key equivalents use AppKit's uppercase convention for Shift.
     package var shortcuts: [String: String]
     static package let commands = EditorCommand.shortcutIdentifiers
@@ -481,6 +501,31 @@ final package class SettingsStore {
                 throw SettingsError.changedOnDisk
             }
             return latest.reopensLastSession == requested ? nil : (requested ? "true" : "false")
+        }
+    }
+    /// Settings > Open in, for one preview format. Formats this build does not list are kept.
+    package func updatePreviewOpenMode(
+        for format: PreviewFormat, from displayed: DocumentViewMode, to requested: DocumentViewMode,
+        reservedKeys: Set<String> = EditorSettings.protectedShortcuts
+    ) throws {
+        try updateMember("previewOpenModes", reservedKeys: reservedKeys) { latest in
+            let current = latest.previewOpenMode(for: format)
+            guard current == displayed || current == requested else { throw SettingsError.changedOnDisk }
+            guard current != requested else { return nil }
+            var changed = latest
+            changed.setPreviewOpenMode(requested, for: format)
+            let bytes = try JSONSerialization.data(
+                withJSONObject: changed.previewOpenModes ?? [:], options: [.sortedKeys])
+            return String(decoding: bytes, as: UTF8.self)
+        }
+    }
+    /// Remembers the rendered mode chosen last, for Toggle Preview. Source is never recorded.
+    package func updateLastRenderedPreviewMode(
+        _ mode: DocumentViewMode, reservedKeys: Set<String> = EditorSettings.protectedShortcuts
+    ) throws {
+        guard mode != .source else { return }
+        try updateMember("lastRenderedPreviewMode", reservedKeys: reservedKeys) { latest in
+            latest.lastRenderedPreviewMode == mode.rawValue ? nil : "\"" + mode.rawValue + "\""
         }
     }
     private func updateMember(
