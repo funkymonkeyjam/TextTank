@@ -1250,6 +1250,24 @@ extension DocumentChecks {
             folder.queryField.stringValue = "escape-marker-two"
             panel.cancelOperation(nil)
             check(savedSettings()?.contains("escape-marker-two") == true, "Escape closes the idle Find in Folder panel")
+            // A chooser shown as a sheet, as the Command Palette is, has no close button.
+            let host = NSWindow(
+                contentRect: NSRect(x: 200, y: 200, width: 700, height: 500), styleMask: [.titled, .closable],
+                backing: .buffered, defer: false)
+            host.isReleasedWhenClosed = false
+            host.makeKeyAndOrderFront(nil)
+            defer { host.close() }
+            let chooser = ChoicePanel(
+                title: "Escape fixture", identifier: "escape.fixture", action: "Choose", filterLabel: "Filter")
+            chooser.rows = { [] }
+            var chooserClosed = false
+            chooser.onClose = { chooserClosed = true }
+            chooser.show(parent: host)
+            try require(host.attachedSheet === chooser.form.window, "fixture: the chooser is the document's sheet")
+            chooser.form.window.cancelOperation(nil)
+            check(
+                host.attachedSheet == nil && chooserClosed && !chooser.form.window.isVisible,
+                "Escape closes a chooser shown as a sheet and tells its owner")
             document.close()
         }
 

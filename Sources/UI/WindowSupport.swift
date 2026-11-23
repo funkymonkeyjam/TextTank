@@ -110,6 +110,12 @@ final class ToolPanel: NSPanel {
             NSSound.beep()
             return
         }
+        // A panel shown as a sheet has no close button for `performClose` to press, so its
+        // delegate is asked directly; it closes the sheet itself.
+        if sheetParent != nil {
+            if delegate?.windowShouldClose?(self) ?? true { close() }
+            return
+        }
         // The same path as the close button and File > Close, so the delegate is told.
         performClose(sender)
     }
