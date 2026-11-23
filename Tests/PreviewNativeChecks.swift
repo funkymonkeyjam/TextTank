@@ -1575,6 +1575,33 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         markdownTab.restoreSessionTab(older)
         check(markdownTab.viewMode == .source, "a record from before the field existed restores Source")
 
+        // Restoring a whole layout gives the keyboard to the pane the session recorded, here
+        // the clone pane, although the keyboard is in the tab's first pane when the restore runs
+        // (as it is after documents are reopened).
+        host.activate(markdownTab)
+        markdownTab.clone(nil)
+        let clone = try requireValue(markdownTab.secondary, "fixture: clone pane")
+        host.window?.makeFirstResponder(clone)
+        _ = clone.setSelectionAnchor(3, caret: 5)
+        let saved = host.captureSessionLayout()
+        check(
+            try record(markdown).split?.secondaryActive == true && markdownTab.activeEditor === clone,
+            "fixture: the session records the clone pane as the one in use")
+        host.window?.makeFirstResponder(markdownTab.primaryEditor)
+        let open = NSDocumentController.shared.documents.compactMap { $0 as? TextDocument }
+        check(
+            host.restoreSessionLayout(
+                saved, documents: Dictionary(uniqueKeysWithValues: open.map { (DocumentID($0.recoveryID), $0) })),
+            "fixture: the layout is restored")
+        check(
+            host.active === markdownTab && markdownTab.activeEditor === markdownTab.secondary
+                && (host.window?.firstResponder as? NSView)?.isDescendant(of: clone) == true,
+            "a restored layout puts the keyboard in the saved clone pane, not in the pane that had it")
+        check(
+            host.captureSessionLayout() == saved,
+            "and capturing again gives the same selections and panes as were saved")
+        markdownTab.closeSplit(nil)
+
         var forPlain = try record(plain)
         forPlain.viewMode = .both
         plainTab.restoreSessionTab(forPlain)
@@ -1747,9 +1774,10 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
                 "\(name): a relative address resolves inside the preview; no base tag is in effect")
             let paths = handler.checkRecord.recentRequestPaths
             check(
-                !paths.contains { $0.hasSuffix("local.svg") }
+                violations.contains("frame-src") && violations.contains("object-src")
+                    && !paths.contains { $0.hasSuffix("local.svg") }
                     && !handler.checkRecord.servedLocalFileNames.contains("local.svg"),
-                "\(name): the frame and the object were not loaded: \(paths.map { $0.split(separator: "/").last ?? "" })")
+                "\(name): the policy refused the frame and the object, and neither was asked for: \(paths.map { $0.split(separator: "/").last ?? "" })")
             let served = handler.checkRecord.pageServeCount
             _ = value("document.getElementById('form').submit(); 1")
             settle(0.2)

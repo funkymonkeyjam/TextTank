@@ -31,6 +31,16 @@ extension EditorWindowController {
         return activeEditor
     }
 
+    /// The view that takes the keyboard when a session layout has just been restored: the pane
+    /// the session recorded as the one in use, which `restoreSessionTab` left in `lastEditor`.
+    /// `keyboardFocusView` would be wrong here: it prefers the pane that holds the keyboard at
+    /// this moment, and after the documents are opened that is the tab's first pane, so a saved
+    /// clone pane would never get the keyboard back.
+    var restoredKeyboardFocusView: NSView {
+        if viewMode == .preview, let pane = previewCoordinator?.pane { return pane.focusView }
+        return lastEditor ?? primaryEditor
+    }
+
     // MARK: Commands
 
     /// View > Source, Preview, Both. The item's represented object is the mode's raw value.

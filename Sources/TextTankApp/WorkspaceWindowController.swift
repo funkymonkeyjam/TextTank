@@ -244,7 +244,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         syncGroups()
         if let active {
             activate(active, focus: false, explicit: false)
-            window?.makeFirstResponder(active.keyboardFocusView)
+            window?.makeFirstResponder(active.restoredKeyboardFocusView)
         } else {
             window?.makeFirstResponder(nil)
         }

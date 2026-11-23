@@ -327,7 +327,9 @@ every sentence shown in place of the content: an empty document, a limit, "not r
 "cannot be shown" and "stopped twice" (DS-72).
 
 The mode is part of a tab's session record (see [tab-model](tab-model.md)). A restored mode is
-applied only to a document that still has a preview.
+applied only to a document that still has a preview. When a whole layout is restored, the keyboard
+goes to the pane the session recorded as the one in use (the clone pane when that was it), or to
+the preview of a tab that shows Preview alone.
 
 ### When the preview is rendered
 
