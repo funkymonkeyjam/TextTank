@@ -224,6 +224,39 @@ extension DocumentChecks {
                 && titles.contains("View › Editor Groups › Editor Group Layout › Two Columns")
                 && titles.contains(where: { $0.hasPrefix("Tools › Run Commands › ") }),
                 "actual editor, language, saved automation chooser, macro, group and Run routes are discoverable at any depth")
+            // DS-D4: a person who types where a command used to be, or its old name, still finds it.
+            @MainActor func found(_ query: String) -> [String] { CommandDiscovery.rows(entries, matching: query).map(\.title) }
+            let formerPlaces = [
+                ("Search Compare", "Compare › Compare Text…"), ("Encoding Reload", "File › Reload with Encoding › UTF-8…"),
+                ("Reload as Windows-1252", "File › Reload with Encoding › Windows-1252…"),
+                ("Encoding Convert to UTF-16", "File › Convert to Encoding › UTF-16 LE with BOM"),
+                ("Macros Start Recording", "Tools › Macros › Start Recording"),
+                ("Workspace Quick Open", "File › Quick Open…"),
+                ("Show Workspace Browser", "View › Workspace Browser"),
+                ("Text Utilities Base64", "Edit › Encode and Decode › Base64 › Base64 Encode"),
+                ("Text Utilities Validate JSON", "Tools › Validate JSON"),
+                ("Run Configure", "Tools › Run Commands › Configure Command…"),
+                ("Automations Manage", "Tools › Automations › Manage Automations…"),
+                ("Language Function List", "Find › Function List…"),
+                ("Search Bookmarked Lines Invert", "Find › Bookmarks › Invert Bookmarks"),
+                ("File Compare with Saved", "Compare › Compare with Saved Version"),
+                ("View Auto-Pair", "Edit › Typing › Auto-Pair Brackets and Quotes")
+            ]
+            let unfound = formerPlaces.filter { !found($0.0).contains($0.1) }.map(\.0)
+            check(unfound.isEmpty, "palette finds each command by its former menu or name: \(unfound)")
+            check(
+                found("Language Markdown").count == 1 && found("Language Markdown").first?.hasSuffix(" › Markdown") == true,
+                "a language is found by the former Language menu, and only that one row")
+            check(
+                found("lines sort").contains("Edit › Lines › Sort Lines Ascending")
+                    && found("ascending  SORT") == ["Edit › Lines › Sort Lines Ascending"]
+                    && found("Edit › Undo") == ["Edit › Undo"],
+                "palette matching ignores word order and case, and a typed path still matches")
+            check(
+                found("").count == entries.count && found("   ").count == entries.count
+                    && found("no-such-command-anywhere").isEmpty
+                    && !titles.contains(where: { $0.contains("Text Utilities") || $0.hasPrefix("Search › ") }),
+                "an empty filter lists every command; a former menu name is matched but never shown")
             @MainActor func detail(_ title: String) -> String? { entries.first { $0.row.title == title }?.row.detail }
             check(
                 detail("File › Quick Open…") == "Reads workspace state • Changes windows or tabs"
@@ -239,6 +272,18 @@ extension DocumentChecks {
                     && detail("View › Guides and Highlights › Highlight Current Line")
                         == "Reads active view • Changes display or view settings",
                 "DS-20 a palette row describes what its command works on, wherever the menu bar lists it")
+            let aliased = try requireValue(
+                entries.first { $0.row.id == CommandDiscovery.rows(entries, matching: "view auto-indent").first?.id },
+                "fixture: Auto-Indent on Return found by its former View menu")
+            let autoIndent = sessionDelegate.settings.value.autoIndentEnabled
+            check(
+                aliased.row.title == "Edit › Typing › Auto-Indent on Return" && aliased.row.enabled
+                    && palette.perform(aliased, in: bar)
+                    && sessionDelegate.settings.value.autoIndentEnabled == !autoIndent,
+                "a command found by its former menu runs through the same validated menu item")
+            check(
+                palette.perform(aliased, in: bar) && sessionDelegate.settings.value.autoIndentEnabled == autoIndent,
+                "fixture: Auto-Indent on Return is put back")
             check(!titles.contains(where: { $0.contains(" › Services › ") || $0.contains(" › Reopen Recent File › ") || $0.hasSuffix(" › Command Palette…") }),
                 "system services and recursive palette invocation are omitted")
             check(entries.contains { $0.item.action == NSSelectorFromString("runAction:") && $0.row.detail.hasPrefix("Reads ") && $0.row.detail.contains("Writes ") },

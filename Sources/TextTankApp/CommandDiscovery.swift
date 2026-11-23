@@ -10,6 +10,53 @@ import EditorBridge
         let item: NSMenuItem
         weak var target: AnyObject?
         let externalNotice: String?
+        /// Where the command used to be listed, matched by the filter but never shown.
+        var legacyPath = ""
+    }
+
+    /// Where commands were listed before the nine-menu bar of 23 November 2026 (DS-D4), by the
+    /// start of today's path. The first entry that fits is used, so an exception precedes the
+    /// menu it is in. A person who types the old place or the old name still finds the command.
+    static let legacyLocations: [(current: [String], legacy: String)] = [
+        (["File", "Quick Open…"], "Workspace"),
+        (["File", "Reload with Encoding"], "Encoding › Reload as"),
+        (["File", "Convert to Encoding"], "Encoding › Convert to"),
+        (["File", "Monitor Current File"], "Workspace"),
+        (["File", "Reload Monitored File…"], "Workspace"),
+        (["File", "Workspace", "Add Folder to Workspace…"], "Workspace"),
+        (["File", "Workspace"], "File"),
+        (["Edit", "Encode and Decode"], "Text Utilities"),
+        (["Edit", "Format JSON"], "Text Utilities"),
+        (["Edit", "Complete Word"], "Language"),
+        (["Edit", "Typing", "Toggle Overtype"], "Edit"),
+        (["Edit", "Typing"], "View"),
+        (["Find", "Bookmarks"], "Search › Bookmarked Lines"),
+        (["Find", "Function List…"], "Language"),
+        (["Find"], "Search"),
+        (["View", "Guides and Highlights"], "View"),
+        (["View", "Syntax Highlighting"], "Language"),
+        (["View", "Workspace Browser"], "Workspace › Show"),
+        (["View", "Editor Groups"], "View"),
+        (["Compare", "Compare with Saved Version"], "File"),
+        (["Compare"], "Search › Compare"),
+        (["Tools", "Macros"], "Macros"),
+        (["Tools", "Automations"], "Automations"),
+        (["Tools", "Run Commands"], "Run"),
+        (["Tools"], "Text Utilities"),
+        (["Help", "Show Keyword Help"], "Language")
+    ]
+    static func legacyPath(for route: [String]) -> String {
+        guard let old = legacyLocations.first(where: { route.starts(with: $0.current) }), let title = route.last
+        else { return "" }
+        return old.legacy + " " + title
+    }
+    /// The rows whose path, or former path, contains every word typed, in any order.
+    static func rows(_ entries: [Entry], matching query: String) -> [ChoicePanel.Row] {
+        let words = query.split(whereSeparator: \.isWhitespace)
+        return entries.filter { entry in
+            let text = entry.row.title + " " + entry.legacyPath
+            return words.allSatisfy { text.localizedCaseInsensitiveContains($0) }
+        }.map(\.row)
     }
 
     private var panel: ChoicePanel?
@@ -30,6 +77,7 @@ import EditorBridge
             filterLabel: "Search commands by name or menu")
         panel = chooser
         chooser.rows = { entries.map(\.row) }
+        chooser.filteredRows = { Self.rows(entries, matching: $0) }
         chooser.onClose = { [weak self] in self?.panel = nil }
         let hadWindow = window != nil
         chooser.choose = { [weak self, weak chooser, weak menu, weak window, weak expectedEditor] id in
@@ -123,7 +171,8 @@ import EditorBridge
                 entries.append(
                     Entry(
                         row: .init(id: id, title: pathLabel, detail: scope, enabled: enabled),
-                        item: item, target: target, externalNotice: destination))
+                        item: item, target: target, externalNotice: destination,
+                        legacyPath: Self.legacyPath(for: route)))
             }
         }
         collect(bar, path: [])
