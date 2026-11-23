@@ -25,7 +25,7 @@ enum UserRecipeFixtures {
     /// An explicit user-configurable recipe for these supplied examples. This
     /// deliberately promises no inference about arbitrary headings or notes.
     static func configured() throws -> AutomationDefinition {
-        var value = AutomationDefinition.example
+        var value = AutomationDefinition.recipeFixture
         value.name = "My ingredient cleanup"
         value.steps = try sampleRules().steps
         return value

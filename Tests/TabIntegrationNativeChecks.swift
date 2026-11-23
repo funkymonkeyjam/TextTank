@@ -60,7 +60,7 @@ import Darwin
         let board = NSPasteboard.withUniqueName()
         defer { board.releaseGlobally() }
         app.pasteboard = board
-        var workflow = AutomationDefinition.example
+        var workflow = AutomationDefinition.recipeFixture
         workflow.id = UUID()
         workflow.name = "Private clipboard transform"
         workflow.steps = [.init(kind: .replaceLiteral, find: "cat", replacement: "犬")]

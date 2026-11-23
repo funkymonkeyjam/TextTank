@@ -191,17 +191,25 @@ extension DocumentChecks {
                     "one Undo restores the original text and bundled help remains untouched")
             }
             let sample = "- green tea\n- milk"
-            check(try AutomationDefinition.example.testSample(sample) == "green tea\nmilk",
-                "the welcome's worked example yields the documented result with the real built-in recipe")
+            let bulletRule = AutomationDefinition.Step(kind: .removeListMarkers)
+            check(try AutomationDefinition.testRules([bulletRule], sample: sample) == "green tea\nmilk",
+                "the welcome's worked example yields the documented result with the one rule it names")
             let welcome = try String(
                 contentsOf: TestPaths.resources.appendingPathComponent("TextTank-Welcome.txt"), encoding: .utf8)
-            let exercises = ["Edit, undo and find", "Find any command", "Try a saved automation"].compactMap {
+            let exercises = ["Edit, undo and find", "Find any command", "Make your first automation"].compactMap {
                 welcome.range(of: $0)?.lowerBound
             }
             check(
                 exercises.count == 3 && exercises == exercises.sorted()
-                    && welcome.contains("A new installation names it " + AutomationDefinition.example.name + "."),
-                "the welcome starts with editing and finding, and names the built-in automation as a default only")
+                    && welcome.contains("pick " + bulletRule.kind.label + " and")
+                    && !welcome.localizedCaseInsensitiveContains("recipe"),
+                "the welcome starts with editing and finding, and builds a first automation from a real rule")
+            let guide = try String(
+                contentsOf: TestPaths.resources.appendingPathComponent("TextTank-User-Guide.txt"), encoding: .utf8)
+            check(
+                guide.contains("A new installation includes one automation, " + AutomationDefinition.remindersExample.name + ",")
+                    && !guide.localizedCaseInsensitiveContains("recipe"),
+                "the user guide names the one automation a new installation has")
         }
 
         section("command discovery uses ordinary menu validation", #line) {

@@ -53,7 +53,7 @@ import NativeSearch
             RuntimeEnvironment.dependencies = priorProvider
             NSApp.delegate = priorDelegate
         }
-        var first = AutomationDefinition.example, second = AutomationDefinition.example
+        var first = AutomationDefinition.recipeFixture, second = AutomationDefinition.recipeFixture
         first.id = UUID()
         first.name = "Toolbar First"
         first.pinToToolbar = false

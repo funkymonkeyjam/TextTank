@@ -15,7 +15,7 @@ suite_script scripts/test-bundle.sh
 suite_run concurrency-guard-checks harness/logs/concurrency-guard-checks.log python3 Tests/ConcurrencyGuardChecks.py
 suite_build "file-checks" swiftc "${SWIFT_BASE[@]}" -o build/tests/file-checks "$SUITE_SUPPORT" Tests/FileChecks.swift
 suite_run file-checks harness/logs/file-checks.log build/tests/file-checks
-suite_build "automation-checks" swiftc "${SWIFT_BASE[@]}" -o build/tests/automation-checks "$SUITE_SUPPORT" Tests/AutomationChecks.swift
+suite_build "automation-checks" swiftc "${SWIFT_BASE[@]}" -o build/tests/automation-checks "$SUITE_SUPPORT" Tests/Support/AutomationFixtures.swift Tests/AutomationChecks.swift
 suite_run automation-checks harness/logs/automation-checks.log build/tests/automation-checks
 suite_build "reminder-checks" swiftc "${SWIFT_BASE[@]}" -o build/tests/reminder-checks "$SUITE_SUPPORT" Tests/ReminderChecks.swift
 suite_run reminder-checks harness/logs/reminder-checks.log build/tests/reminder-checks

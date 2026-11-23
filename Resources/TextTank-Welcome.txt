@@ -23,8 +23,10 @@ Use two editor groups
 
 With your sample active, choose View → Editor Group Layout → Two Columns. Choose View → Show Tab in Another Group and select the other group. Edit one view and observe the same document in the other. Choose View → Editor Group Layout → Single Group to return.
 
-Try a saved automation
+Make your first automation
 
-With your sample active, open the Automations menu and choose the list cleanup automation. A new installation names it Clean up recipe list. It reads the whole document and removes the list markers, so the two lines read “green tea” and “milk”. Choose Edit → Undo to restore the markers. Automations → Manage Automations… lists every saved automation.
+An automation is a saved list of rules that you run on a document. Choose Automations → Manage Automations… and, in its window, choose Add…. Name the automation “Remove bullets” and choose Use Changes. With it selected, choose Edit Rules… and then Add Rule…, pick Remove bullet markers and choose Save Rule. Choose Use These Rules, then Save.
+
+With your sample active, open the Automations menu and choose Remove bullets. It reads the whole document and removes the list markers, so the two lines read “green tea” and “milk”. Choose Edit → Undo to restore the markers.
 
 Choose Help → TextTank User Guide for more ways to open, search and review text.
