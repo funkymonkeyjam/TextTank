@@ -33,6 +33,8 @@ struct DocumentDependencies {
     var generalPasteboard: () -> NSPasteboard? = {
         AppStorage.permitsLegacyDefaults ? NSPasteboard.general : nil
     }
+    /// Opens a link the person clicked in a preview in their browser or mail application.
+    var openExternalURL: (URL) -> Void = { NSWorkspace.shared.open($0) }
 }
 
 @MainActor enum RuntimeEnvironment {

@@ -863,6 +863,7 @@ import AppKit
         utilityRoot.submenu = utilities.makeMenu()
         bar.addItem(utilityRoot)
         let view = menu("View")
+        DocumentViewCommands.addItems(to: view)
         view.addItem(title: EditorToolbarCommand.split.title, action: EditorToolbarCommand.split.action)
         view.addItem(title: "Close Split View", action: #selector(EditorWindowController.closeSplit(_:)))
         view.addItem(title: "Wrap Lines", action: #selector(EditorWindowController.toggleWrap(_:)))

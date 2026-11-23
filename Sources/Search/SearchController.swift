@@ -265,6 +265,8 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         }
     }
     @objc func showSearch(_ sender: Any?) {
+        // Find and Replace acts on the source; a tab showing only its preview shows both first.
+        EditorServices.current?.activePresentation?.revealSource()
         if let shared = readFindText(), !shared.isEmpty { queryField.stringValue = shared }
         showPanel(sender)
     }
