@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A plain image with nothing external. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width="40" height="40">
+  <defs><linearGradient id="g"><stop offset="0" stop-color="currentColor"/></linearGradient></defs>
+  <rect width="40" height="40" fill="url(#g)"/>
+  <image href="tile.png" width="10" height="10"/>
+</svg>

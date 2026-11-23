@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<!-- <head> in a comment <script src="http://comment.example/a.js"></script> -->
+<HTML lang=en>
+<HEAD data-x="<head>">
+<TITLE>Tricky</TITLE>
+<BASE HREF="http://base.example/">
+<LINK REL=stylesheet HREF=http://cdn.example/style.css>
+<link rel="stylesheet" href="local.css">
+<style>
+@import url(http://import.example/a.css);
+@import "https://import.example/b.css";
+body { background: url( 'HTTPS://bg.example/bg.png' ); }
+.local { background: url(images/local.png); }
+</style>
+<script>
+  if (a < b && c > d) { document.write("<img src='http://in-script.example/x.png'>"); }
+</script>
+<script src=//protocol-relative.example/lib.js></script>
+</HEAD>
+<body onload="start()" style="background-image: url(http://attr.example/bg.png)">
+<![CDATA[ <img src="http://cdata.example/x.png"> ]]>
+<img src="http://img.example/a.png" srcset="http://img.example/a-1x.png 1x, https://img.example/a-2x.png 2x, local-3x.png 3x" onerror=fail()>
+<img src='images/local.png' alt="a > b">
+<a href="https://link.example/page" onclick="go()">A link is not a loaded resource</a>
+<a href=" JavaScript:alert(1)">script link</a>
+<iframe src="https://frame.example/"></iframe>
+<video poster="http://video.example/poster.jpg"><source src="http://video.example/v.mp4"></video>
+<audio src="http://audio.example/a.mp3"></audio>
+<object data="http://object.example/o.swf"></object>
+<embed src="http://embed.example/e.swf">
+<img src="http://img.example/a.png">
+<p title="<script>">Not a script: a title attribute.</p>
+<SCRIPT>unterminated script with <b> and </p>
