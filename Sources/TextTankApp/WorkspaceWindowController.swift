@@ -61,6 +61,9 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     private(set) var sidebarAwaitsRoom = false
     /// The most content the window can have, for checks. Nil asks the window and its screen.
     var sidebarAvailableContent: (() -> TabGroupExtent)?
+    /// Stands in for the display in every workspace window: the content a window could have on
+    /// it. Checks use it to run as they would on a display of another size.
+    static var simulatedScreenContent: (() -> TabGroupExtent)?
     private var sidebarObservers: [NSObjectProtocol] = []
     private weak var sidebarBrowser: WorkspaceBrowserController?
     /// What had the keyboard when the sidebar took it by command.
@@ -238,12 +241,9 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     }
     func canFitSessionLayout(_ layout: LayoutKind, availableContent: TabGroupExtent? = nil) -> Bool {
         let minimum = WorkspaceSidebarGeometry.minimumContent(layout, sidebarShown: isSidebarShown)
-        if let availableContent { return TabGroupGeometry.fits(minimum, available: availableContent) }
-        guard let window, let screen = window.screen ?? NSScreen.main else { return layout == .single }
-        let available = window.contentRect(forFrameRect: screen.visibleFrame).size
-        return TabGroupGeometry.fits(
-            minimum,
-            available: TabGroupExtent(width: available.width, height: available.height))
+        // The same room the sidebar is measured against: injected, full-screen content or the screen.
+        guard let room = sidebarRoom(availableContent) else { return layout == .single }
+        return TabGroupGeometry.fits(minimum, available: room)
     }
     func captureSessionLayout() -> WorkspaceLayoutState {
         var state = groupSessionLayout()
@@ -352,6 +352,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
             let size = window.contentView?.bounds.size ?? .zero
             return TabGroupExtent(width: size.width, height: size.height)
         }
+        if let simulated = Self.simulatedScreenContent { return simulated() }
         guard let screen = window.screen ?? NSScreen.main else { return nil }
         let visible = window.contentRect(forFrameRect: screen.visibleFrame).size
         return TabGroupExtent(width: visible.width, height: visible.height)
@@ -456,13 +457,8 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         guard !tabCommands.isBusy, !tabCommands.isReopening, window?.attachedSheet == nil else { return false }
         if layout == model.layout { return true }
         let minimum = WorkspaceSidebarGeometry.minimumContent(layout, sidebarShown: isSidebarShown)
-        if let window, let screen = window.screen ?? NSScreen.main {
-            let available = window.contentRect(forFrameRect: screen.visibleFrame).size
-            guard
-                TabGroupGeometry.fits(
-                    minimum,
-                    available: availableContent ?? TabGroupExtent(width: available.width, height: available.height))
-            else {
+        if let room = sidebarRoom(availableContent) {
+            guard TabGroupGeometry.fits(minimum, available: room) else {
                 showTabMessage(
                     "This screen cannot fit that editor layout. The current layout is unchanged. Use a larger display.")
                 return false

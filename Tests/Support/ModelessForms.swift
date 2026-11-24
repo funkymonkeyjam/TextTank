@@ -79,6 +79,7 @@ import NativeSearch
     private static var board: NSPasteboard?
     private static var previous: RuntimeDependencies?
     static func install() {
+        WorkspaceRoom.simulateScreenFromEnvironment()
         precondition(!AppStorage.permitsLegacyDefaults, "Install owned support isolation before runtime effects")
         previous = RuntimeEnvironment.dependencies
         var effects = RuntimeDependencies()
@@ -113,5 +114,52 @@ import NativeSearch
         recoveryFailureNotice = nil
         RuntimeEnvironment.dependencies = previous
         previous = nil
+    }
+}
+
+/// Room for the workspace window that does not depend on the display the checks run on.
+///
+/// The product asks its screen whether the docked sidebar, or an editor layout, fits. On a small
+/// display (a hosted runner at about 1024 by 768) the sidebar's 1061-point minimum does not, so a
+/// fixture that needs the sidebar shown must say what room its window has. `grant` does that
+/// through the host's own injection point and returns the call that puts it back. The cases that
+/// are deliberately too small keep injecting their own sizes.
+///
+/// What AppKit itself limits, measured on a titled window: a visible window's height is cut to
+/// its screen on every resize; its width is not, except when a hidden window is ordered in, and
+/// then never below `contentMinSize`; a hidden window is not limited at all. `resize` therefore
+/// requires the width it asked for and reports the height it got.
+///
+/// `TEXTTANK_SIMULATED_SCREEN=WIDTHxHEIGHT` makes every workspace window in the process measure
+/// against a display with that much content room, which is how a small runner is reproduced.
+@MainActor enum WorkspaceRoom {
+    static let generous = TabGroupExtent(width: 2400, height: 1400)
+    static func simulateScreenFromEnvironment() {
+        guard let text = ProcessInfo.processInfo.environment["TEXTTANK_SIMULATED_SCREEN"] else { return }
+        let parts = text.lowercased().split(separator: "x").compactMap { Double($0) }
+        precondition(parts.count == 2 && parts.allSatisfy { $0 > 0 }, "TEXTTANK_SIMULATED_SCREEN must be WIDTHxHEIGHT")
+        let size = TabGroupExtent(width: parts[0], height: parts[1])
+        WorkspaceWindowController.simulatedScreenContent = { size }
+        print("NOTE simulated screen content: \(Int(size.width)) by \(Int(size.height))")
+    }
+    /// Gives `host` room for any layout with the sidebar. Call the result to restore what was there.
+    static func grant(_ host: WorkspaceWindowController, _ room: TabGroupExtent = generous) -> () -> Void {
+        let previous = host.sidebarAvailableContent
+        host.sidebarAvailableContent = { room }
+        return { host.sidebarAvailableContent = previous }
+    }
+    /// Sets the window's content size. The width must be honoured; the height may be cut to the
+    /// display by AppKit and is returned as it is.
+    @discardableResult static func resize(
+        _ window: NSWindow, to size: NSSize, file: StaticString = #filePath, line: UInt = #line
+    ) throws -> NSSize {
+        window.setContentSize(size)
+        window.contentView?.layoutSubtreeIfNeeded()
+        let actual = window.contentView?.bounds.size ?? .zero
+        try require(
+            abs(actual.width - size.width) < 0.5,
+            "fixture: the window is \(Int(size.width)) points wide whatever the display (got \(Int(actual.width)))",
+            file: file, line: line)
+        return actual
     }
 }

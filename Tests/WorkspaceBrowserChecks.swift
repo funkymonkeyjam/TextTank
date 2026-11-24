@@ -585,6 +585,8 @@ import os
             // Later fixtures install other workspace hosts; this browser stays with the one it has.
             let sidebarHost = WorkspaceWindowController.current
             controller.host = { sidebarHost }
+            let restoreRoom = WorkspaceRoom.grant(sidebarHost)
+            defer { restoreRoom() }
             controller.show(nil)
             check(
                 controller.isShown && sidebarHost.sidebarSplit.sidebar === controller.sidebarView

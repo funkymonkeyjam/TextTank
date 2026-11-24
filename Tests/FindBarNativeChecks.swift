@@ -457,6 +457,8 @@ import EditorBridge
                     && options.toolTip(forSegment: index)?.isEmpty == false
             },
             "where words do not fit the options are symbols, each still named for assistive technology and by its tooltip")
+        let restoreRoom = WorkspaceRoom.grant(host)
+        defer { restoreRoom() }
         check(host.setSidebarShown(true), "fixture: the sidebar is shown")
         window.setContentSize(window.contentMinSize)
         checkWidth("the smallest window with the sidebar", oneRow: true)
