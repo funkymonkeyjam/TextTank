@@ -426,26 +426,72 @@ import EditorBridge
         // A screen too small for the sidebar: refused, nothing changes.
         check(
             !host.setSidebarShown(true, availableContent: TabGroupExtent(width: 1000, height: 700))
-                && !host.isSidebarShown && host.lastTabMessage.contains("cannot fit the Workspace Browser"),
-            "a screen that cannot fit the sidebar beside the editors refuses it with a message")
+                && !host.isSidebarShown && host.lastTabMessage.contains("cannot fit the Workspace Browser")
+                && host.lastTabMessage.contains("It will appear when there is room")
+                && !host.lastTabMessage.contains("Nothing changed"),
+            "a screen that cannot fit the sidebar defers it, and the message says it will appear when there is room")
         check(snapshot() == before, "and the editor is as it was")
         host.setSidebarShown(false)
 
         // A restored sidebar that does not fit is kept, and shown when it next fits.
         defer { host.sidebarAvailableContent = nil }
         host.sidebarAvailableContent = { TabGroupExtent(width: 1000, height: 700) }
+        host.showTabMessage("fixture: status before the restore")
+        let announcedBeforeRestore = NativeFixtureEnvironment.announcements.count
         host.applySidebar(from: saved)
         check(
             !host.isSidebarShown && host.sidebarAwaitsRoom && !browser.isShown,
             "a saved sidebar is not shown on a display too small for it")
-        let waiting = try WorkspaceLayoutState.decoded(host.captureSessionLayout().encoded())
         check(
-            waiting.sidebarShown == true && waiting.sidebarWidth == 340,
-            "but the layout still records it as shown, so one launch on a small display does not lose it")
+            host.lastTabMessage == "fixture: status before the restore"
+                && NativeFixtureEnvironment.announcements.count == announcedBeforeRestore,
+            "and a restore that defers it shows and announces nothing")
+        let waitingBytes = try host.captureSessionLayout().encoded()
+        let waiting = try WorkspaceLayoutState.decoded(waitingBytes)
+        let waitingKeys = try requireValue(
+            JSONSerialization.jsonObject(with: waitingBytes) as? [String: Any], "fixture: layout as JSON")
         check(
-            browser.validateMenuItem(toggle) && toggle.state == .off && choose(toggle) && !host.isSidebarShown
-                && host.sidebarAwaitsRoom,
-            "the command is refused while there is no room, and the preference stays")
+            waiting.sidebarShown == false && waiting.sidebarAwaitsRoom == true && waiting.sidebarWidth == 340
+                && waitingKeys["sidebarShown"] as? Bool == false && waitingKeys["sidebarAwaitsRoom"] as? Bool == true,
+            "the layout records it as waiting for room, not as shown: a build without the key reads hidden")
+        check(
+            try LastSessionLayout.decode(LastSessionLayout(files: [], layout: waiting).encoded()).layout
+                .sidebarAwaitsRoom == true,
+            "the automatic launch file keeps the waiting request")
+        // Restored again on the same small display: still waiting, still silent.
+        host.setSidebarShown(false)
+        host.applySidebar(from: waiting)
+        check(
+            !host.isSidebarShown && host.sidebarAwaitsRoom
+                && host.lastTabMessage == "fixture: status before the restore"
+                && NativeFixtureEnvironment.announcements.count == announcedBeforeRestore,
+            "a later launch restores the waiting request without repeating any message")
+        // The menu shows the waiting state and choosing the item withdraws the request.
+        check(
+            browser.validateMenuItem(toggle) && toggle.state == .mixed && toggle.title == "Workspace Browser"
+                && toggle.toolTip == WorkspaceBrowserController.awaitingRoomHelp,
+            "while it waits the menu item carries a mixed mark and a tooltip that says why")
+        check(
+            choose(toggle) && !host.isSidebarShown && !host.sidebarAwaitsRoom
+                && host.lastTabMessage == "The Workspace Browser will stay hidden.",
+            "choosing the item again withdraws the request and says so")
+        check(
+            browser.validateMenuItem(toggle) && toggle.state == .off && toggle.toolTip == nil,
+            "the mark and the tooltip are gone")
+        let withdrawn = try WorkspaceLayoutState.decoded(host.captureSessionLayout().encoded())
+        check(
+            withdrawn.sidebarShown == false && withdrawn.sidebarAwaitsRoom == nil,
+            "a withdrawn request is saved as hidden, with no waiting key")
+        host.sidebarAvailableContent = { TabGroupExtent(width: 1400, height: 700) }
+        host.reconcileSidebarWithRoom()
+        check(!host.isSidebarShown, "and a larger display does not open a sidebar whose request was withdrawn")
+        // Asked for again on the small display, by the command this time.
+        host.sidebarAvailableContent = { TabGroupExtent(width: 1000, height: 700) }
+        check(
+            choose(toggle) && !host.isSidebarShown && host.sidebarAwaitsRoom
+                && host.lastTabMessage.contains("It will appear when there is room")
+                && browser.validateMenuItem(toggle) && toggle.state == .mixed,
+            "asking by command where there is no room defers the request and says it will appear when there is room")
         host.reconcileSidebarWithRoom()
         check(!host.isSidebarShown, "nothing changes while the room is the same")
         window.makeFirstResponder(plainTab.keyboardFocusView)
@@ -485,8 +531,8 @@ import EditorBridge
                 && window.contentMinSize == NSSize(width: 800, height: 500),
             "the keyboard returns to the text, the editor is as it was and the window minimum is the editors' own")
         check(
-            host.captureSessionLayout().sidebarShown == true,
-            "and it is still recorded as shown")
+            host.captureSessionLayout().sidebarShown == false && host.captureSessionLayout().sidebarAwaitsRoom == true,
+            "and it is recorded as waiting for room")
         host.sidebarAvailableContent = { TabGroupExtent(width: 1061, height: 500) }
         host.reconcileSidebarWithRoom()
         check(

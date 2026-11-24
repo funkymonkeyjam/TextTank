@@ -62,9 +62,16 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(toggleMonitor(_:)) { item.state = monitor.document == nil ? .off : .on }
         // DS-22: the View menu item is a toggle and carries the sidebar's state.
-        if item.action == #selector(show(_:)) { item.state = isShown ? .on : .off }
+        if item.action == #selector(show(_:)) {
+            // Checked while shown; a mixed mark, explained in the tooltip, while it waits for room.
+            let waiting = !isShown && host().sidebarAwaitsRoom
+            item.state = isShown ? .on : (waiting ? .mixed : .off)
+            item.toolTip = waiting ? Self.awaitingRoomHelp : nil
+        }
         return !CompareCommandScope.blocksWorkspace
     }
+    static let awaitingRoomHelp =
+        "The Workspace Browser will appear when this window has room for it. Choose this command to cancel."
     let store: WorkspaceBrowserStore
     let monitor = DocumentMonitor()
     var chooseEncoding: @MainActor (URL, Error) -> FileEncoding? = EncodingChoice.present
@@ -324,7 +331,14 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
     /// The selector keeps its name so the command's identity in the menu map is unchanged.
     @objc func show(_ sender: Any?) {
         guard !CompareCommandScope.blocksWorkspace else { return }
-        if isShown { host().setSidebarShown(false, browser: self) } else { reveal(focus: true) }
+        if isShown {
+            host().setSidebarShown(false, browser: self)
+        } else if host().sidebarAwaitsRoom {
+            // Asked for earlier and still waiting for room: choosing it again withdraws the request.
+            host().withdrawSidebarRequest()
+        } else {
+            reveal(focus: true)
+        }
     }
     /// Shows the sidebar if it is hidden and brings its lists up to date. The keyboard moves
     /// to it only when the person asked for the browser itself.

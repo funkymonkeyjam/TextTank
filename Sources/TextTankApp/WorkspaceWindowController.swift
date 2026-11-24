@@ -248,8 +248,9 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     func captureSessionLayout() -> WorkspaceLayoutState {
         var state = groupSessionLayout()
         if sidebarWasUsed {
-            // A sidebar hidden only for want of room is still the person's choice.
-            state.sidebarShown = isSidebarShown || sidebarAwaitsRoom
+            // Shown and waiting for room are different facts; the second has its own key.
+            state.sidebarShown = isSidebarShown
+            if sidebarAwaitsRoom { state.sidebarAwaitsRoom = true }
             state.sidebarWidth = Double(sidebarSplit.preferredWidth)
         }
         return state
@@ -305,7 +306,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     /// status message, when this screen cannot fit the sidebar beside the editor groups.
     @discardableResult func setSidebarShown(
         _ shown: Bool, browser: WorkspaceBrowserController? = nil, focus: Bool = false,
-        availableContent: TabGroupExtent? = nil
+        availableContent: TabGroupExtent? = nil, quiet: Bool = false
     ) -> Bool {
         if let browser { sidebarBrowser = browser }
         guard shown else {
@@ -317,11 +318,14 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         if !isSidebarShown {
             sidebarWasUsed = true
             guard sidebarFits(availableContent) else {
-                // Asked for and refused for size: remembered, and shown when there is room.
+                // Asked for and deferred for size: remembered, readable in the View menu, and
+                // shown when there is room. A restored request says nothing: it was said when made.
                 sidebarAwaitsRoom = true
-                showTabMessage(
-                    "This screen cannot fit the Workspace Browser beside this editor layout. Nothing changed. Use fewer editor groups or a larger display."
-                )
+                if !quiet {
+                    showTabMessage(
+                        "This screen cannot fit the Workspace Browser beside this editor layout. It will appear when there is room. Choose View > Workspace Browser again to cancel."
+                    )
+                }
                 return false
             }
             sidebarAwaitsRoom = false
@@ -373,6 +377,12 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
             setSidebarShown(true)
         }
     }
+    /// View > Workspace Browser chosen while the sidebar waits for room: the request is withdrawn.
+    func withdrawSidebarRequest() {
+        guard sidebarAwaitsRoom, !isSidebarShown else { return }
+        sidebarAwaitsRoom = false
+        showTabMessage("The Workspace Browser will stay hidden.")
+    }
     private func hideSidebar(awaitingRoom: Bool = false) {
         sidebarAwaitsRoom = awaitingRoom
         guard isSidebarShown else { return }
@@ -415,7 +425,8 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         }
         guard let shown = state.sidebarShown else { return }
         sidebarWasUsed = true
-        setSidebarShown(shown)
+        // A request that was waiting for room is tried again, without a message either way.
+        setSidebarShown(shown || state.sidebarAwaitsRoom == true, quiet: true)
     }
     @discardableResult func restoreSessionLayout(
         _ state: WorkspaceLayoutState, documents mapping: [DocumentID: TextDocument]
