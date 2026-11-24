@@ -82,7 +82,7 @@ A short inventory of features that the walkthrough above does not name, and of w
 - **Standard menus.** TextTank → Services, Hide TextTank, Hide Others and Show All; Window → Bring All to Front; Help, whose search field finds any menu command.
 - **Window positions.** The workspace window and each tool window reopen where they were left. A tool window that has never been moved opens centred over the workspace window.
 - **Editor groups.** With a single group there is no group heading; the tab strip is the first row. Headings appear when a layout has two or four groups.
-- **Text size.** View → Actual Size returns a view to the default zoom set in Settings. The status bar shows the size in use, including zoom.
+- **Text size.** View → Actual Size returns a view to the default zoom set in Settings. The status bar shows the size in use, including zoom. A zoom chosen for a tab, or for one pane of a split, is kept in the saved session and comes back with the tab; View → Show Line Numbers, Show Whitespace and Show Line Endings are stored choices that apply to every tab and view.
 - **Help documents.** Help → Welcome to TextTank and TextTank User Guide open with line wrapping on, whatever the Wrap setting is.
 
 ## Evidence and repaired findings

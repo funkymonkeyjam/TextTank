@@ -1313,6 +1313,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 pending.caretByte = savedActive.selectionCaret
                 geometry.otherAnchorByte = savedOther.selectionAnchor
                 geometry.otherCaretByte = savedOther.selectionCaret
+                pending.zoom = sessionZoom(of: savedActive)
+                geometry.otherZoom = sessionZoom(of: savedOther)
                 pending.split = geometry
                 return recordingViewMode(in: pending)
             }
@@ -1324,8 +1326,17 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 primaryFraction: min(1, max(0, fraction)))
             state.split?.activeWrapping = wrapping(of: active)
             state.split?.otherWrapping = wrapping(of: other)
+            state.split?.otherZoom = sessionZoom(of: other)
         }
+        state.zoom = sessionZoom(of: active)
         return recordingViewMode(in: state)
+    }
+    /// A pane still at the Editor Settings default zoom records nothing and follows that default
+    /// when the session is restored; only a zoom the person chose for the pane is kept.
+    private func sessionZoom(of editor: TTEditor) -> Int? { editor.followsDefaultZoom ? nil : editor.zoomLevel }
+    private func restoreSessionZoom(_ zoom: Int?, in editor: TTEditor) {
+        editor.resetZoomLevel()
+        if let zoom { editor.zoomLevel = zoom }
     }
     private func wrapping(of editor: TTEditor) -> WorkspaceLayoutState.PaneWrapping {
         editor.wrap ? .wrapped(documentLine: editor.sessionTopDocumentLine, subline: editor.sessionTopSubline)
@@ -1338,6 +1349,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             let clone = secondary ?? addClone()
             active = state.secondaryActive ? clone : primaryEditor
             let other = state.secondaryActive ? primaryEditor : clone
+            // Zoom first: the rows and offsets restored below are measured at the restored size.
+            restoreSessionZoom(state.otherZoom, in: other)
+            restoreSessionZoom(tab.zoom, in: active)
             // Establish live, byte-clamped selections immediately, even when the
             // tab is hidden. Only geometry waits for the split's mounted width.
             other.restoreClosedTabView(anchor: state.otherAnchorByte, caret: state.otherCaretByte, firstVisibleLine: 0)
@@ -1346,6 +1360,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             applyRestoredSplitIfMounted()
         } else {
             if let clone = secondary { removeClone(clone) }
+            restoreSessionZoom(tab.zoom, in: active)
             active.restoreClosedTabView(anchor: tab.anchorByte, caret: tab.caretByte, firstVisibleLine: tab.firstVisibleLine)
         }
         lastEditor = active
