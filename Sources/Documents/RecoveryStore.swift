@@ -363,6 +363,26 @@ final package class RecoveryStore: @unchecked Sendable {
         try removePreviousBody(of: header)
         if let previous { try removePreviousBody(of: previous) }
     }
+    /// Read the published snapshot back from the folder, not from memory, and require it to be
+    /// exactly `snapshot`: the same revision and format, the recorded length and SHA-256, and the
+    /// same bytes of text. A quit that keeps unsaved text without asking (DS-D9) depends on this.
+    package func confirm(_ snapshot: RecoverySnapshot) throws {
+        guard let lease = try ownedDirectory(createIfMissing: false) else { throw RecoveryError.folderChanged }
+        try lease.documents.withDocument(snapshot.id) {
+            try lease.verify(directory)
+            let record = try readRecord(url(for: snapshot.id), expectedID: snapshot.id)
+            let expected = Data(snapshot.text.utf8)
+            if record.legacy == nil {
+                guard record.header.byteCount == expected.count,
+                    record.header.sha256 == WorkspaceStore.fingerprint(expected)
+                else { throw RecoveryError.staleRevision }
+            }
+            let stored = try materialize(record)
+            guard stored.revision == snapshot.revision, stored.format == snapshot.format,
+                stored.originalURL == snapshot.originalURL, Data(stored.text.utf8) == expected
+            else { throw RecoveryError.staleRevision }
+        }
+    }
     /// Read exactly one identified snapshot, validating its filename identity and schema.
     package func load(id: UUID) throws -> RecoverySnapshot {
         guard let lease = try ownedDirectory(createIfMissing: false) else {

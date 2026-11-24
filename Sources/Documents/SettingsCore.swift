@@ -40,6 +40,11 @@ package struct EditorSettings: Codable, Equatable {
     package var autoIndentEnabled: Bool { autoIndent ?? true }
     package var reopenLastSession: Bool?
     package var reopensLastSession: Bool { reopenLastSession ?? true }
+    /// DS-D9. Quitting keeps each edited untitled document as a verified recovery copy and
+    /// reopens it at the next launch, without asking. Off gives the earlier Save / Delete /
+    /// Cancel review at quit. A missing member reads as on.
+    package var keepUntitledOnQuit: Bool?
+    package var keepsUntitledOnQuit: Bool { keepUntitledOnQuit ?? true }
     package var wrap: Bool
     package var appearance: String
     package var externalChangePolicy: ExternalChangePolicy?

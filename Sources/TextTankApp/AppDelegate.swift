@@ -381,6 +381,7 @@ import AppKit
         restoreLaunchDocuments(
             createUntitledIfEmpty: !CommandLine.arguments.contains("--texttank-external-request"),
             welcomeIfEmpty: firstLaunchProfile && defaultDocumentLaunch,
+            recovery: try? result.get(),
             review: { originals in self.restoreRecovery(result, originals: originals) }
         ) {
             sessionNotices.append(contentsOf: $0)
@@ -398,22 +399,58 @@ import AppKit
         alert.addButton(withTitle: "OK")
         alert.beginSheetModal(for: window) { _ in }
     }
+    /// `recovery` is the launch scan of the recovery folder. With "Keep unsaved untitled
+    /// documents when quitting" on (DS-D9), the untitled copies in it reopen here without a
+    /// question: those the session names in their saved tab, group and pin position, and any
+    /// others (a crash, or a session file that could not be written) as tabs after them. A copy
+    /// that cannot be opened stays in the folder and reaches `review`, which asks as before.
     func restoreLaunchDocuments(
-        createUntitledIfEmpty: Bool = true, welcomeIfEmpty: Bool = false,
+        createUntitledIfEmpty: Bool = true, welcomeIfEmpty: Bool = false, recovery: RecoveryInventory? = nil,
         review: ([URL: TextDocument]) -> Void, report: ([String]) -> Void
     ) {
         let session = AutomaticSession()
+        session.keepsUntitled = { [weak self] document, quitting in
+            quitting
+                ? document.isHeldForQuit
+                : self?.settings.value.keepsUntitledOnQuit == true && document.isEditedUntitled
+        }
         automaticSession = session
         var originals = [URL: TextDocument]()
+        let keeps = settings.value.keepsUntitledOnQuit
+        var copies = [UUID: RecoveryHeader]()
+        if keeps, let recovery {
+            let live = Set(NSDocumentController.shared.documents.compactMap { ($0 as? TextDocument)?.recoveryID })
+            for header in recovery.headers where !live.contains(header.id) { copies[header.id] = header }
+        }
+        var restoredUntitled = 0
+        func reopenUntitled(_ id: UUID, language: String? = nil, lineEnding: String? = nil) -> TextDocument? {
+            guard let header = copies.removeValue(forKey: id),
+                let snapshot = try? TextDocument.recovery.load(listed: header),
+                let document = try? TextDocument.openKeptUntitled(
+                    snapshot, language: language, lineEnding: lineEnding.flatMap(LineEnding.init(rawValue:)))
+            else { return nil }
+            restoredUntitled += 1
+            return document
+        }
         do {
-            if let state = try session.read(), settings.value.reopensLastSession {
-                let result = session.reopen(state, in: workspaceWindow)
-                originals = result.files
-                if !result.notices.isEmpty { report(result.notices) }
+            if var state = try session.read() {
+                if !settings.value.reopensLastSession { state = try state.untitledOnly() }
+                if settings.value.reopensLastSession || (keeps && state.untitled != nil) {
+                    let result = session.reopen(state, in: workspaceWindow) {
+                        reopenUntitled($0.id.rawValue, language: $0.language, lineEnding: $0.lineEnding)
+                    }
+                    originals = result.files
+                    if !result.notices.isEmpty { report(result.notices) }
+                }
             }
         } catch {
             if settings.value.reopensLastSession { report([error.localizedDescription]) }
         }
+        // Untitled copies no session placed. A copy that names a file is a draft of that file
+        // and keeps the Recover question.
+        let unplaced = copies.values.filter { $0.originalURL == nil }.sorted { $0.savedAt < $1.savedAt }
+        let appended = unplaced.compactMap { reopenUntitled($0.id) }
+        if knownWorkspace?.active == nil { appended.last?.showWindows() }
         if let active = knownWorkspace?.active {
             active.showWindow(nil)
         } else {
@@ -431,7 +468,16 @@ import AppKit
                 }
             } else { newDocument(nil) }
         }
+        if restoredUntitled > 0 {
+            // DS-40: a quiet status message, announced, never an alert.
+            knownWorkspace?.showTabMessage(Self.restoredUntitledNotice(restoredUntitled))
+        }
         session.start { [weak self] in self?.checkpointSession() }
+    }
+    nonisolated static func restoredUntitledNotice(_ count: Int) -> String {
+        count == 1
+            ? "Restored 1 untitled document with unsaved text. It is still unsaved."
+            : "Restored \(count) untitled documents with unsaved text. They are still unsaved."
     }
     func checkpointSession() {
         automaticSession?.checkpoint(knownWorkspace) { [weak self] error in
@@ -482,11 +528,15 @@ import AppKit
     /// Weak providers preserve the lazy feature graph without retaining a discarded composition root.
     @MainActor func installEditorServices() {
         if let controller = NSDocumentController.shared as? TextDocumentController {
+            // AppKit reviews and closes the documents itself before it asks this delegate about
+            // quitting, so the untitled documents are held here, before that review looks (DS-D9).
             controller.willReviewOpenDocuments = { [weak self] in
                 self?.initializedCompare?.cancelPendingSavedComparisons()
+                self?.holdUntitledForQuit()
                 self?.automaticSession?.beginReview(self?.knownWorkspace)
             }
             controller.didReviewOpenDocuments = { [weak self] accepted in
+                if !accepted { self?.releaseQuitHolds() }
                 self?.automaticSession?.nativeReviewEnded(accepted: accepted)
                 DispatchQueue.main.async { [weak self] in self?.deliverLaunchInventory() }
             }
@@ -542,8 +592,50 @@ import AppKit
         defer { hosts.forEach { $0.tabCommands.isTerminating = false } }
         for document in documents { document.close() }
     }
+    /// DS-D9, owner decision of 23 November 2026: quitting does not ask about an edited untitled
+    /// document. Each one's recovery copy is written, confirmed on storage and read back first;
+    /// a document whose copy cannot be verified, or that is beyond the documented bounds, is
+    /// left edited so the ordinary review asks about it. Tab order decides who fits the bounds.
+    private func holdUntitledForQuit() {
+        guard settings.value.keepsUntitledOnQuit else { return }
+        let limits = keptUntitledLimits
+        var count = 0, bytes = 0
+        var documents = knownWorkspace?.presentations.compactMap { $0.document as? TextDocument } ?? []
+        for case let document as TextDocument in NSDocumentController.shared.documents
+        where !documents.contains(where: { $0 === document }) { documents.append(document) }
+        var seen = Set<ObjectIdentifier>()
+        for document in documents where seen.insert(ObjectIdentifier(document)).inserted && document.isEditedUntitled {
+            let size = document.editor.byteLength
+            guard count < limits.count, size <= limits.bytes - bytes else {
+                document.releaseQuitHold()
+                continue
+            }
+            if document.holdForQuit() {
+                count += 1
+                bytes += size
+            }
+        }
+    }
+    /// How many untitled documents one quit keeps, and how many bytes of text in all. Each
+    /// document is also bounded by the automatic-recovery ceiling. A property so that a check
+    /// can reach the bounds with small documents.
+    var keptUntitledLimits = (
+        count: SizePolicy.standard.keptUntitledCount, bytes: SizePolicy.standard.keptUntitledTotal
+    )
+    private func releaseQuitHolds() {
+        for case let document as TextDocument in NSDocumentController.shared.documents { document.releaseQuitHold() }
+    }
+    /// Just before the documents close: every held copy is still the document's text, or is
+    /// written and verified again now. False means one could not be, and nothing may close.
+    private func confirmQuitHolds() -> Bool {
+        for case let document as TextDocument in NSDocumentController.shared.documents where document.isHeldForQuit {
+            guard document.holdForQuit() else { return false }
+        }
+        return true
+    }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         launchReviewSuspended = true
+        if !reviewingTermination { holdUntitledForQuit() }
         if NSDocumentController.shared.documents.allSatisfy({ !$0.isDocumentEdited }) {
             commitSession()
             closeAllForTermination()
@@ -569,11 +661,19 @@ import AppKit
     }
     var replyToTerminate: @MainActor (Bool) -> Void = { NSApp.reply(toApplicationShouldTerminate: $0) }
     @objc func reviewed(_ controller: NSDocumentController, didReviewAll: Bool, contextInfo: UnsafeMutableRawPointer?) {
+        var didReviewAll = didReviewAll
+        if didReviewAll, !confirmQuitHolds() {
+            // Text changed during the review and its copy could not be verified again: stay open.
+            didReviewAll = false
+            knownWorkspace?.showTabMessage(
+                "TextTank did not quit: an untitled document's unsaved text could not be kept. Save it, then quit again.")
+        }
         if didReviewAll {
             commitSession()
             closeAllForTermination()
         } else {
             automaticSession?.cancelReview()
+            releaseQuitHolds()
         }
         reviewingTermination = false
         replyToTerminate(didReviewAll)

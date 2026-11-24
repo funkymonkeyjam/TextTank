@@ -326,6 +326,39 @@ import Darwin
             check(
                 RecoveryStore.maximumSnapshotBytes > 512 * 1024 * 1024,
                 "F149 recovery does not inherit the smaller session byte ceiling")
+            Checks.section("V9 a quit confirms the published recovery copy by reading it back") {
+                let id = UUID()
+                let kept = RecoverySnapshot(
+                    id: id, text: "kept caf\u{E9}\r\n\0😀", format: FileFormat(encoding: .utf16LE, bom: true),
+                    originalURL: nil, revision: 4)
+                rejects("V9 a copy that was never written is not confirmed") { try store.confirm(kept) }
+                try store.save(kept)
+                try store.confirm(kept)
+                check(try RecoveryStore(directory: storeURL).load(id: id) == kept, "V9 the confirmed copy is the document")
+                let twin = RecoverySnapshot(
+                    id: id, text: "kept cafe\u{301}\r\n\0😀", format: kept.format, originalURL: nil, revision: 4)
+                rejects("V9 text with other bytes is not confirmed", expecting: RecoveryError.staleRevision) {
+                    try store.confirm(twin)
+                }
+                let later = RecoverySnapshot(
+                    id: id, text: kept.text, format: kept.format, originalURL: nil, revision: 5)
+                rejects("V9 a later revision than the one on disk is not confirmed", expecting: RecoveryError.staleRevision) {
+                    try store.confirm(later)
+                }
+                let body = try FileManager.default.contentsOfDirectory(at: storeURL, includingPropertiesForKeys: nil)
+                    .first { $0.lastPathComponent.hasPrefix(id.uuidString + ".") && $0.pathExtension == "utf8" }
+                let file = try requireValue(body, "V9 the copy's text file")
+                let original = try Data(contentsOf: file)
+                var damaged = original
+                damaged[0] ^= 0x01
+                try damaged.write(to: file)
+                rejects("V9 a text file that no longer matches its recorded hash is not confirmed") {
+                    try store.confirm(kept)
+                }
+                try original.write(to: file)
+                try store.confirm(kept)
+                try store.remove(id: id, throughRevision: 4)
+            }
             Checks.section("F149 byte-exact recovery revision identity") {
                 let exactID = UUID()
                 let exact = RecoverySnapshot(

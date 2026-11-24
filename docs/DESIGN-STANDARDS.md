@@ -37,7 +37,7 @@ any user-facing string. Cite rules by their id (for example DS-31) in commit mes
 | Id | Decision | Date |
 |---|---|---|
 | DS-D1 | **Tab model: one workspace window that hosts the compact tab strip** (and, later, editor groups). Native `NSWindow` tabbing is rejected: pinned tabs, multi-select, groups and two views of one document cannot be built on it. Stage 0 replaces the hidden document windows with a shared native host; later stages extend its model. | 15 Nov 2026 |
-| DS-D2 | **The window's red close button quits TextTank**, after the usual review of unsaved documents. One tab closes from its own close button, File > Close or Command-W. | 15 Nov 2026 |
+| DS-D2 | **The window's red close button quits TextTank**, after the usual review of unsaved documents. One tab closes from its own close button, File > Close or Command-W. Amended by DS-D9 (23 Nov 2026): at quit the review covers files with unsaved edits; an untitled document's unsaved text is kept and is not asked about. | 15 Nov 2026 |
 | DS-D3 | **No Close Tab button in the toolbar.** Each tab has its own. | 15 Nov 2026 |
 | DS-D4 | **The menu bar has nine menus, in this order: TextTank, File, Edit, Find, View, Compare, Tools, Window, Help.** File opens, saves and re-encodes documents and holds the workspace files. Edit holds everything that changes the text or the selection. Find holds finding, Go to Line, bookmarks and the Function List. View holds how the document is shown, including Syntax Highlighting, the Workspace Browser and Editor Groups. Compare holds starting, reading, merging and exporting a comparison. Tools holds Macros, Automations, Run Commands and the utilities that leave the text as it is. Help holds the guides, the Command Palette and keyword help. TextTank is a close approximation of Notepad++, not a copy of its menu bar: a command sits where a person on a Mac would look first, and the Command Palette still finds it by its former menu. Group inside menus; do not add top-level menus without the owner. This replaces the frozen fourteen-menu order. | 23 Nov 2026 |
 | DS-D5 | **Distribution** (Developer ID signing and notarisation) is undecided. Do not add signing identities, entitlements or release scripts without the owner asking. | open |
@@ -56,6 +56,23 @@ Owner follow-up, 17 November 2026:
   Explicit user colors remain overrides. Markdown is a selectable language and is detected for
   `.md` and `.markdown` files. Its headings, emphasis, lists, links and code are highlighted.
 
+Owner decision, 23 November 2026:
+
+- DS-D9. **Unsaved untitled text survives quit.** Quitting (Command-Q, the red close button, logout
+  or restart) does not ask about an edited untitled document. Its text is first written to its
+  recovery copy, confirmed on storage and read back; only then may TextTank quit without asking. At
+  the next launch those tabs reopen without a question, in their saved order, group and pin state,
+  with their text, caret and selection, language, encoding and line endings, still untitled and still
+  marked edited, and a status message says how many were restored. Undo history is not kept: a
+  recovery copy holds text only. This applies to untitled documents only. A file with unsaved edits
+  keeps the Save / Don't Save / Cancel review at quit, and closing one untitled tab (its close
+  button, File > Close, Command-W) still asks. A document whose copy cannot be verified, that is
+  larger than 256 MiB, or that falls beyond 256 documents or 512 MiB of kept text in one quit, is
+  reviewed as before: text is never dropped to meet a bound. After a crash the same silent reopening
+  applies to untitled recovery copies; a recovery copy that belongs to a file keeps the Recover
+  question. The stored setting "Keep unsaved untitled documents when quitting" (`keepUntitledOnQuit`,
+  on unless stored off) turns all of this off and restores the earlier behaviour exactly.
+
 ## 3. Rules
 
 ### Windows and tabs
@@ -66,6 +83,8 @@ Owner follow-up, 17 November 2026:
   `NSVisualEffectView`, no transparent title bar, no hand-drawn buttons that imitate system ones.
 - DS-12. Closing one tab, closing the window and quitting are three separately specified behaviours
   (DS-D2). Each keeps the Save / Discard / Cancel review, and Cancel leaves everything as it was.
+  The one exception is DS-D9: at quit an untitled document's unsaved text is kept, after its recovery
+  copy is verified, instead of being reviewed. Closing a single untitled tab still asks.
 - DS-13. Full screen must work in the workspace window. Native transitions remain system behavior.
 - DS-14. A tab is a tab to assistive technology: tab role, a label of the form "name, edited", an
   in-place update rather than a rebuild, and a close target of at least 28 by 28 points that does not
@@ -178,8 +197,11 @@ Owner follow-up, 17 November 2026:
 - DS-90. A text transformation acts on the focused document, preserves the original, is one Undo step, and
   leaves the text untouched if it fails or is cancelled.
 - DS-91. Prefer a reversible action to a confirmation. Confirm only what cannot be cheaply recovered.
-- DS-92. Reopening should resume the work: unsaved text is kept as a recovery copy, and (once session
-  restore exists) the same documents reopen at the same place.
+- DS-92. Reopening should resume the work: unsaved text is kept as a recovery copy, and the same
+  documents reopen at the same place. Files reopen from the last session. Untitled documents with
+  unsaved text reopen from their recovery copies, without a question, after a quit or a crash
+  (DS-D9); a quiet status message says so (DS-40). A recovery copy that belongs to a file is offered
+  through the Recover question, and the file itself is never changed by recovery.
 
 ### Permissions and privacy
 

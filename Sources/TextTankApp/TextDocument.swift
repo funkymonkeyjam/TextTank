@@ -249,7 +249,63 @@ import UniformTypeIdentifiers
     private var hasUnsavedState: Bool { editor.modified || format != savedFormat || !savepointMatchesDisk }
     /// Recovery also keeps an untouched restored document: its framework dirty flag is independent
     /// of the freshly loaded editor's save point and format checkpoint. Keep this broader rule distinct.
-    private var shouldKeepRecoveryCopy: Bool { isDocumentEdited || editor.modified || format != savedFormat }
+    private var shouldKeepRecoveryCopy: Bool {
+        super.isDocumentEdited || editor.modified || format != savedFormat
+    }
+    /// DS-D9: the recovery revision whose copy a quit has written, confirmed on storage and read
+    /// back. While it is set the document answers "not edited" to AppKit, so the quit review
+    /// neither counts nor asks about it; the tab and the recovery copy are unaffected.
+    private var quitHold: UInt64?
+    nonisolated private let quitHoldFlag = QuitHoldFlag()
+    var isHeldForQuit: Bool { quitHold != nil }
+    /// An untitled document with unsaved text, whether or not a quit is holding it.
+    var isEditedUntitled: Bool { isOpen && fileURL == nil && super.isDocumentEdited }
+    override var isDocumentEdited: Bool { !quitHoldFlag.get() && super.isDocumentEdited }
+    /// Writes this edited untitled document's recovery copy now, waits for it to reach storage
+    /// and reads it back (length, SHA-256 and bytes). True only when all of that succeeded for
+    /// the text as it is at this moment; the quit may then go on without asking about it.
+    /// False leaves the document edited and unheld, so the ordinary review asks.
+    @discardableResult func holdForQuit() -> Bool {
+        if let quitHold, quitHold == recoveryRevision { return true }
+        releaseQuitHold()
+        guard isEditedUntitled, !recoveryClosed, !automaticRecoveryPaused else { return false }
+        cancelRecoveryTimers()
+        recoveryGeneration += 1
+        preparingRecoveryGeneration = nil
+        deferredRecoveryCapture = false
+        let store = Self.recovery, revision = recoveryRevision, fault = dependencies.beforeQuitHold
+        do {
+            let snapshot = try RecoverySnapshot(
+                id: recoveryID, text: Self.capturedText(from: editor.checkedUTF8Data), format: format,
+                originalURL: recoveredOriginalURL, revision: revision)
+            try recoveryWriter.finish {
+                try fault?()
+                try store.save(snapshot)
+                try store.confirm(snapshot)
+            }
+            lastRecoveryError = nil
+            recoveryFailures.recordSuccess()
+            recoveryCopyKept = true
+            quitHold = revision
+            quitHoldFlag.set(true)
+            return true
+        } catch {
+            // No sheet here: the review that follows asks about this document by name.
+            lastRecoveryError = error
+            recoveryCopyKept = false
+            showRecoveryFailure(error)
+            NSLog(
+                "TextTank: untitled document %@ could not be kept for quit: %@", recoveryID.uuidString,
+                error.localizedDescription)
+            return false
+        }
+    }
+    /// The quit was cancelled, or the copy could not be confirmed: the document is edited again.
+    func releaseQuitHold() {
+        guard quitHold != nil else { return }
+        quitHold = nil
+        quitHoldFlag.set(false)
+    }
     private var recoveryRevision: UInt64 { recoveryBase + UInt64(editor.revision) }
     var hasSettledDiskSignature: Bool { diskSignature != nil }
     var originalDiskFingerprint: String? { diskDigest }
@@ -577,7 +633,7 @@ import UniformTypeIdentifiers
         var status: String
         if let recoveredOrigin {
             status = recoveredOrigin
-        } else if isDocumentEdited {
+        } else if super.isDocumentEdited {
             status = recoveryCopyKept ? "Edited — recovery copy kept" : "Edited"
         } else if fileURL == nil {
             status = "Ready"
@@ -707,6 +763,14 @@ import UniformTypeIdentifiers
     }
     override func close() {
         guard !isClosed else { return }
+        // Text typed after the copy was verified: write it again, or keep the earlier copy.
+        if let quitHold, quitHold != recoveryRevision {
+            let earlier = quitHold
+            if !holdForQuit() {
+                self.quitHold = earlier
+                quitHoldFlag.set(true)
+            }
+        }
         presentation?.host.tabCommands.willClose(self)
         isClosed = true
         bulkReceipt = nil
@@ -720,11 +784,15 @@ import UniformTypeIdentifiers
         editor.onReadOnlyAttempt = nil
         editor.readOnly = true
         windowControllers.compactMap { $0 as? EditorWindowController }.forEach { $0.prepareForClose() }
-        // NSDocument only reaches close after the user has chosen Save or Discard.
-        let store = Self.recovery, id = recoveryID, revision = recoveryRevision
+        // NSDocument only reaches close after the user has chosen Save or Discard, or after a
+        // quit has verified this untitled document's copy (DS-D9). That copy is the document
+        // now: it is never removed here, and the next launch reopens it.
+        let store = Self.recovery, id = recoveryID, revision = recoveryRevision, kept = quitHold != nil
         // Never block or prompt here: close runs once per document on the quit path. A snapshot
         // that could not be removed is found by the next launch's scan and offered or listed there.
-        do { try recoveryWriter.finish { try store.remove(id: id, throughRevision: revision) } } catch {
+        do {
+            try recoveryWriter.finish { if !kept { try store.remove(id: id, throughRevision: revision) } }
+        } catch {
             lastRecoveryError = error
             NSLog(
                 "TextTank: recovery snapshot %@ could not be removed at close: %@", id.uuidString,
@@ -960,6 +1028,39 @@ import UniformTypeIdentifiers
         savepointMatchesDisk = false
         loading = false
         updateChangeCount(.changeDone)
+    }
+    /// DS-D9: reopens an untitled document that a quit kept, or that a crash left as a recovery
+    /// copy, without asking. It keeps the copy's identity, text, encoding and byte-order mark,
+    /// is still untitled and still edited, and is not shown or focused here: the session layout
+    /// places it. Undo history is not part of a recovery copy and starts empty.
+    static func openKeptUntitled(
+        _ snapshot: RecoverySnapshot, language: String? = nil, lineEnding: LineEnding? = nil
+    ) throws -> TextDocument {
+        let (base, overflow) = snapshot.revision.addingReportingOverflow(1)
+        guard !overflow else { throw RecoveryError.invalidSnapshot }
+        let doc = DocumentFactory.makeUntitled(
+            display: false, focus: false,
+            prepare: { document in
+                document.recoveryID = snapshot.id
+                document.recoveryBase = base
+            },
+            populate: { document in
+                document.loadUnsavedSnapshot(text: snapshot.text, format: snapshot.format)
+                if let lineEnding { document.editor.setLineEndingMode(lineEnding.nativeMode) }
+                // A draft of a file that was recovered earlier keeps saying which file it was.
+                if SnapshotLabel.origin(of: snapshot) != nil {
+                    document.recoveredOrigin = SnapshotLabel.status(for: snapshot)
+                    document.recoveredOriginalURL = SnapshotLabel.origin(of: snapshot)?.absoluteString
+                    if let name = SnapshotLabel.originName(of: snapshot) { document.displayName = "Recovered " + name }
+                }
+                if let language, language != LanguageProfile.plainTextID,
+                    document.editor.byteLength < SizePolicy.standard.largeDocumentThreshold
+                {
+                    _ = document.applyLanguage(language, using: EditorServices.current?.languages)
+                }
+            })
+        doc.flushRecovery()
+        return doc
     }
     /// Opens one recovery snapshot as a new unsaved document that keeps the snapshot's identity.
     @discardableResult static func openRecovered(_ snapshot: RecoverySnapshot, originalGroup: String? = nil) throws
@@ -1273,6 +1374,22 @@ private final class DocumentDiskLocation: @unchecked Sendable {
         value = next
         lock.unlock()
         withExtendedLifetime(displaced) {}
+    }
+}
+
+/// NSDocument may ask whether a document is edited from a queue other than main.
+private final class QuitHoldFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var held = false
+    func get() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return held
+    }
+    func set(_ value: Bool) {
+        lock.lock()
+        held = value
+        lock.unlock()
     }
 }
 
