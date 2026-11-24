@@ -1010,7 +1010,7 @@ int main(int argc, char **argv) {
             [engine message:SCI_EMPTYUNDOBUFFER];
             [fold setSavePoint];
             const NSUInteger revision = fold.revision;
-            [fold goToLine:4]; // inside the deepest block
+            [fold moveCaretToLine:4]; // inside the deepest block
             const NSInteger caret = fold.selectionCaret;
             check([fold executeCommand:@"foldCurrent"] && !visible(3) && visible(2) && visible(7),
                   "Fold Current at a body line contracts the nearest real header only");
@@ -1028,15 +1028,15 @@ int main(int argc, char **argv) {
                 [fold setSelectionAnchor:held caret:held];
                 check(!visible(3) && fold.revision == revision, "Putting the caret back leaves the fold closed and the text unchanged");
             }
-            check([fold goToLine:4] && visible(3), "Explicit Go To Line reveals the target after folding");
-            [fold goToLine:1];
+            check([fold moveCaretToLine:4] && visible(3), "Explicit Go To Line reveals the target after folding");
+            [fold moveCaretToLine:1];
             [fold executeCommand:@"foldLevel2"];
             check(visible(1) && !visible(2) && visible(6) && !visible(7) && visible(11),
                   "Fold Level 2 collapses both sibling headers and leaves root peers expanded");
             [fold executeCommand:@"foldLevel1"];
             check(!visible(1) && visible(10) && !visible(11), "Fold Level 1 contracts both top-level C++ functions");
             [fold executeCommand:@"unfoldAll"];
-            [fold goToLine:3];
+            [fold moveCaretToLine:3];
             [fold executeCommand:@"foldCurrent"];
             [fold executeCommand:@"foldCurrent"];
             check(visible(2) && !visible(3) && visible(7), "Fold Current at a header is idempotent");
@@ -1067,7 +1067,7 @@ int main(int argc, char **argv) {
             fold.readOnly = NO;
             fold.text = @"alpha\nbeta\ngamma";
             [fold setLanguage:@"null"];
-            [fold goToLine:2];
+            [fold moveCaretToLine:2];
             [fold executeCommand:@"foldCurrent"];
             [fold executeCommand:@"foldLevel1"];
             check(visible(0) && visible(1) && visible(2), "Plain text with no fold headers remains visible");
@@ -2117,7 +2117,7 @@ int main(int argc, char **argv) {
         auto bytes = [](NSString *text) { return [text dataUsingEncoding:NSUTF8StringEncoding]; };
         NSString *original=numbered(400);
         ed.text=original;[ed resetUndoHistory];[ed setSavePoint];
-        check([ed setBookmarks:@[@40,@300]] && [ed goToLine:301], "Fixture: bookmarks on lines 40 and 300, caret on line 300");
+        check([ed setBookmarks:@[@40,@300]] && [ed moveCaretToLine:301], "Fixture: bookmarks on lines 40 and 300, caret on line 300");
         NSInteger caret=ed.selectionCaret, top=ed.firstVisibleLine; NSUInteger revision=ed.revision;
         check(top>200 && ed.statusInfo.line==301, "Fixture: the view is scrolled to the caret");
         NSString *changed=[original stringByReplacingOccurrencesOfString:@"line 10\n" withString:@"line 1X\n"];
@@ -2180,7 +2180,7 @@ int main(int argc, char **argv) {
         TTEditor *clone=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
         NSWindow *cloneHost=hosted(clone); (void)cloneHost;
         ed.text=original;[ed setBookmarks:@[@40,@300]];
-        [clone shareDocumentWith:ed];[clone goToLine:201];NSInteger cloneTop=clone.firstVisibleLine,cloneCaret=clone.selectionCaret;
+        [clone shareDocumentWith:ed];[clone moveCaretToLine:201];NSInteger cloneTop=clone.firstVisibleLine,cloneCaret=clone.selectionCaret;
         check([ed replaceDocumentText:changed] && [clone.text isEqual:changed] && [clone.bookmarkLines isEqual:@[@40,@300]] && clone.firstVisibleLine==cloneTop && clone.selectionCaret==cloneCaret, "A split view sharing the document keeps bookmarks, its own scroll position and caret");
         });
         ttchecks::section("goToLine", [&] {
@@ -2188,10 +2188,10 @@ int main(int argc, char **argv) {
         NSWindow *host=hosted(ed); (void)host;
         ScintillaView *sv=(ScintillaView *)ed.subviews.firstObject;
         ed.text=@"é one\r\ntwo\rthree\n";[ed resetUndoHistory];[ed setSavePoint];NSUInteger revision=ed.revision;
-        check([ed goToLine:3] && ed.selectionCaret==12 && ed.selectionAnchor==12 && ed.statusInfo.line==3, "goToLine uses one-based lines over CRLF, CR and LF and UTF-8 byte offsets");
-        check([ed goToLine:4] && ed.selectionCaret==18, "The empty line after a final line break is a line");
-        check(![ed goToLine:0] && ![ed goToLine:5] && ![ed goToLine:-3] && ed.selectionCaret==18, "Out-of-range lines are rejected without moving the caret");
-        check([ed goToLine:1] && ed.selectionCaret==0 && ed.revision==revision && !ed.modified, "goToLine never changes the document");
+        check([ed moveCaretToLine:3] && ed.selectionCaret==12 && ed.selectionAnchor==12 && ed.statusInfo.line==3, "goToLine uses one-based lines over CRLF, CR and LF and UTF-8 byte offsets");
+        check([ed moveCaretToLine:4] && ed.selectionCaret==18, "The empty line after a final line break is a line");
+        check(![ed moveCaretToLine:0] && ![ed moveCaretToLine:5] && ![ed moveCaretToLine:-3] && ed.selectionCaret==18, "Out-of-range lines are rejected without moving the caret");
+        check([ed moveCaretToLine:1] && ed.selectionCaret==0 && ed.revision==revision && !ed.modified, "goToLine never changes the document");
         {
             // The exact selection state a Go to Line preview has to put back.
             auto get = [&](unsigned int message, uptr_t w = 0) { return [sv message:message wParam:w]; };
@@ -2253,12 +2253,12 @@ int main(int argc, char **argv) {
             ed.text=@"é one\r\ntwo\rthree\n";[ed resetUndoHistory];[ed setSavePoint];revision=ed.revision;
         }
         ed.text=numbered(400);
-        check([ed goToLine:350] && ed.firstVisibleLine>0 && ed.firstVisibleLine<=349 && [sv message:SCI_GETFIRSTVISIBLELINE]+[sv message:SCI_LINESONSCREEN]>349, "goToLine scrolls the target line into view");
+        check([ed moveCaretToLine:350] && ed.firstVisibleLine>0 && ed.firstVisibleLine<=349 && [sv message:SCI_GETFIRSTVISIBLELINE]+[sv message:SCI_LINESONSCREEN]>349, "goToLine scrolls the target line into view");
         [ed setLanguage:@"cpp"];
         ed.text=@"void f() {\n  int a;\n  int b;\n}\nint tail;\n";
         [ed executeCommand:@"foldAll"];
         check(![sv message:SCI_GETLINEVISIBLE wParam:2], "Fixture: line 3 is hidden inside a collapsed fold");
-        check([ed goToLine:3] && [sv message:SCI_GETLINEVISIBLE wParam:2] && ed.statusInfo.line==3, "goToLine unfolds a hidden target line");
+        check([ed moveCaretToLine:3] && [sv message:SCI_GETLINEVISIBLE wParam:2] && ed.statusInfo.line==3, "goToLine unfolds a hidden target line");
         });
         ttchecks::section("undo restores the selection", [&] {
         TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
@@ -2277,9 +2277,9 @@ int main(int argc, char **argv) {
         [ed executeCommand:@"undo"];
         check([ed.text isEqual:@"one two three four"] && [ed.selectionRanges isEqual:carets] && !ed.modified, "Undo restores every selection of a multi-selection edit");
         ed.text=numbered(400);[ed resetUndoHistory];
-        [ed goToLine:301];NSInteger top=ed.firstVisibleLine,caret=ed.selectionCaret;
+        [ed moveCaretToLine:301];NSInteger top=ed.firstVisibleLine,caret=ed.selectionCaret;
         check([ed applyEdits:@[E(@0,@4,@"LINE")] expectedRevision:ed.revision expectedLength:(NSInteger)[ed.text lengthOfBytesUsingEncoding:NSUTF8StringEncoding]], "Fixture: an edit far from the caret");
-        [ed goToLine:1];
+        [ed moveCaretToLine:1];
         [ed executeCommand:@"undo"];
         check(ed.selectionCaret==caret && ed.firstVisibleLine==top, "Undo restores the caret and scroll position the edit was made from");
         });
@@ -2806,14 +2806,14 @@ int main(int argc, char **argv) {
         check(ran && alive, "a step handler that clears itself is kept alive until it returns");
         // F277: Go to Line to where the caret already is moves nothing, so it reports nothing.
         ed.onMacroStep=^(TTMacroAction *step){ [steps addObject:step]; };
-        reset(); [ed goToLine:2]; [steps removeAllObjects];
+        reset(); [ed moveCaretToLine:2]; [steps removeAllObjects];
         const NSInteger lineStart=ed.selectionCaret;
         [ed startRecording];
-        check([ed goToLine:2] && ed.selectionCaret==lineStart && ed.selectionAnchor==lineStart && steps.count==0, "Go to Line to the caret's own place reports nothing while recording");
-        check([ed goToLine:3] && ed.selectionCaret!=lineStart && steps.count==1 && steps[0].kind==TTMacroActionKindUnsupported, "Go to Line that moves the caret is still reported as unrecordable");
+        check([ed moveCaretToLine:2] && ed.selectionCaret==lineStart && ed.selectionAnchor==lineStart && steps.count==0, "Go to Line to the caret's own place reports nothing while recording");
+        check([ed moveCaretToLine:3] && ed.selectionCaret!=lineStart && steps.count==1 && steps[0].kind==TTMacroActionKindUnsupported, "Go to Line that moves the caret is still reported as unrecordable");
         [ed stopRecording];
         [ed setSelectionAnchor:lineStart caret:lineStart+2]; [steps removeAllObjects]; [ed startRecording];
-        check([ed goToLine:2] && ed.selectionAnchor==lineStart && ed.selectionCaret==lineStart && steps.count==1, "Go to Line that only clears a selection on its own line is still reported");
+        check([ed moveCaretToLine:2] && ed.selectionAnchor==lineStart && ed.selectionCaret==lineStart && steps.count==1, "Go to Line that only clears a selection on its own line is still reported");
         [ed stopRecording];
         [drop.draggingPasteboard releaseGlobally];
         ed.onMacroStep=nil;

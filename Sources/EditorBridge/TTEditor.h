@@ -192,7 +192,9 @@ __attribute__((objc_subclassing_restricted))
 - (BOOL)setSelectionAnchor:(NSInteger)anchor caret:(NSInteger)caret;
 /// Moves the caret to the start of a one-based line in the engine's own line model, unfolding
 /// it if hidden, and scrolls it into view. NO, changing nothing, when the line does not exist.
-- (BOOL)goToLine:(NSInteger)line NS_SWIFT_NAME(goToLine(_:));
+/// The selector is not `goToLine:`: that is the Find > Go to Line… menu action, and this view is
+/// ahead of the tab in the responder chain, so it would take the menu command and do nothing.
+- (BOOL)moveCaretToLine:(NSInteger)line NS_SWIFT_NAME(goToLine(_:));
 /// One-based display coordinates, with tab stops matching the status bar. Coordinates beyond the text
 /// resolve to the last line or its end. Navigation does not change text, Undo, or the saved selection of another view.
 - (void)showLine:(NSInteger)line column:(NSInteger)column NS_SWIFT_NAME(show(line:column:));

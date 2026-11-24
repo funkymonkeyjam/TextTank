@@ -735,6 +735,19 @@ import EditorBridge
                 window.display()
             }
         }
+        // Hiding the bars narrows the gutter. The text stays at its left edge, not scrolled
+        // sideways under it. (That the strip the gutter gives up is repainted is seen only on
+        // screen: a check that draws the window itself repaints it.)
+        settle()
+        let shownOrigin = scroll.contentView.bounds.origin.x
+        bars.changeBars = false
+        try app.settings.save(bars)
+        settle()
+        check(
+            shownOrigin == 0 && scroll.contentView.bounds.origin.x == 0,
+            "hiding change bars leaves the text at its left edge: scrolled \(shownOrigin) with bars and \(scroll.contentView.bounds.origin.x) without")
+        bars.changeBars = true
+        try app.settings.save(bars)
         // A height at which the 40 lines just fit, so that a bar is what brings the scroller in.
         settle()
         let fitting = window.contentView!.frame.height + CGFloat(41 * editor.comparisonLineHeight + 6) - editor.frame.height
