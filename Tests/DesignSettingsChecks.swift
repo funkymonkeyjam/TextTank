@@ -627,28 +627,91 @@ import NativeSearch
             abs(listHeight - 240) <= 1 && window.contentMinSize.height == paneHeight
                 && window.contentMaxSize.height >= paneHeight + 1000,
             "V8 the Shortcuts pane opens with its list at the least height and can be made taller: \(listHeight)")
-        var taller = window.frame
-        taller.size.height += 160
-        taller.origin.y -= 160
-        window.setFrame(taller, display: true)
-        content.layoutSubtreeIfNeeded()
+        // AppKit never lets a window be taller than its screen's visible area, so how much taller
+        // the window becomes is read back from the window, not assumed. On a small display
+        // (a hosted runner's is about 768 points high) it is less than what was asked.
+        // TEXTTANK_CHECK_WINDOW_GROWTH asks for another amount, to meet that limit on any display.
+        let asked = ProcessInfo.processInfo.environment["TEXTTANK_CHECK_WINDOW_GROWTH"].flatMap(Double.init) ?? 160
+        let opened = window.frame
+        let limit = (window.screen ?? NSScreen.main)?.visibleFrame.height ?? .greatestFiniteMagnitude
+        /// Asks for a window `extra` points taller and returns how much taller than `opened` it now is.
+        func grow(by extra: CGFloat) -> CGFloat {
+            var taller = window.frame
+            taller.size.height += extra
+            taller.origin.y -= extra
+            window.setFrame(taller, display: true)
+            content.layoutSubtreeIfNeeded()
+            return window.frame.height - opened.height
+        }
+        /// Every control of the pane is inside the window and the recorder's row is below the list.
+        func intact() -> Bool {
+            let controls = descendants(content).compactMap { $0 as? NSControl }.filter {
+                !$0.isHiddenOrHasHiddenAncestor && !$0.isDescendant(of: scroll)
+            }
+            let list = scroll.convert(scroll.bounds, to: content)
+            return recorder.frame.height == recorderHeight
+                && recorder.convert(recorder.bounds, to: content).maxY <= list.minY + 1
+                && controls.allSatisfy { content.bounds.insetBy(dx: -1, dy: -1).contains($0.convert($0.bounds, to: content)) }
+        }
+        // With scroll bars always shown (a mouse, a hosted runner) the vertical one takes width
+        // from the list. The columns must still fit: no sideways scrolling, no clipped Status.
+        print("V8_SCROLLERS", scroll.scrollerStyle == .legacy ? "always shown" : "overlay", scroll.contentSize, table.frame.size)
         check(
-            abs(scroll.frame.height - (listHeight + 160)) <= 1 && recorder.frame.height == recorderHeight
-                && abs(content.bounds.height - (paneHeight + 160)) <= 1,
+            !scroll.hasHorizontalScroller && table.frame.width <= scroll.contentSize.width + 0.5
+                && table.tableColumns.allSatisfy { $0.width >= 90 },
+            "V8 the list's columns fit beside its scroll bar: \(table.frame.width) in \(scroll.contentSize.width)")
+        let accepted = grow(by: asked)
+        print("V8_WINDOW_GROWTH asked", asked, "accepted", accepted, "screen", limit)
+        check(
+            accepted > 0 && (accepted == asked || abs(window.frame.height - limit) <= 1),
+            "V8 the window takes the extra height asked for, or all its screen has: \(accepted) of \(asked)")
+        check(
+            abs(scroll.frame.height - (listHeight + accepted)) <= 1 && intact()
+                && abs(content.bounds.height - (paneHeight + accepted)) <= 1,
             "V8 a taller window gives all of the extra height to the list: \(scroll.frame.height)")
         try find("save")
         try find("")
         content.layoutSubtreeIfNeeded()
         check(
-            abs(scroll.frame.height - (listHeight + 160)) <= 1,
+            abs(scroll.frame.height - (listHeight + accepted)) <= 1 && window.frame.height == opened.height + accepted,
             "V8 the list keeps the height the person gave it while the pane is in use")
+        // A window that cannot grow: asked for more than any screen has, it stops at the screen,
+        // and the list has exactly what the window was allowed. Asked again, nothing changes.
+        let most = grow(by: 20_000)
+        check(
+            most >= accepted && abs(window.frame.height - limit) <= 1
+                && abs(scroll.frame.height - (listHeight + most)) <= 1 && intact(),
+            "V8 at the height of its screen the list has all the height the window was allowed: \(scroll.frame.height) of \(limit)")
+        let again = grow(by: 160)
+        try find("save")
+        try find("")
+        content.layoutSubtreeIfNeeded()
+        check(
+            again == most && abs(scroll.frame.height - (listHeight + most)) <= 1 && intact(),
+            "V8 a window that cannot grow keeps its list and its controls as they are")
+        // A display too short for the pane: AppKit makes the window shorter than its content
+        // asks. The list gives up the height and nothing below it leaves the window.
+        // The screen's limit is not bound by the window's least size, which is lifted here to stand in for it.
+        window.contentMinSize.height = 0
+        var shorter = window.frame
+        shorter.origin.y += shorter.height - (opened.height - 100)
+        shorter.size.height = opened.height - 100
+        window.setFrame(shorter, display: true)
+        content.layoutSubtreeIfNeeded()
+        check(
+            abs(scroll.frame.height - (listHeight - 100)) <= 1 && intact()
+                && abs(content.bounds.height - (paneHeight - 100)) <= 1,
+            "V8 in a window shorter than the pane the list gives up the height and every control stays inside: \(scroll.frame.height)")
         try choosePane("editing", in: window)
         check(
             window.contentMaxSize == window.contentMinSize && content.bounds.height < paneHeight,
             "V8 another pane is exactly its content again")
         try choosePane("shortcuts", in: window)
         content.layoutSubtreeIfNeeded()
-        check(abs(scroll.frame.height - listHeight) <= 1, "V8 fixture: the list is at its least height again")
+        check(
+            abs(scroll.frame.height - listHeight) <= 1 && abs(content.bounds.height - paneHeight) <= 1
+                && window.contentMinSize.height == paneHeight && intact(),
+            "V8 shown again, the pane has its own height and its list the height it opens with")
 
         // (a) Every command, with its key and whether that is the default.
         let palette = composition.commandDiscovery.commands(in: bar)
