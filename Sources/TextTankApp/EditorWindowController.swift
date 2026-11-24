@@ -330,6 +330,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             return self.statusOptionsMenu(field)
         }
         statusDetails.onCommand = { [weak self] field in self?.runStatusCommand(field) }
+        statusDetails.onCancelOperation = { StatusOperationCenter.shared.cancel($0) }
         // Editor events make the bar follow an edit or a selection change in the same turn of
         // the run loop; the timer started by visibilityChanged() covers state no event reports.
         stateObserver = NotificationCenter.default.addObserver(
@@ -369,6 +370,15 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 }
             }
         }
+        // A long operation on this document, or on none, shows its progress and Cancel here.
+        visibilityObservers.append(
+            NotificationCenter.default.addObserver(
+                forName: StatusOperationCenter.didChange, object: StatusOperationCenter.shared, queue: nil
+            ) { [weak self] _ in
+                precondition(Thread.isMainThread)
+                MainActor.assumeIsolated { self?.refreshStatusOperation() }
+            })
+        refreshStatusOperation()
         visibilityChanged()
         refreshStatusDetails(for: document)
         updateInlineFindValidation()
@@ -420,11 +430,18 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     /// Says why something the person just did had no effect, in the status line for a few seconds
     /// and to assistive technology, then shows the save state again. A standing recovery failure
     /// is never replaced.
+    ///
+    /// A `followUp` is offered as a button in the row, not as an instruction in the message. It
+    /// stays after the message has gone, for as long as it still applies. `announcement` is
+    /// what assistive technology hears instead of the message, for a follow-up that has to be
+    /// pointed out in words there.
     func showTransientStatus(
-        _ message: String, compactMessage: String? = nil, seconds: TimeInterval = 4, announce: Bool = true
+        _ message: String, compactMessage: String? = nil, seconds: TimeInterval = 4, announce: Bool = true,
+        announcement: String? = nil, followUp: StatusFollowUp? = nil
     ) {
+        if let followUp { offerStatusFollowUp(followUp) }
         guard transientStatus?.message != message else { return }
-        if announce { Announce.say(message, from: hostWindow) }
+        if announce { Announce.say(announcement ?? message, from: hostWindow) }
         guard let doc = document as? TextDocument, doc.lastRecoveryError == nil, !recoveryStatusFailed else { return }
         let id = UUID()
         transientStatus = (message, id)
@@ -457,6 +474,54 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         statusLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: failed ? .semibold : .regular)
         updateLeadingStatus()
     }
+    /// The follow-up button of the row, and whether it still applies.
+    private var statusFollowUp: StatusFollowUp?
+    var hasStatusFollowUp: Bool { statusFollowUp != nil }
+    func offerStatusFollowUp(_ followUp: StatusFollowUp?) {
+        guard followUp != nil || statusFollowUp != nil else { return }
+        statusFollowUp = followUp
+        statusDetails.setFollowUp(followUp)
+    }
+    /// Shows the newest long operation on this tab's document in the row, or none.
+    private func refreshStatusOperation() {
+        guard !statusClosed else {
+            statusDetails.setProgress(nil)
+            return
+        }
+        let operation = StatusOperationCenter.shared.operation(for: views)
+        statusDetails.setProgress(
+            operation.map {
+                StatusProgress(id: $0.id, title: $0.title, fraction: $0.fraction, cancelLabel: $0.cancelLabel)
+            })
+    }
+    /// After a change to many lines: the counts in words and Show Changes as a button, until
+    /// the text changes again (DS-40: a quiet status message, never an alert).
+    func showBulkChange(_ receipt: BulkChangeReceipt) {
+        guard let doc = document as? TextDocument, receipt.before != nil else {
+            showTransientStatus(receipt.summary, compactMessage: receipt.counts)
+            return
+        }
+        let revision = doc.editor.revision
+        let followUp = StatusFollowUp(
+            title: "Show Changes", accessibilityLabel: "Show the changes made by \(receipt.name)",
+            toolTip: "Compares the text before and after \(receipt.name).",
+            run: { [weak self] in self?.showBulkChanges(nil) },
+            isCurrent: { [weak doc] in doc?.bulkReceipt != nil && doc?.editor.revision == revision })
+        showTransientStatus(
+            receipt.summary, compactMessage: receipt.counts,
+            announcement: receipt.summary + " Show Changes is a button in the status bar.", followUp: followUp)
+    }
+    /// A saved language that is no longer available: the chooser is one press away.
+    func showUnavailableLanguage() {
+        showTransientStatus(
+            "The saved language profile is unavailable.",
+            announcement: "The saved language profile is unavailable. Choose Language is a button in the status bar.",
+            followUp: StatusFollowUp(
+                title: "Choose Language…", accessibilityLabel: "Choose a language for this document",
+                toolTip: "Opens the language chooser.",
+                run: { [weak self] in self?.runStatusCommand(.language) },
+                isCurrent: { [weak self] in (self?.document as? TextDocument)?.deferredLargeFileLanguage != nil }))
+    }
     enum StatusRefreshSource {
         case explicit, editorEvent, pollingTick
     }
@@ -466,6 +531,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     func refreshStatusDetails(for suppliedDocument: TextDocument? = nil, source: StatusRefreshSource = .explicit) {
         guard let doc = suppliedDocument ?? document as? TextDocument else { return }
         statusDetails.showsLargeFileAction = doc.deferredLargeFileLanguage != nil
+        if let offered = statusFollowUp, !offered.isCurrent() { offerStatusFollowUp(nil) }
         statusRefreshCount += 1
         // Any refresh in a hostWindow on screen restarts a missing timer, the editor-event path included.
         if statusTimer == nil { visibilityChanged() }
@@ -581,7 +647,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     }
     /// The menu a status bar field opens, for the active pane. Building it changes nothing, so
     /// its wording can be checked without showing it.
-    @objc private func showBulkChanges(_ sender: Any?) {
+    @objc func showBulkChanges(_ sender: Any?) {
         guard let receipt = (document as? TextDocument)?.bulkReceipt, let before = receipt.before,
             let after = receipt.after, let compare = EditorServices.current?.compare else { return }
         Task { [weak self] in
@@ -676,11 +742,6 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             // language chooser.
             return nil
         case .document, .readOnly:
-            if let receipt = doc.bulkReceipt {
-                heading(receipt.summary)
-                add("Show Changes", #selector(showBulkChanges(_:)), self, nil, false, receipt.before != nil)
-                menu.addItem(.separator())
-            }
             add("Save", #selector(NSDocument.save(_:)), doc)
             add("Save As…", #selector(NSDocument.saveAs(_:)), doc)
             add("Read Only", #selector(TextDocument.toggleReadOnly(_:)), doc, nil, editor.readOnly)
@@ -1369,7 +1430,24 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         inlineCancellation = nil
         inlineSearchGeneration = UUID()
         inlineSearchPending = false
+        endInlineOperation()
         updateInlineFindValidation()
+    }
+    /// The status-row operation of the find-bar search now running.
+    private var inlineOperation: UUID?
+    private func endInlineOperation(announce: String? = nil) {
+        guard let id = inlineOperation else { return }
+        inlineOperation = nil
+        StatusOperationCenter.shared.end(id, announce: announce)
+    }
+    /// Cancel in the status row: the search stops, nothing is selected or replaced, and that is
+    /// said, since the find bar reports a cancelled search nowhere else (DS-36, DS-72).
+    private func cancelInlineSearchFromStatus() {
+        guard let id = inlineOperation else { return }
+        inlineOperation = nil
+        cancelInlineSearch()
+        if findCount.stringValue.hasSuffix("…") { findCount.stringValue = "" }
+        StatusOperationCenter.shared.end(id, announce: "Search cancelled. Nothing was changed.")
     }
     /// Only scheduling and feedback belong to the bar. SearchController owns engine, navigation and replacement.
     private func beginInlineSearch(action: String, focusEditor: Bool, afterReplacement: Bool = false) {
@@ -1396,6 +1474,12 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         let token = inlineSearchGeneration, flag = TTSearchCancellation()
         inlineCancellation = flag
         inlineSearchPending = true
+        // Shown in the status row with a Cancel button only if the search is still running
+        // after a moment; a search that returns at once shows and says nothing.
+        inlineOperation = StatusOperationCenter.shared.begin(
+            replacing ? "Replacing in the document" : "Searching the document", in: editor,
+            cancelLabel: replacing ? "Cancel replacing" : "Cancel search"
+        ) { [weak self] in self?.cancelInlineSearchFromStatus() }
         updateInlineFindValidation()
         search.performInline(
             options: options, action: action, on: editor, cancellation: flag,
@@ -1416,12 +1500,23 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                         return
                     }
                     self.findCount.stringValue = "Searching, \(Strings.number(min(100, done * 100 / total)))%…"
+                    // The same real progress in the status row, beside its Cancel button.
+                    if let id = self.inlineOperation {
+                        StatusOperationCenter.shared.update(id, done: done, total: total)
+                    }
                 }
             },
             completion: { [weak self, weak editor] result in
                 guard let self, self.inlineSearchGeneration == token else { return }
                 self.inlineSearchPending = false
                 self.inlineCancellation = nil
+                // A match that is only selected is announced nowhere else; every other outcome
+                // below says its own words.
+                if case .applied = result, !replacing, !afterReplacement {
+                    self.endInlineOperation(announce: "Search finished. A match is selected.")
+                } else {
+                    self.endInlineOperation()
+                }
                 if self.findCount.stringValue.hasSuffix("…") { self.findCount.stringValue = "" }
                 self.updateInlineFindValidation()
                 switch result {

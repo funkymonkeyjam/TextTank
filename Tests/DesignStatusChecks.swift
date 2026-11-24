@@ -457,8 +457,226 @@ enum DesignStatusChecks {
         } else {
             check(false, "fixture: the docked sidebar could be shown for the status-row width check")
         }
+        try progressAndFollowUpChecks(composition: composition, controller: controller, document: document, row: row)
         try languageChooserChecks(
             composition: composition, controller: controller, document: document, row: row, field: field)
+    }
+
+    /// A long operation's progress and Cancel, and a message's follow-up, are controls in the row.
+    @MainActor private static func progressAndFollowUpChecks(
+        composition: AppDelegate, controller: EditorWindowController, document: TextDocument, row: StatusBadgeRow
+    ) throws {
+        let window = try requireValue(controller.hostWindow, "fixture: window")
+        let root = try requireValue(window.contentView, "fixture: content")
+        func control<View: NSView>(_ identifier: String, _ type: View.Type) -> View? {
+            descendants(row).compactMap { $0 as? View }.first { $0.identifier?.rawValue == identifier }
+        }
+        @MainActor func said() -> [String] { NativeFixtureEnvironment.announcements }
+        controller.showRecoveryStatus(document.currentSaveStateStatus, failed: false)
+        window.setContentSize(NSSize(width: 1600, height: 500))
+        root.layoutSubtreeIfNeeded()
+        let center = StatusOperationCenter.shared
+        let usualDelay = center.revealDelay
+        defer { center.revealDelay = usualDelay }
+        let bar = try requireValue(
+            control(StatusBadgeRow.progressIdentifier, NSProgressIndicator.self), "fixture: progress indicator")
+        let cancel = try requireValue(control(StatusBadgeRow.cancelIdentifier, NSButton.self), "fixture: Cancel")
+        check(
+            bar.isHidden && cancel.isHidden && row.progress == nil && usualDelay > 0,
+            "SR-3 the row shows no progress while nothing is running")
+        // An operation that ends at once is neither shown nor spoken.
+        center.revealDelay = 30
+        NativeFixtureEnvironment.announcements = []
+        let quick = center.begin("Searching the document", in: document.editor, cancelLabel: "Cancel search") {}
+        center.update(quick, done: 1, total: 2)
+        center.end(quick, announce: "Search finished.")
+        check(
+            bar.isHidden && cancel.isHidden && said().isEmpty && center.operations.isEmpty,
+            "SR-3 an operation that ends before the reveal delay shows and announces nothing: \(said())")
+        center.revealDelay = 0
+        var cancels = 0
+        let search = center.begin("Searching the document", in: document.editor, cancelLabel: "Cancel search") {
+            cancels += 1
+        }
+        root.layoutSubtreeIfNeeded()
+        check(
+            !bar.isHiddenOrHasHiddenAncestor && bar.isIndeterminate && !cancel.isHiddenOrHasHiddenAncestor
+                && bar.isDescendant(of: row) && cancel.isDescendant(of: row),
+            "SR-3 a running operation shows an indeterminate indicator and a Cancel button in the row")
+        check(
+            bar.accessibilityLabel() == "Searching the document" && cancel.title == "Cancel"
+                && cancel.accessibilityLabel() == "Cancel search" && bar.controlSize == .small,
+            "DS-70 the indicator says what is running and Cancel says what it cancels")
+        check(said() == ["Searching the document."], "DS-72 the start of the operation is announced once: \(said())")
+        center.update(search, done: 1, total: 4)
+        center.update(search, done: 2, total: 4)
+        check(
+            !bar.isIndeterminate && bar.doubleValue == 0.5 && bar.minValue == 0 && bar.maxValue == 1
+                && row.progress?.fraction == 0.5,
+            "DS-51 reported progress makes the indicator determinate at the real fraction: \(bar.doubleValue)")
+        check(said().count == 1, "DS-72 progress steps are not announced: \(said())")
+        // Another document's operation is not this tab's; one that belongs to no document is.
+        let elsewhere = TTEditor(frame: NSRect(x: 0, y: 0, width: 100, height: 100))
+        let other = center.begin("Replacing in the document", in: elsewhere, cancelLabel: "Cancel replacing") {}
+        check(row.progress?.id == search, "SR-3 a tab shows only the operations on its own document")
+        center.end(other)
+        window.setContentSize(NSSize(width: 800, height: 500))
+        root.layoutSubtreeIfNeeded()
+        let visible = descendants(row).filter {
+            !$0.isHiddenOrHasHiddenAncestor && ($0 === controller.status || $0 is NSButton || $0 is NSProgressIndicator)
+        }
+        check(
+            row.bounds.height == 28
+                && descendants(row).compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "status.position.0" }?
+                    .isHiddenOrHasHiddenAncestor == false
+                && visible.allSatisfy {
+                    $0.convert($0.bounds, to: row).minX >= -0.5
+                        && $0.convert($0.bounds, to: row).maxX <= row.bounds.width + 0.5
+                },
+            "DB-R5 at the minimum width the indicator and Cancel fit in the one row with the position")
+        cancel.performClick(nil)
+        check(
+            cancels == 1 && row.progress?.id == search,
+            "SR-3 Cancel in the row calls the operation's own cancellation once")
+        center.end(search, announce: "Search cancelled. Nothing was changed.")
+        check(
+            bar.isHidden && cancel.isHidden && row.progress == nil
+                && said().last == "Search cancelled. Nothing was changed.",
+            "SR-3 an ended operation leaves the row and a cancellation is announced: \(said())")
+        let folder = center.begin("Searching the folder", cancelLabel: "Stop the folder search") {}
+        check(
+            row.progress?.title == "Searching the folder" && bar.isIndeterminate && !bar.isHidden
+                && cancel.accessibilityLabel() == "Stop the folder search",
+            "SR-3 an operation that belongs to no document is shown, indeterminate, in the tab on screen")
+        center.end(folder)
+        check(bar.isHidden && center.operations.isEmpty, "fixture: no operation is left running")
+        window.setContentSize(NSSize(width: 1600, height: 500))
+        root.layoutSubtreeIfNeeded()
+
+        // The find bar's own search: a document searched in windows reports real progress in
+        // the row, and the row's Cancel stops it with nothing selected.
+        let finder = composition.searchController
+        let usualUnits = finder.largeDocumentUnits, usualChunk = finder.largeChunkBytes
+        finder.largeDocumentUnits = 64
+        finder.largeChunkBytes = 32
+        defer {
+            finder.largeDocumentUnits = usualUnits
+            finder.largeChunkBytes = usualChunk
+        }
+        document.editor.text = String(repeating: "alpha beta gamma\n", count: 60) + "needle\n"
+        _ = document.editor.setSelectionAnchor(0, caret: 0)
+        controller.refreshStatusDetails()
+        var fractions: [Double] = []
+        let observer = NotificationCenter.default.addObserver(
+            forName: StatusOperationCenter.didChange, object: center, queue: nil
+        ) { _ in
+            MainActor.assumeIsolated {
+                if let fraction = row.progress?.fraction { fractions.append(fraction) }
+            }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        NativeFixtureEnvironment.announcements = []
+        controller.findField.stringValue = "needle"
+        controller.performFind(backwards: false, focusEditor: false)
+        check(
+            controller.inlineSearchPending && row.progress?.title == "Searching the document" && !bar.isHidden
+                && cancel.accessibilityLabel() == "Cancel search",
+            "SR-3 a find-bar search is a status-row operation with a Cancel button while it runs")
+        _ = spinUntil(timeout: 5, "SR-3 the find-bar search finishes") { !controller.inlineSearchPending }
+        check(
+            document.editor.selectedText == "needle" && row.progress == nil && bar.isHidden
+                && center.operations.isEmpty,
+            "SR-3 the finished search selects its match and leaves the row")
+        check(
+            !fractions.isEmpty && fractions == fractions.sorted() && fractions.allSatisfy { $0 > 0 && $0 <= 1 },
+            "DS-51 a search of a large document reports its real progress to the row: \(fractions.prefix(4))… of \(fractions.count)")
+        check(
+            said().first == "Searching the document." && said().last == "Search finished. A match is selected."
+                && said().count == 2,
+            "DS-72 the search is announced when it starts and when it finishes, and not in between: \(said())")
+        _ = document.editor.setSelectionAnchor(0, caret: 0)
+        NativeFixtureEnvironment.announcements = []
+        controller.performFind(backwards: false, focusEditor: false)
+        try require(controller.inlineSearchPending && !cancel.isHidden, "fixture: a second find-bar search is running")
+        cancel.performClick(nil)
+        check(
+            !controller.inlineSearchPending && row.progress == nil && center.operations.isEmpty,
+            "SR-3 Cancel in the row cancels the find-bar search at once")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        check(
+            document.editor.selectionStart == 0 && document.editor.selectionEnd == 0
+                && said() == ["Searching the document.", "Search cancelled. Nothing was changed."],
+            "SR-3 a cancelled search selects nothing and says so: \(said())")
+        controller.findField.stringValue = ""
+
+        // A bulk change: the message gives the counts and Show Changes is a real button.
+        let followUp = try requireValue(
+            control(StatusBadgeRow.followUpIdentifier, NSButton.self), "fixture: follow-up button")
+        check(followUp.isHidden && !controller.hasStatusFollowUp, "SR-4 no follow-up is offered without a message that has one")
+        document.editor.text = "b\na\nc\n"
+        NativeFixtureEnvironment.announcements = []
+        let capture = try requireValue(BulkChangeCapture(document.editor, name: "Sort Lines"), "fixture: bulk capture")
+        document.editor.text = "a\nb\nc\n"
+        capture.finish()
+        root.layoutSubtreeIfNeeded()
+        let receipt = try requireValue(document.bulkReceipt, "fixture: the bulk change left a receipt")
+        check(
+            controller.statusText == receipt.summary && receipt.summary.hasPrefix("Sort Lines · ")
+                && !receipt.summary.localizedCaseInsensitiveContains("menu")
+                && !receipt.summary.contains("Show Changes"),
+            "SR-4 the bulk-change message gives the counts and no instruction: \(controller.statusText)")
+        check(
+            !followUp.isHiddenOrHasHiddenAncestor && followUp.title == "Show Changes" && followUp.isDescendant(of: row)
+                && followUp.accessibilityLabel() == "Show the changes made by Sort Lines" && followUp.isEnabled,
+            "SR-4 Show Changes is a button in the row, named for what it shows")
+        check(
+            said() == [receipt.summary + " Show Changes is a button in the status bar."],
+            "DS-72 the message is announced once, with where its follow-up is: \(said())")
+        let comparisons = composition.compare
+        let showedWindows = comparisons.showWindows
+        comparisons.showWindows = false
+        defer { comparisons.showWindows = showedWindows }
+        let openBefore = comparisons.windows.count
+        followUp.performClick(nil)
+        _ = spinUntil(timeout: 5, "SR-4 Show Changes opens the comparison") {
+            comparisons.windows.count == openBefore + 1
+        }
+        check(
+            comparisons.windows.count == openBefore + 1 && NSApp.modalWindow == nil,
+            "SR-4 the Show Changes button opens the before-and-after comparison, with no alert")
+        comparisons.windows.last?.close()
+        controller.refreshStatusDetails()
+        check(!followUp.isHidden, "SR-4 the follow-up stays while the text is as the change left it")
+        _ = spinUntil(timeout: 6, "SR-4 the transient message returns to the save state") {
+            controller.statusText == document.currentSaveStateStatus
+        }
+        controller.refreshStatusDetails()
+        check(
+            !followUp.isHidden && controller.statusText == document.currentSaveStateStatus,
+            "SR-4 the button outlasts the message, so it does not have to be caught in four seconds")
+        _ = document.editor.setSelectionAnchor(0, caret: 0)
+        _ = document.editor.replaceSelection("x")
+        controller.refreshStatusDetails()
+        check(
+            followUp.isHidden && !controller.hasStatusFollowUp,
+            "SR-4 the follow-up is withdrawn when the text changes again")
+        // A second follow-up: a saved language that is gone offers the chooser.
+        var presented = 0
+        composition.languages.presentChooser = { panel, _ in
+            presented += 1
+            panel.form.close()
+        }
+        defer { composition.languages.presentChooser = { $0.show(parent: $1) } }
+        controller.showUnavailableLanguage()
+        check(
+            !followUp.isHidden && followUp.title == "Choose Language…"
+                && controller.statusText == "The saved language profile is unavailable.",
+            "SR-4 an unavailable language offers Choose Language… as a button")
+        followUp.performClick(nil)
+        check(presented == 1, "SR-4 that button opens the language chooser")
+        controller.refreshStatusDetails()
+        check(followUp.isHidden, "SR-4 a follow-up that no longer applies leaves the row")
+        controller.showRecoveryStatus(document.currentSaveStateStatus, failed: false)
     }
 
     /// The language field opens the filterable chooser. The chooser is driven through its real

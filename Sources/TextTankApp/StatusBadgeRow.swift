@@ -88,6 +88,112 @@ enum StatusMessageSummary {
     }
 }
 
+/// The long operations the status row shows: a search of a large document, a search of a
+/// folder. The row of every tab that shows the operation's document carries a progress
+/// indicator and a Cancel button for it; an operation that belongs to no document is shown in
+/// every tab. The owner of the work starts, updates and ends its operation here and keeps its
+/// own cancellation; Cancel in the row calls that.
+///
+/// An operation is revealed only once it has run for `revealDelay`, so a search that returns at
+/// once neither flashes an indicator nor speaks. Its start is announced when it is revealed;
+/// its end is announced only if the owner gives the words, which it does when nothing else
+/// announces the result (DS-36, DS-72). Progress steps are never announced. Progress is the
+/// real fraction of the work or indeterminate (DS-51).
+@MainActor final class StatusOperationCenter {
+    static let shared = StatusOperationCenter()
+    static let didChange = Notification.Name("TextTank.StatusOperationDidChange")
+    struct Operation {
+        let id: UUID
+        /// What is running, in words: "Searching the document".
+        let title: String
+        /// The part that is done, from 0 to 1, or nil while the amount of work is unknown.
+        var fraction: Double?
+        let cancelLabel: String
+        let cancel: @MainActor () -> Void
+        fileprivate let scoped: Bool
+        fileprivate weak var editor: TTEditor?
+        fileprivate var revealed = false
+    }
+    /// How long an operation runs before it is shown and announced. Checks set this to zero.
+    var revealDelay: TimeInterval = 0.3
+    private(set) var operations: [Operation] = []
+    /// - Parameters:
+    ///   - editor: a view of the document the work is on; nil when it belongs to no document.
+    ///   - cancelLabel: what the Cancel button does, for assistive technology: "Cancel search".
+    @discardableResult func begin(
+        _ title: String, in editor: TTEditor? = nil, cancelLabel: String, cancel: @escaping @MainActor () -> Void
+    ) -> UUID {
+        let id = UUID()
+        operations.append(
+            Operation(
+                id: id, title: title, fraction: nil, cancelLabel: cancelLabel, cancel: cancel, scoped: editor != nil,
+                editor: editor))
+        if revealDelay <= 0 {
+            reveal(id)
+        } else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + revealDelay) { [weak self] in self?.reveal(id) }
+        }
+        return id
+    }
+    private func reveal(_ id: UUID) {
+        guard let index = operations.firstIndex(where: { $0.id == id }), !operations[index].revealed else { return }
+        operations[index].revealed = true
+        Announce.say(operations[index].title + ".")
+        NotificationCenter.default.post(name: Self.didChange, object: self)
+    }
+    /// Real progress: `done` of `total` units of the work. A total that is not positive leaves
+    /// the indicator indeterminate. Rows are told only when the whole percentage changes.
+    func update(_ id: UUID, done: Int, total: Int) {
+        guard let index = operations.firstIndex(where: { $0.id == id }) else { return }
+        let fraction = total > 0 ? min(1, max(0, Double(done) / Double(total))) : nil
+        let before = operations[index].fraction.map { Int($0 * 100) }
+        operations[index].fraction = fraction
+        if operations[index].revealed, before != fraction.map({ Int($0 * 100) }) {
+            NotificationCenter.default.post(name: Self.didChange, object: self)
+        }
+    }
+    /// Ends an operation however it ended. `announce` is spoken only for an operation that was
+    /// revealed; pass it when no other surface announces the outcome.
+    func end(_ id: UUID, announce: String? = nil) {
+        guard let index = operations.firstIndex(where: { $0.id == id }) else { return }
+        let ended = operations.remove(at: index)
+        guard ended.revealed else { return }
+        if let announce { Announce.say(announce) }
+        NotificationCenter.default.post(name: Self.didChange, object: self)
+    }
+    /// The Cancel button of a row: asks the owner to cancel. The owner ends the operation.
+    func cancel(_ id: UUID) { operations.first { $0.id == id }?.cancel() }
+    /// The newest revealed operation a tab with these views shows.
+    func operation(for views: [TTEditor]) -> Operation? {
+        operations.last { operation in
+            guard operation.revealed else { return false }
+            guard operation.scoped else { return true }
+            guard let editor = operation.editor else { return false }
+            return views.contains { $0 === editor || $0.sharesDocument(with: editor) }
+        }
+    }
+}
+
+/// What the row shows for a running operation.
+struct StatusProgress: Equatable {
+    let id: UUID
+    let title: String
+    let fraction: Double?
+    let cancelLabel: String
+}
+
+/// A follow-up to a status message, offered as a button in the row instead of as an
+/// instruction in the message ("Show Changes"). `isCurrent` says whether it still applies; the
+/// row drops it when it does not.
+struct StatusFollowUp {
+    let title: String
+    /// The action and its scope, for assistive technology (DS-70).
+    let accessibilityLabel: String
+    let toolTip: String
+    let run: @MainActor () -> Void
+    let isCurrent: @MainActor () -> Bool
+}
+
 /// What every field of the status row is, whichever native control shows it.
 @MainActor private protocol StatusFieldControl: NSControl {
     var field: StatusField { get }
@@ -231,6 +337,62 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
         needsLayout = true
     }
 
+    // MARK: Progress and follow-up
+
+    static let progressIdentifier = "status.progress", cancelIdentifier = "status.cancelOperation"
+    static let followUpIdentifier = "status.followUp"
+    private let progressBar = NSProgressIndicator()
+    private let cancelButton = NSButton(title: "Cancel", target: nil, action: nil)
+    private let followUpButton = NSButton(title: "", target: nil, action: nil)
+    private(set) var progress: StatusProgress?
+    /// Called with the operation's identity when its Cancel button is pressed.
+    var onCancelOperation: ((UUID) -> Void)?
+    private var followUp: StatusFollowUp?
+    /// Shows a small progress indicator and a Cancel button for a running operation, or removes
+    /// them. The indicator is determinate when the operation reports a real fraction (DS-51).
+    func setProgress(_ value: StatusProgress?) {
+        guard value != progress else { return }
+        let wasShown = progress != nil
+        progress = value
+        progressBar.isHidden = value == nil
+        cancelButton.isHidden = value == nil
+        guard let value else {
+            progressBar.stopAnimation(nil)
+            needsLayout = true
+            return
+        }
+        if let fraction = value.fraction {
+            progressBar.stopAnimation(nil)
+            progressBar.isIndeterminate = false
+            progressBar.doubleValue = fraction
+        } else {
+            progressBar.isIndeterminate = true
+            progressBar.startAnimation(nil)
+        }
+        progressBar.setAccessibilityLabel(value.title)
+        progressBar.toolTip = value.title
+        cancelButton.setAccessibilityLabel(value.cancelLabel)
+        cancelButton.cell?.setAccessibilityLabel(value.cancelLabel)
+        cancelButton.toolTip = value.cancelLabel
+        if !wasShown { needsLayout = true }
+    }
+    @objc private func cancelShownOperation(_ sender: Any?) {
+        if let progress { onCancelOperation?(progress.id) }
+    }
+    /// Offers a follow-up as a button beside the status message, or withdraws it.
+    func setFollowUp(_ value: StatusFollowUp?) {
+        followUp = value
+        followUpButton.isHidden = value == nil
+        if let value {
+            followUpButton.title = value.title
+            followUpButton.setAccessibilityLabel(value.accessibilityLabel)
+            followUpButton.cell?.setAccessibilityLabel(value.accessibilityLabel)
+            followUpButton.toolTip = value.toolTip
+        }
+        needsLayout = true
+    }
+    @objc private func runFollowUp(_ sender: Any?) { followUp?.run() }
+
     let largeFileButton = NSButton(title: "Apply Language and Wrap Settings", target: nil, action: nil)
     var showsLargeFileAction: Bool {
         get { !largeFileButton.isHidden }
@@ -249,6 +411,7 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
     private var fullLeadingText = "Ready", compactLeadingText = "Ready"
     private var widths: [StatusField: NSLayoutConstraint] = [:]
     private var rebuildingMenu = false
+    private static let progressWidth: CGFloat = 72
     private var overflowWidth: CGFloat { max(24, ceil(overflow.intrinsicContentSize.width)) }
     private(set) var collapsedFields: [StatusField] = []
     /// Position remains present at the supported 800-point minimum. Selection follows it in priority.
@@ -270,6 +433,30 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
         addSubview(stack)
         spacer.setContentHuggingPriority(.init(1), for: .horizontal)
         spacer.setContentCompressionResistancePriority(.init(1), for: .horizontal)
+        followUpButton.controlSize = .small
+        followUpButton.identifier = .init(Self.followUpIdentifier)
+        followUpButton.target = self
+        followUpButton.action = #selector(runFollowUp(_:))
+        followUpButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        followUpButton.isHidden = true
+        stack.addArrangedSubview(followUpButton)
+        progressBar.style = .bar
+        progressBar.controlSize = .small
+        progressBar.minValue = 0
+        progressBar.maxValue = 1
+        progressBar.isIndeterminate = true
+        progressBar.identifier = .init(Self.progressIdentifier)
+        progressBar.translatesAutoresizingMaskIntoConstraints = false
+        progressBar.widthAnchor.constraint(equalToConstant: Self.progressWidth).isActive = true
+        progressBar.isHidden = true
+        stack.addArrangedSubview(progressBar)
+        cancelButton.controlSize = .small
+        cancelButton.identifier = .init(Self.cancelIdentifier)
+        cancelButton.target = self
+        cancelButton.action = #selector(cancelShownOperation(_:))
+        cancelButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        cancelButton.isHidden = true
+        stack.addArrangedSubview(cancelButton)
         largeFileButton.controlSize = .small
         largeFileButton.isHidden = true
         largeFileButton.toolTip = "Enable the detected language and your Wrap Lines setting for this large file."
@@ -456,12 +643,13 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
                     (text as NSString).size(withAttributes: [
                         .font: label.font ?? NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
                     ]).width) + 2
-            let actionWidth = [diskAction, diskCompare, largeFileButton, recording].filter { $0.superview != nil && !$0.isHidden }
-                .reduce(
-                    CGFloat(0)
-                ) {
+            // The action buttons, the follow-up and a running operation's indicator and Cancel
+            // keep their width; fields collapse and the message shortens to make room for them.
+            let buttons = [diskAction, diskCompare, followUpButton, cancelButton, largeFileButton, recording]
+            let actionWidth =
+                buttons.filter { $0.superview != nil && !$0.isHidden }.reduce(CGFloat(0)) {
                     $0 + ceil($1.intrinsicContentSize.width) + stack.spacing
-                }
+                } + (progressBar.isHidden ? 0 : Self.progressWidth + stack.spacing)
             // Once a field has left the row the More menu takes its own place in it.
             let more = hidden.isEmpty ? 0 : overflowWidth + stack.spacing
             return textWidth + actionWidth + more + visible.reduce(0) { $0 + (widths[$1.field]?.constant ?? 0) }

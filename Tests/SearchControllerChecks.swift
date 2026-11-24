@@ -387,12 +387,46 @@ final class ProgressTicks: @unchecked Sendable {
         let folded = try byteRanges("na\u{ef}ve", matchCase: false, in: text)
         let exact = try byteRanges("na\u{ef}ve", matchCase: true, in: text)
         try require(folded.count == 25 && exact.count == 12, "fixture: 25 folded and 12 exact matches")
-        // Count.
+        // Count. The same search is a status-row operation: real progress and a Cancel that is
+        // this controller's own cancellation.
+        let center = StatusOperationCenter.shared
+        let usualReveal = center.revealDelay
+        center.revealDelay = 0
+        defer { center.revealDelay = usualReveal }
+        var rowFractions: [Double] = []
+        let rowObserver = NotificationCenter.default.addObserver(
+            forName: StatusOperationCenter.didChange, object: center, queue: nil
+        ) { _ in
+            MainActor.assumeIsolated {
+                if let fraction = center.operation(for: [editor])?.fraction { rowFractions.append(fraction) }
+            }
+        }
+        defer { NotificationCenter.default.removeObserver(rowObserver) }
+        check(center.operations.isEmpty, "fixture: no status-row operation before the search")
         controller.queryField.stringValue = "na\u{ef}ve"
         controller.findAll(nil)
         check(
             controller.isSearching && controller.status.stringValue == "Searching…",
             "a large search starts off the main thread")
+        let shown = center.operation(for: [editor])
+        check(
+            center.operations.count == 1 && shown?.title == "Searching the document"
+                && shown?.cancelLabel == "Cancel search" && shown?.fraction == nil
+                && center.operation(for: [TTEditor(frame: .zero)]) == nil,
+            "SR-3 a large search is a status-row operation on its own document, indeterminate until progress arrives")
+        await finished()
+        check(
+            center.operations.isEmpty && !rowFractions.isEmpty && rowFractions == rowFractions.sorted()
+                && rowFractions.allSatisfy { $0 > 0 && $0 <= 1 },
+            "SR-3 the row is given the search's real progress and loses the operation when it ends: \(rowFractions.count) steps")
+        controller.findAll(nil)
+        let running = try requireValue(center.operation(for: [editor]), "fixture: the second search is running")
+        center.cancel(running.id)
+        check(
+            !controller.isSearching && controller.lastOutcome == .cancelled && center.operations.isEmpty
+                && controller.status.stringValue == "Cancelled; no pending replacements applied.",
+            "SR-3 Cancel in the status row is the search's own cancellation and ends the operation")
+        controller.findAll(nil)
         await finished()
         check(
             controller.lastOutcome == .found(matches: 25, documents: 1, truncated: false)
