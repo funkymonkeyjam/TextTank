@@ -206,6 +206,7 @@ package enum SearchFailure: LocalizedError, CustomNSError, Equatable {
     case replacementCancelled, invalidReplacementRange, macroResultLimit, macroReplacement(String)
     case unknownRecordedAction, macroStopped(String)
     case largeDocumentRegex, largeSelectionRegex, largeDocumentAction, largeDocumentAllOpen(String)
+    case largeDocumentMacro
     static package var errorDomain: String { "TextTank.Search" }
     package var errorCode: Int {
         switch self {
@@ -214,6 +215,7 @@ package enum SearchFailure: LocalizedError, CustomNSError, Equatable {
         case .largeSelectionRegex: return 17
         case .largeDocumentAction: return 18
         case .largeDocumentAllOpen: return 19
+        case .largeDocumentMacro: return 20
         case .inlineResultLimit: return 12
         case .inlineReplacement: return 13
         case .positionMapping: return 14
@@ -230,6 +232,9 @@ package enum SearchFailure: LocalizedError, CustomNSError, Equatable {
     }
     package var errorDescription: String? {
         switch self {
+        case .largeDocumentMacro:
+            return
+                "A recorded search cannot be replayed in a document this large. Use Find or Find and Replace for this step. Nothing was changed."
         case .largeDocumentRegex:
             return
                 "This document is too large for a regular expression search. Select part of it and choose Selection in Find and Replace, or change the search mode to Normal. Nothing was changed."
@@ -375,7 +380,7 @@ package enum SearchCore {
     /// result cap is the snapshot engine's. A regular expression is refused in plain words.
     static package func searchBytes(
         _ data: Data, options: SearchOptions, range: NSRange? = nil, backwards: Bool = false,
-        overlapping: Bool = false, limit: Int = 100000, timeLimit: TimeInterval? = nil,
+        overlapping: Bool = false, limit: Int = 100000, stopAtLimit: Bool = false, timeLimit: TimeInterval? = nil,
         chunkBytes: Int = largeChunkBytes, cancellation: TTSearchCancellation = TTSearchCancellation(),
         progress: ((Int) -> Void)? = nil
     ) throws -> ByteSearchReport {
@@ -389,7 +394,7 @@ package enum SearchCore {
             try TTSearchEngine.searchUTF8(
                 data, range: scope, query: options.query, replacement: options.replacement,
                 mode: options.mode.nativeMode, matchCase: options.matchCase, wholeWord: options.wholeWord,
-                backwards: backwards, overlapping: overlapping, maximumMatches: limit,
+                backwards: backwards, overlapping: overlapping, maximumMatches: limit, stopAtLimit: stopAtLimit,
                 chunkBytes: UInt(max(0, chunkBytes)),
                 cancellation: cancellation, timeLimit: timeLimit ?? largeTimeLimit(bytes: scope.length),
                 progress: progress.map { report in { report(Int($0)) } })

@@ -62,12 +62,15 @@ __attribute__((objc_subclassing_restricted))
 /// Matching is the same as searchText: literal comparison, Unicode case folding without
 /// `matchCase`, and whole-word tests that see the bytes around `byteRange`. `backwards` reports
 /// matches from the end of the range towards its start. A regular expression is refused.
+/// With `stopAtLimit` the search returns as soon as it holds `maximumMatches` matches, without
+/// looking for one more: `truncated` is then NO and says nothing about further matches. Cancel
+/// and the deadline are looked at after every mebibyte of comparison work, inside a window too.
 /// `progress` is called on the calling thread after each window with the bytes covered so far.
 + (nullable TTSearchResult *)searchUTF8:(NSData *)data range:(NSRange)byteRange
     query:(NSString *)query replacement:(NSString *)replacement mode:(TTSearchMode)mode
     matchCase:(BOOL)matchCase wholeWord:(BOOL)wholeWord backwards:(BOOL)backwards
     overlapping:(BOOL)overlapping maximumMatches:(NSInteger)maximumMatches
-    chunkBytes:(NSUInteger)chunkBytes cancellation:(TTSearchCancellation *)cancellation
+    stopAtLimit:(BOOL)stopAtLimit chunkBytes:(NSUInteger)chunkBytes cancellation:(TTSearchCancellation *)cancellation
     timeLimit:(NSTimeInterval)timeLimit
     progress:(nullable void (NS_NOESCAPE ^)(NSUInteger coveredBytes))progress error:(NSError **)error;
 /// Regular expressions compiled so far in this process (not served from the cache); for checks.

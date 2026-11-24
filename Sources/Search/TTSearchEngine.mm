@@ -242,7 +242,7 @@ const NSUInteger defaultChunkBytes=4*1024*1024;
     for(;i<n;i++){units+=(p[i]&0xC0)!=0x80;units+=p[i]>=0xF0;}
     return units;
 }
-+ (TTSearchResult *)searchUTF8:(NSData *)data range:(NSRange)scope query:(NSString *)query replacement:(NSString *)replacement mode:(TTSearchMode)mode matchCase:(BOOL)matchCase wholeWord:(BOOL)wholeWord backwards:(BOOL)backwards overlapping:(BOOL)overlapping maximumMatches:(NSInteger)maximumMatches chunkBytes:(NSUInteger)chunkBytes cancellation:(TTSearchCancellation *)cancellation timeLimit:(NSTimeInterval)timeLimit progress:(void (NS_NOESCAPE ^)(NSUInteger))progress error:(NSError **)error {
++ (TTSearchResult *)searchUTF8:(NSData *)data range:(NSRange)scope query:(NSString *)query replacement:(NSString *)replacement mode:(TTSearchMode)mode matchCase:(BOOL)matchCase wholeWord:(BOOL)wholeWord backwards:(BOOL)backwards overlapping:(BOOL)overlapping maximumMatches:(NSInteger)maximumMatches stopAtLimit:(BOOL)stopAtLimit chunkBytes:(NSUInteger)chunkBytes cancellation:(TTSearchCancellation *)cancellation timeLimit:(NSTimeInterval)timeLimit progress:(void (NS_NOESCAPE ^)(NSUInteger))progress error:(NSError **)error {
     @try { try {
         const uint8_t *p=(const uint8_t *)data.bytes;const size_t n=data.length;
         if(mode==TTSearchModeRegularExpression)throw std::runtime_error("A regular expression cannot search a document this large. Select part of the document and search the selection, or change the search mode to Normal.");
@@ -285,7 +285,96 @@ const NSUInteger defaultChunkBytes=4*1024*1024;
             outputSize+=replacementText.length;
             if(outputSize>maximumUnits)throw std::runtime_error("Replacement expansion exceeded the 64 Mi UTF-16 safety limit.");
             [matches addObject:[[TTSearchMatch alloc]initWithRange:NSMakeRange(start,length) replacement:replacementText]];
-            return true;
+            // Navigation wants the nearest match and nothing after it: stop here, so that no
+            // further window is read and a later deadline cannot discard the match in hand.
+            return !(stopAtLimit&&matches.count>=(NSUInteger)maximumMatches);
+        };
+        // Work is bounded between two looks at Cancel and the deadline, inside a window too: a
+        // long search text with a repetitive start can cost its whole length at every position.
+        const size_t workStep=1024*1024;size_t work=0;
+        auto spend=[&](size_t amount){work+=amount;if(work>=workStep){work=0;checkBudget();}};
+        // First exact match that starts at or after `from` and ends by `limit`.
+        auto exactForward=[&](size_t from,size_t limit,size_t *start){
+            if(limit<from||limit-from<needleLength)return false;
+            const size_t last=limit-needleLength;
+            for(size_t i=from;i<=last;){
+                const void *q=memchr(p+i,needleBytes[0],last-i+1);
+                if(!q){spend(last-i+1);return false;}
+                const size_t at=(const uint8_t *)q-p;size_t k=1;
+                while(k<needleLength&&p[at+k]==needleBytes[k])++k;
+                spend(at-i+k);
+                if(k==needleLength){*start=at;return true;}
+                i=at+1;
+            }
+            return false;
+        };
+        // Last exact match that starts at or after `floor` and ends by `to`.
+        auto exactBackward=[&](size_t floor,size_t to,size_t *start){
+            if(to<floor||to-floor<needleLength)return false;
+            for(size_t i=to-needleLength+1;i-->floor;){
+                size_t k=0;
+                if(p[i]==needleBytes[0]){k=1;while(k<needleLength&&p[i+k]==needleBytes[k])++k;}
+                spend(k+1);
+                if(k==needleLength){*start=i;return true;}
+            }
+            return false;
+        };
+        // Folded matching is searched a slice of the window at a time, sized so that one call
+        // costs about the same however long the search text is. A slice reads past its end by
+        // the longest match, so the first match found is the first match there is.
+        const size_t reachUnits=3*needle.length+2;
+        const size_t slice=std::max<size_t>(8,(4*chunkBytes)/needle.length);
+        // When the search text is long for the window, that overlap would dominate a slice and
+        // one call could again cost the square of the search text's length. Then every position
+        // is tried on its own with an anchored comparison, which costs at most the search
+        // text's length and is counted as work. A position is skipped without a comparison only
+        // when both its character and the search text's first are ASCII and differ beyond case.
+        const bool byPosition=slice<4*needle.length;
+        const unichar firstUnit=[needle characterAtIndex:0];
+        auto lower=[](unichar c){return (unichar)(c>='A'&&c<='Z'?c+32:c);};
+        auto mayStart=[&](FoldedWindow &w,size_t unit){
+            const unichar c=w.ascii?(unichar)p[w.byteStart+unit]:w.units[unit];
+            if(low(c))return false;
+            return !(c<0x80&&firstUnit<0x80)||lower(c)==lower(firstUnit);
+        };
+        // The match that starts exactly at `unit` and ends by `endUnit`, if there is one.
+        auto matchAt=[&](FoldedWindow &w,size_t unit,size_t endUnit,size_t *start,size_t *length){
+            if(!mayStart(w,unit)){spend(1);return false;}
+            spend(needle.length);
+            NSRange r=[w.string rangeOfString:needle options:folded|NSAnchoredSearch range:NSMakeRange(unit,std::min(reachUnits,endUnit-unit))];
+            if(r.location==NSNotFound)return false;
+            *start=w.byteAt(r.location);*length=w.byteAt(NSMaxRange(r))-*start;return true;
+        };
+        auto foldedForward=[&](FoldedWindow &w,size_t from,size_t *start,size_t *length){
+            const size_t total=w.string.length;
+            if(byPosition){
+                for(size_t unit=w.unitAt(from);unit<total;unit++)if(matchAt(w,unit,total,start,length))return true;
+                return false;
+            }
+            for(size_t unit=w.unitAt(from);unit<total;unit+=slice){
+                const size_t end=total-unit>slice+reachUnits?unit+slice+reachUnits:total;
+                NSRange r=[w.string rangeOfString:needle options:folded range:NSMakeRange(unit,end-unit)];
+                if(r.location!=NSNotFound){*start=w.byteAt(r.location);*length=w.byteAt(NSMaxRange(r))-*start;return true;}
+                if(end>=total)return false;
+                checkBudget();
+            }
+            return false;
+        };
+        auto foldedBackward=[&](FoldedWindow &w,size_t floor,size_t to,size_t *start,size_t *length){
+            const size_t lowUnit=w.unitAt(floor),highUnit=w.unitAt(to);
+            if(byPosition){
+                for(size_t unit=highUnit;unit-->lowUnit;)if(matchAt(w,unit,highUnit,start,length))return true;
+                return false;
+            }
+            for(size_t startHigh=highUnit;;){
+                const size_t a=startHigh-lowUnit>slice?startHigh-slice:lowUnit;
+                const size_t b=highUnit-startHigh>reachUnits?startHigh+reachUnits:highUnit;
+                NSRange r=[w.string rangeOfString:needle options:folded|NSBackwardsSearch range:NSMakeRange(a,b-a)];
+                if(r.location!=NSNotFound){*start=w.byteAt(r.location);*length=w.byteAt(NSMaxRange(r))-*start;return true;}
+                if(a<=lowUnit)return false;
+                startHigh=a;
+                checkBudget();
+            }
         };
         auto alignDown=[&](size_t i,size_t floor){while(i>floor&&i<n&&continuationByte(p[i]))--i;return i;};
         auto alignUp=[&](size_t i,size_t ceiling){while(i<ceiling&&continuationByte(p[i]))++i;return i;};
@@ -303,16 +392,9 @@ const NSUInteger defaultChunkBytes=4*1024*1024;
                     if((++inWindow&255)==0)checkBudget();
                     size_t start=0,length=0;
                     if(matchCase){
-                        if(windowEnd-from<needleLength)break;
-                        const void *hit=memmem(p+from,windowEnd-from,needleBytes,needleLength);
-                        if(!hit)break;
-                        start=(const uint8_t *)hit-p;length=needleLength;
-                    }else{
-                        const size_t unit=window->unitAt(from);
-                        NSRange r=[window->string rangeOfString:needle options:folded range:NSMakeRange(unit,window->string.length-unit)];
-                        if(r.location==NSNotFound)break;
-                        start=window->byteAt(r.location);length=window->byteAt(NSMaxRange(r))-start;
-                    }
+                        if(!exactForward(from,windowEnd,&start))break;
+                        length=needleLength;
+                    }else if(!foldedForward(*window,from,&start,&length))break;
                     if(start>=coreEnd)break; // it belongs to the next window, which finds it again
                     bool accepted=false;
                     if(!consider(start,length,&accepted)){stopped=true;break;}
@@ -337,17 +419,8 @@ const NSUInteger defaultChunkBytes=4*1024*1024;
                 while(to>coreStart){
                     if((++inWindow&255)==0)checkBudget();
                     size_t start=0,length=0;bool found=false;
-                    if(matchCase){
-                        if(to-coreStart>=needleLength){
-                            for(size_t i=to-needleLength+1;i-->coreStart;){
-                                if(p[i]==needleBytes[0]&&memcmp(p+i,needleBytes,needleLength)==0){start=i;length=needleLength;found=true;break;}
-                            }
-                        }
-                    }else{
-                        const size_t lowUnit=window->unitAt(coreStart),highUnit=window->unitAt(to);
-                        NSRange r=[window->string rangeOfString:needle options:folded|NSBackwardsSearch range:NSMakeRange(lowUnit,highUnit-lowUnit)];
-                        if(r.location!=NSNotFound){start=window->byteAt(r.location);length=window->byteAt(NSMaxRange(r))-start;found=true;}
-                    }
+                    if(matchCase){found=exactBackward(coreStart,to,&start);length=needleLength;}
+                    else found=foldedBackward(*window,coreStart,to,&start,&length);
                     if(!found)break;
                     bool accepted=false;
                     if(!consider(start,length,&accepted)){stopped=true;break;}

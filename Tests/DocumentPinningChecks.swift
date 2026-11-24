@@ -685,7 +685,11 @@ extension DocumentChecks {
                 try JSONEncoder().encode(search)
             }
             defaults.set(searchBytes, forKey: "TextTank.Search.v1")
-            let finder = SearchController(defaults: defaults)
+            // The legacy value is imported only when no private Find file exists. A Find action
+            // earlier in this process (the find bar now saves the history) may have written the
+            // shared isolated file, so this launch is given a private file of its own.
+            let finder = SearchController(
+                defaults: defaults, preferencesURL: scratch.appendingPathComponent("legacy-import-Find.json"))
             check(
                 try JSONDecoder().decode(SearchOptions.self, from: searchBytes) == search
                     && finder.caseButton.state == .on && finder.wordButton.state == .on && finder.dotButton.state == .on

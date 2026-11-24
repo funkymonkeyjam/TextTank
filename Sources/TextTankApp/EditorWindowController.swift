@@ -1633,8 +1633,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         findCount.stringValue = ""
         if !afterReplacement {
             search.shareFindPasteboard(options.query)
-            search.remember(query: options.query, replacement: replacing ? options.replacement : nil)
         }
+        // A search in a document above the engine's limit cannot be replayed, so it is not recorded.
+        let large = search.isLargeDocument(editor)
         let token = inlineSearchGeneration, flag = TTSearchCancellation()
         inlineCancellation = flag
         inlineSearchPending = true
@@ -1683,12 +1684,25 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 }
                 if self.findCount.stringValue.hasSuffix("…") { self.findCount.stringValue = "" }
                 self.updateInlineFindValidation()
+                // The history takes a search once it has run, whatever it found; not one that was
+                // refused, failed, went stale or was cancelled.
+                switch result {
+                case .applied, .replacedAll, .noMatch:
+                    if !afterReplacement {
+                        search.remember(query: options.query, replacement: replacing ? options.replacement : nil)
+                    }
+                case .stale, .cancelled, .failed: break
+                }
                 switch result {
                 case .applied, .replacedAll:
                     self.endFindPreview(restore: false)
                     if self.findBarVisible { self.findPreview = InlineFindPreview(self.activeEditor) }
                     guard let editor else { return }
-                    delegate.macros?.recordSearch(.init(options: options, action: action), editor: editor)
+                    if large {
+                        delegate.macros?.invalidateRecording(reason: SearchController.largeUnrecordable)
+                    } else {
+                        delegate.macros?.recordSearch(.init(options: options, action: action), editor: editor)
+                    }
                     if case .replacedAll(let count) = result {
                         self.showTransientStatus(
                             count == 1

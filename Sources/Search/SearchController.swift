@@ -163,7 +163,13 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     private var largeNavigation: Navigation?, largeScope: Navigation?
     /// Whether an editor at a revision is above `largeDocumentUnits`, so that the next press does
     /// not count the document again.
-    private var largeDecision: (editor: ObjectIdentifier, revision: UInt, limit: Int, large: Bool)?
+    private struct LargeDecision {
+        weak var editor: TTEditor?
+        let revision: UInt, limit: Int, large: Bool
+    }
+    private var largeDecisions: [ObjectIdentifier: LargeDecision] = [:]
+    /// How often a document's bytes were copied only to decide whether it is large; for checks.
+    private(set) var largeDecisionCopies = 0
     private var lastNavigation: Navigation?, navigationScope: Navigation?
     /// Set while the match after a single Replace is being looked for: what that Replace reported.
     private var appliedReplace: (status: String, outcome: SearchOutcome?)?
@@ -528,19 +534,19 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         o.wrap = wrapButton.state == .on
         return o
     }
-    /// `remembering` is the action about to run: its search enters the history, and so does its
-    /// replacement when the action replaces.
-    private func readOptions(remembering action: Action? = nil) -> SearchOptions {
+    /// A search enters the history once it has run: its text, and its replacement when the
+    /// action replaces. A search refused before it started, or one whose expression did not
+    /// compile, is not remembered.
+    private func rememberRan(_ o: SearchOptions, _ action: Action) {
+        remember(
+            query: o.query, replacement: action == .replaceOne || action == .replaceAll ? o.replacement : nil)
+    }
+    private func readOptions() -> SearchOptions {
         // Commit the shared field editor before reading distinct window fields.
         window?.makeFirstResponder(nil)
         let o = sharedOptions(query: queryField.stringValue, replacement: replacementField.stringValue)
         setSharedQuery(o.query, from: self)
         setSharedReplacement(o.replacement, from: self)
-        if let action {
-            let replacing = action == .replaceOne || action == .replaceAll
-            if !o.query.isEmpty, findHistory.remember(query: o.query) { publishHistory() }
-            if replacing, !o.replacement.isEmpty, findHistory.remember(replacement: o.replacement) { publishHistory() }
-        }
         savePreferences(o)
         options = o
         shareFindPasteboard(o.query)
@@ -642,7 +648,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     }
     private enum Action { case next, previous, all, replaceAll, replaceOne, bookmark, mark }
     private func run(_ action: Action) {
-        let opts = readOptions(remembering: action), navigating = action == .next || action == .previous
+        let opts = readOptions(), navigating = action == .next || action == .previous
         guard !opts.query.isEmpty else {
             fail("Enter a search expression.", .needsInput, audible: navigating)
             return
@@ -667,7 +673,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         searchIdentity = currentSearchIdentity()
         // A document above the engine's limit is searched as bytes, on its own.
         if scopeIndex == .allOpenDocuments {
-            if let large = editors.first(where: { largeSnapshot(of: $0) != nil }) {
+            if let large = editors.first(where: { isLargeDocument($0) }) {
                 report(SearchFailure.largeDocumentAllOpen(EditorLifetime.title(large)), audible: navigating)
                 return
             }
@@ -734,6 +740,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             status.stringValue = Self.foundStatus(rows.count, resultBuffers.count, resultTruncated)
             lastOutcome = .found(matches: rows.count, documents: resultBuffers.count, truncated: resultTruncated)
             reusedResults += 1
+            rememberRan(opts, action)
             let moved = navigate(
                 backwards: action == .previous, wrap: opts.wrap, freshScope: freshScope,
                 allOpen: scopeIndex == .allOpenDocuments,
@@ -786,6 +793,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                     return (reports: reports, bookmarkLines: lines)
                 }.value
                 guard let self, self.generation == token, !flag.cancelled else { return }
+                self.rememberRan(opts, action)
                 let replaced = self.complete(
                     action, options: opts, key: key, buffers: buffers, reports: computed.reports,
                     bookmarkLines: computed.bookmarkLines,
@@ -822,25 +830,38 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         }
         fail(error.localizedDescription, .failed(error.localizedDescription), audible: audible)
     }
-    /// The document's bytes when it is longer than `largeDocumentUnits` UTF-16 units, else nil.
-    /// A document that short in bytes is never copied; a longer one is copied once and counted
-    /// without being decoded, and the answer is remembered for its revision.
-    func largeSnapshot(of editor: TTEditor) -> Data? {
-        let limit = largeDocumentUnits
-        guard editor.byteLength > limit else { return nil }
+    /// Why a search step in a large document is left out of a macro recording: it could not be
+    /// replayed, because playback is synchronous and a large search must not hold the window.
+    static let largeUnrecordable = "Searches in a document this large are not recorded in macros."
+    /// Whether the document is longer than `largeDocumentUnits` UTF-16 units. Its byte length
+    /// settles most cases with no copy: at or under the limit in bytes it cannot be, and above
+    /// three times the limit it must be. Between the two the bytes are copied once and counted
+    /// without decoding, and the answer is kept for that revision of that document, so asking
+    /// again (every press, every open document) copies nothing.
+    func isLargeDocument(_ editor: TTEditor) -> Bool {
+        let limit = largeDocumentUnits, bytes = editor.byteLength
+        if bytes <= limit { return false }
+        if bytes / 3 > limit { return true }
         let id = ObjectIdentifier(editor), revision = editor.revision
-        if let known = largeDecision, known.editor == id, known.revision == revision, known.limit == limit {
-            // The copy lives exactly as long as the search that holds it, whatever pool the caller has.
-            return known.large ? autoreleasepool { editor.utf8Data } : nil
+        if let known = largeDecisions[id], known.editor === editor, known.revision == revision, known.limit == limit {
+            return known.large
         }
-        let data = Self.largeSnapshot(of: editor, limit: limit)
-        largeDecision = (id, revision, limit, data != nil)
-        return data
+        largeDecisionCopies += 1
+        let large = autoreleasepool { SearchCore.isLarge(editor.utf8Data, limit: limit) }
+        largeDecisions = largeDecisions.filter { $0.value.editor != nil }
+        largeDecisions[id] = LargeDecision(editor: editor, revision: revision, limit: limit, large: large)
+        return large
     }
-    static func largeSnapshot(of editor: TTEditor, limit: Int = SearchCore.maximumTextUnits) -> Data? {
-        guard editor.byteLength > limit else { return nil }
-        let data = autoreleasepool { editor.utf8Data }
-        return SearchCore.isLarge(data, limit: limit) ? data : nil
+    /// The document's bytes when it is large, else nil. The copy lives exactly as long as the
+    /// search that holds it, whatever autorelease pool the caller has.
+    func largeSnapshot(of editor: TTEditor) -> Data? {
+        isLargeDocument(editor) ? autoreleasepool { editor.utf8Data } : nil
+    }
+    static func isLargeDocument(_ editor: TTEditor, limit: Int = SearchCore.maximumTextUnits) -> Bool {
+        let bytes = editor.byteLength
+        if bytes <= limit { return false }
+        if bytes / 3 > limit { return true }
+        return autoreleasepool { SearchCore.isLarge(editor.utf8Data, limit: limit) }
     }
     private enum LargeResult: Sendable {
         case count(Int, truncated: Bool)
@@ -999,6 +1020,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                         continuing: continuing, chunkBytes: chunk, cancellation: flag, progress: progress)
                 }.value
                 guard let self, self.generation == token, !flag.cancelled else { return }
+                self.rememberRan(opts, action)
                 // G372: the editor stayed editable while the search ran. A result for text or a
                 // selection that has since changed, or for an editor that is no longer current,
                 // selects and replaces nothing.
@@ -1033,7 +1055,6 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                         self.largeNavigation = Navigation(
                             editor: editor, revision: afterRevision, range: bytes, from: self.currentEditor())
                         self.status.stringValue = done + " Selected the next match."
-                        self.onCommand?(opts, "next", editor)
                     } else if next == .noMatch {
                         self.status.stringValue = done + " No further matches."
                     }
@@ -1091,7 +1112,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             status.stringValue =
                 insteadOfReplace ? "Selected the next match; press Replace again to replace it." : "Selected a match."
             lastOutcome = insteadOfReplace ? .selectedNextMatch : .movedToMatch
-            if recorded { onCommand?(opts, action == .previous ? "previous" : "next", editor) }
+            if recorded { onUnrecordableCommand?(Self.largeUnrecordable) }
         case .replace(let hits):
             let all = action == .replaceAll
             let capture = all ? BulkChangeCapture(editor, name: "Replace All") : nil
@@ -1111,7 +1132,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             status.stringValue = Self.replacedStatus(changed: changed, skips: skips)
             lastOutcome = .replaced(changed: changed, stale: skips.total)
             if changed > 0, skips.total == 0 {
-                if recorded { onCommand?(opts, all ? "replaceAll" : "replaceOne", editor) }
+                if recorded { onUnrecordableCommand?(Self.largeUnrecordable) }
                 return !all && recorded
             }
         }
@@ -1343,16 +1364,11 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         let revision = editor.revision
         let matched: Bool
         do {
-            if let data = largeSnapshot(of: editor) {
-                // The same step in a document above the engine's limit: still synchronous and
-                // bounded, with the large-document budget of `timeLimit` per started 64 MiB.
-                let budget = timeLimit * (SearchCore.largeTimeLimit(bytes: data.count) / SearchCore.defaultTimeLimit)
-                let effect = try SearchSession.planBytes(
-                    data, options: options, action: action,
-                    selection: NSRange(
-                        location: editor.selectionStart, length: editor.selectionEnd - editor.selectionStart),
-                    search: SearchSession.ByteSearch(chunkBytes: largeChunkBytes, timeLimit: budget))
-                matched = try Self.apply(effect, revision: revision, in: editor)
+            // Playback is synchronous. A search of a document above the engine's limit takes
+            // seconds and must not hold the window, so the step is refused in words before the
+            // document is read; such searches are not recorded either.
+            if isLargeDocument(editor) {
+                throw SearchFailure.largeDocumentMacro
             } else {
                 let text = editor.text
                 let report = try SearchCore.search(
@@ -1382,13 +1398,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         var options = SearchOptions()
         options.query = query
         options.matchCase = matchCase
-        if let data = largeSnapshot(of: editor) {
-            let effect = try SearchSession.planBytes(
-                data, options: options, action: backwards ? "previous" : "next",
-                selection: NSRange(location: editor.selectionStart, length: editor.selectionEnd - editor.selectionStart)
-            )
-            return try apply(effect, revision: editor.revision, in: editor)
-        }
+        if isLargeDocument(editor) { throw SearchFailure.largeDocumentMacro }
         let text = editor.text, revision = editor.revision
         let report = try SearchCore.search(text, options: options, purpose: .navigation)
         return try applySingleReport(
@@ -1587,7 +1597,8 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         if report.truncated && selected == nil {
             let tail = NSRange(location: openingCaret, length: snapshot.count - openingCaret)
             selected = try SearchCore.searchBytes(
-                snapshot, options: options, range: tail, limit: 1, chunkBytes: chunkBytes, cancellation: cancellation
+                snapshot, options: options, range: tail, limit: 1, stopAtLimit: true, chunkBytes: chunkBytes,
+                cancellation: cancellation
             ).hits.first?.range
         }
         guard !cancellation.cancelled else { throw CancellationError() }
