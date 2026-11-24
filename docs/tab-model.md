@@ -281,11 +281,21 @@ bounds, never past the point where the editor area would lose the minimum of its
 small sizes is explicit (DS-67):
 
 1. While the sidebar is shown the window's content minimum is the editor layout's minimum plus the
-   divider plus 260 points (1061 by 500 for one group or two columns). It is never lower than the
-   minimum without the sidebar, and hiding the sidebar restores that minimum.
+   divider plus 260 points. The editor minimum is 800 by 500 for every layout: two columns need
+   2 x 320 + 1 = 641 points and two rows 2 x 200 + 1 = 401, both under the normal 800 by 500, and
+   the groups' strips and 28-point status rows are inside each group's 200. So the minimum with the
+   sidebar is 800 + 1 + 260 = 1061 by 500 for one, two and four groups. At that size a group is
+   800, 399 or 399 by 249 points and its source and preview in Both at least 199 each. It is never
+   lower than the minimum without the sidebar, and hiding the sidebar restores that minimum.
 2. Showing the sidebar in a narrower window grows the window to the new minimum and keeps it on
-   screen. A full-screen window is never resized. If the screen cannot fit the minimum, the command
-   is refused with a status message and nothing changes.
+   screen. A full-screen window, a split-view tile included, is never resized: its room is the
+   content it has. If the screen, or the full-screen content, cannot fit the minimum, the command
+   is refused with a status message and nothing changes on screen.
+   The same test runs whenever the window is resized, changes screen, enters or leaves full screen
+   or changes its editor layout: a shown sidebar that no longer fits is hidden with a status
+   message, so the editor groups never fall below their minimum. A sidebar refused or hidden for
+   want of room is still recorded as shown in the saved layout, and it is shown again, without
+   taking the keyboard, as soon as it fits. Hiding it by command ends that.
 3. A narrowing window takes width from the sidebar first, down to 260 points. The editor groups keep
    at least 320 points each.
 4. Inside a group, Both keeps its own rule: source and preview keep 120 points each while there is
@@ -302,8 +312,10 @@ restored layout, Add Folder, Monitor Current File) never moves the keyboard. Non
 document, its selection, scroll position, Undo history or the active tab. In the list the arrow keys
 move, typing selects by name, and Return opens the selected file or selects its tab, expands a folder,
 or shows an open document. The sidebar is an accessibility group named "Workspace Browser" holding an
-outline labelled "Workspace files"; its controls join the window's key-view order after the layout
-picker. The three views are chosen from a pop-up, because three segment titles do not fit 260 points.
+outline labelled "Workspace files". Tab and Shift-Tab move through its controls; past the last, or
+before the first, the keyboard goes to the text of the tab that is active when the key is pressed.
+That target is never stored, so it follows a tab switch, a change between Source, Preview and Both, a
+closed tab and a layout restored before any document was open. With no document open the controls wrap. The three views are chosen from a pop-up, because three segment titles do not fit 260 points.
 
 `WorkspaceLayoutState` version 1 gains two optional keys, `sidebarShown` and `sidebarWidth` (points,
 greater than 0 and at most 10,000; clamped to the bounds when applied). A workspace whose sidebar was

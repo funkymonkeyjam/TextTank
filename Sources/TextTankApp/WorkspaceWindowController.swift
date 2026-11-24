@@ -55,6 +55,13 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     /// True once the sidebar has been shown or a saved layout described it; until then a saved
     /// layout carries no sidebar keys and is written exactly as before.
     private var sidebarWasUsed = false
+    /// The person wants the sidebar, but the window cannot hold it beside the editor groups
+    /// right now (a small display, a narrow full-screen tile). It stays in the saved layout as
+    /// shown and comes back when it fits.
+    private(set) var sidebarAwaitsRoom = false
+    /// The most content the window can have, for checks. Nil asks the window and its screen.
+    var sidebarAvailableContent: (() -> TabGroupExtent)?
+    private var sidebarObservers: [NSObjectProtocol] = []
     private weak var sidebarBrowser: WorkspaceBrowserController?
     /// What had the keyboard when the sidebar took it by command.
     private weak var sidebarReturnResponder: NSResponder?
@@ -136,6 +143,15 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
             forName: .textTankAutomationsDidChange, object: EditorServices.current?.automations, queue: .main
         ) { [weak self] _ in MainActor.assumeIsolated { self?.refreshAutomationToolbar() } }
         WindowFrames.track(window, as: "TextTank.Document")
+        for name in [
+            NSWindow.didResizeNotification, NSWindow.didChangeScreenNotification,
+            NSWindow.didEnterFullScreenNotification, NSWindow.didExitFullScreenNotification
+        ] {
+            sidebarObservers.append(
+                NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.reconcileSidebarWithRoom() }
+                })
+        }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
     func register(_ presentation: EditorWindowController, document: TextDocument) {
@@ -232,7 +248,8 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     func captureSessionLayout() -> WorkspaceLayoutState {
         var state = groupSessionLayout()
         if sidebarWasUsed {
-            state.sidebarShown = isSidebarShown
+            // A sidebar hidden only for want of room is still the person's choice.
+            state.sidebarShown = isSidebarShown || sidebarAwaitsRoom
             state.sidebarWidth = Double(sidebarSplit.preferredWidth)
         }
         return state
@@ -298,28 +315,20 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         guard let browser = sidebarBrowser ?? EditorServices.current?.workspaceBrowser else { return false }
         sidebarBrowser = browser
         if !isSidebarShown {
-            let minimum = WorkspaceSidebarGeometry.minimumContent(model.layout, sidebarShown: true)
-            if let window, !window.styleMask.contains(.fullScreen), let screen = window.screen ?? NSScreen.main {
-                let visible = window.contentRect(forFrameRect: screen.visibleFrame).size
-                guard
-                    TabGroupGeometry.fits(
-                        minimum,
-                        available: availableContent ?? TabGroupExtent(width: visible.width, height: visible.height))
-                else {
-                    showTabMessage(
-                        "This screen cannot fit the Workspace Browser beside this editor layout. Nothing changed. Use fewer editor groups or a larger display."
-                    )
-                    return false
-                }
+            sidebarWasUsed = true
+            guard sidebarFits(availableContent) else {
+                // Asked for and refused for size: remembered, and shown when there is room.
+                sidebarAwaitsRoom = true
+                showTabMessage(
+                    "This screen cannot fit the Workspace Browser beside this editor layout. Nothing changed. Use fewer editor groups or a larger display."
+                )
+                return false
             }
+            sidebarAwaitsRoom = false
             let view = browser.sidebarView
             sidebarSplit.setSidebar(view)
             isSidebarShown = true
-            sidebarWasUsed = true
             applyContentMinimum(keepingOnScreen: true)
-            // Tab from the sidebar's last control reaches the text. Move Focus to Next Area and
-            // View > Workspace Browser are the routes into the sidebar.
-            browser.lastKeyView.nextKeyView = active?.keyboardFocusView
             window?.contentView?.layoutSubtreeIfNeeded()
             browser.sidebarDidShow()
         }
@@ -329,7 +338,43 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         }
         return true
     }
-    private func hideSidebar() {
+    /// The most content the window can have: its current content in full screen, where it
+    /// cannot grow (a split tile included), otherwise what its screen can show.
+    private func sidebarRoom(_ injected: TabGroupExtent? = nil) -> TabGroupExtent? {
+        if let injected { return injected }
+        if let sidebarAvailableContent { return sidebarAvailableContent() }
+        guard let window else { return nil }
+        if window.styleMask.contains(.fullScreen) {
+            let size = window.contentView?.bounds.size ?? .zero
+            return TabGroupExtent(width: size.width, height: size.height)
+        }
+        guard let screen = window.screen ?? NSScreen.main else { return nil }
+        let visible = window.contentRect(forFrameRect: screen.visibleFrame).size
+        return TabGroupExtent(width: visible.width, height: visible.height)
+    }
+    private func sidebarFits(_ injected: TabGroupExtent? = nil) -> Bool {
+        guard let room = sidebarRoom(injected) else { return true }
+        return TabGroupGeometry.fits(
+            WorkspaceSidebarGeometry.minimumContent(model.layout, sidebarShown: true), available: room)
+    }
+    /// One rule for a small display, a narrow full-screen tile and a layout with more groups:
+    /// the sidebar is never shown where the editor groups would fall below their minimum. A
+    /// shown sidebar that no longer fits is hidden with a status message and remembered; it is
+    /// shown again, without taking the keyboard, as soon as it fits. Called when the window is
+    /// resized, changes screen, enters or leaves full screen, or changes its editor layout.
+    func reconcileSidebarWithRoom() {
+        guard !isMutatingGroups else { return }
+        if isSidebarShown, !sidebarFits() {
+            hideSidebar(awaitingRoom: true)
+            showTabMessage(
+                "The Workspace Browser is hidden because this window cannot fit it beside the editor groups. It returns when there is room."
+            )
+        } else if sidebarAwaitsRoom, !isSidebarShown, sidebarFits() {
+            setSidebarShown(true)
+        }
+    }
+    private func hideSidebar(awaitingRoom: Bool = false) {
+        sidebarAwaitsRoom = awaitingRoom
         guard isSidebarShown else { return }
         let hadKeyboard = sidebarHasKeyboard
         let target = keyboardTargetAfterSidebar()
@@ -415,6 +460,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         guard let plan = try? model.planLayout(layout, openDocuments: openIDs) else { return false }
         guard applyGroupChange(plan) else { return false }
         applyContentMinimum(keepingOnScreen: true)
+        reconcileSidebarWithRoom()
         if let name = (active?.document as? TextDocument)?.displayName {
             showTabMessage(
                 String(
@@ -885,6 +931,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         MainActor.assumeIsolated {
             if let automationObserver { NotificationCenter.default.removeObserver(automationObserver) }
             sheetObservers.forEach(NotificationCenter.default.removeObserver)
+            sidebarObservers.forEach { NotificationCenter.default.removeObserver($0) }
         }
     }
 }
