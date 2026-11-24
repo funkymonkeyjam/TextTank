@@ -89,6 +89,10 @@ private final class PreviewScrollReceiver: NSObject, WKScriptMessageHandler {
     /// The map of the page that is showing, once it has finished loading. Nil while a page
     /// loads, and for HTML and SVG, which are not followed.
     private(set) var scrollMap: PreviewScrollMap?
+    /// The map to scroll the page by: `scrollMap`, but only while the page it belongs to is the
+    /// last one given. While a newer page waits or loads, the page that is showing is on its
+    /// way out and is left where it is.
+    var settledScrollMap: PreviewScrollMap? { isSettled ? scrollMap : nil }
     /// A person scrolled the page, which is now at this place of `scrollMap`. Never called for
     /// a scroll the application made itself, nor while the page is not being followed.
     var onScrolled: ((PreviewScrollMap.Position) -> Void)?
@@ -345,7 +349,7 @@ private final class PreviewScrollReceiver: NSObject, WKScriptMessageHandler {
     /// Scrolls the page so that `position` of its map is at the top. The scroll is not animated
     /// and is not reported back. Does nothing while no mapped page is showing.
     func scroll(to position: PreviewScrollMap.Position) {
-        guard let webView, let scrollMap, scrollMap.blocks.indices.contains(position.block),
+        guard let webView, let scrollMap = settledScrollMap, scrollMap.blocks.indices.contains(position.block),
             position.fraction.isFinite
         else { return }
         checkRecord.scrollCommands += 1

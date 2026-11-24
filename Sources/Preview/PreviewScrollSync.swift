@@ -304,7 +304,7 @@ import TextTankCore
     /// False when there is nothing to scroll yet: a page that is still loading.
     @discardableResult private func showInPreview(line: Int, _ pane: PreviewPane) -> Bool {
         if let page = followedPage {
-            guard let position = page.scrollMap?.position(forLine: line) else { return false }
+            guard let position = page.settledScrollMap?.position(forLine: line) else { return false }
             page.scroll(to: position)
             checkRecord.previewScrolls += 1
         } else if let rows = rowWatch?.rows, let row = rows.row(forSourceLine: line) {
@@ -329,12 +329,15 @@ import TextTankCore
     /// unless the source scrolled while the page was behind the text and the place that was
     /// kept is not the source's line.
     private func pageLoaded(restored: PreviewScrollMap.Position?) {
-        guard let pane, isEligible(), isOn(), isPreviewCurrent() else { return }
+        // A page that is already being replaced is left alone; the one after it comes here too.
+        guard let pane, isEligible(), isOn(), isPreviewCurrent(), let map = followedPage?.settledScrollMap else {
+            return
+        }
         guard restored == nil || pendingSource != nil, let editor = pendingSource ?? editors().first else { return }
         pendingSource = nil
         let line = editor.firstVisibleDocumentLine
         if let restored {
-            if followedPage?.scrollMap?.line(for: restored) == line { return }
+            if map.line(for: restored) == line { return }
         } else if line == 0 {
             return
         }
