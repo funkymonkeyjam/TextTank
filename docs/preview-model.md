@@ -316,7 +316,7 @@ locked.
 
 Every tab shows one of three modes of its document. **Source** is the editor, and the default.
 **Preview** is the read-only preview alone. **Both** is the editor and the preview side by side
-with a divider that can be dragged. The View menu has the three commands, with a checkmark on the
+with a divider that can be dragged. View > Preview has the three commands, with a checkmark on the
 one that is showing (DS-22). They have no shortcut. They are disabled for a document that
 `PreviewKind.kind` gives no preview (DS-21). The other ways to change the mode are described
 under "Switching the mode" below; all of them end in the same `chooseViewMode` (DS-20). When a document stops having one, because its
@@ -355,15 +355,15 @@ the preview of a tab that shows Preview alone.
 Besides the three View commands there are four routes. None of them changes what a preview may
 load or run.
 
-**Toggle Preview** (View, directly under Both; Shift-Command-V). From Source it shows the
+**Toggle Preview** (View > Preview, directly under Both; Shift-Command-V). From Source it shows the
 rendered mode the person chose last, Preview or Both, and from either of those it returns to
 Source. Until one has been chosen it shows Both. It is disabled for a document with no preview
 (DS-21) and carries no checkmark: the three items above it show the mode (DS-22). The shortcut is
 a default of the kind Save All and Actual Size have (`DefaultShortcutItem`): a shortcut the person
 assigned to the same key in Settings keeps the key, and the menu item then has none. The Command
 Palette lists the command because it is a menu item. Like the three mode commands it is a view
-change that a macro recording neither records nor is discarded by. With it View lists twenty
-items, the DS-23 limit.
+change that a macro recording neither records nor is discarded by. Since DS-D13 the mode
+commands are in View > Preview, and View's top level lists fourteen items (DS-23).
 
 **The tab's context menu.** A tab whose document has a preview has a section with Source,
 Preview and Both, titled as in the View menu, with a checkmark on what that tab shows
@@ -585,9 +585,10 @@ scrolls the preview, and the preview scrolls the pane used last.
 is `false`, so a file without the member behaves as on. It is an Optional addition to the
 version-1 format, written as one member by `SettingsStore.updateViewPreference(.syncPreviewScrolling)`.
 There is nothing to apply when it changes: it is read at every scroll of a tab that shows Both.
-**No control sets it yet.** The Settings window is the place for "Sync scrolling in Both"; the
-View menu has no room (DS-23) and the Command Palette lists menu items only, so there is no
-command for it either.
+Two controls set it, and each shows a change made by the other at once: the "Sync scrolling in
+Both" row under Previews in Settings, and View > Preview > Sync Scrolling in Both (DS-D13), a
+toggle with a checkmark that is disabled, like the rest of that submenu, for a document with no
+preview. The Command Palette lists the menu item.
 
 **What it may not do.** The security rules of the web view are unchanged: page JavaScript is
 off, the response header carries the same policy, the rule list blocks the same loads, and no

@@ -456,7 +456,8 @@ the declarations and lifecycle; subsequent changes have their own focused checks
 is the nine-menu map of DS-D4, pinned by `Tests/Fixtures/menu-tree.json`; the commands of the
 earlier fourteen-menu bar are accounted for by `menu-command-identities-before-nine-menus.json`.
 The Command Palette matches a command by its menu path or by its former one
-(`CommandDiscovery.legacyLocations`), lists the best name match first (`CommandDiscovery.rank`) and
+(`CommandDiscovery.legacyLocations`, and `CommandDiscovery.formerPaths` for the View menu as it was
+before DS-D13), lists the best name match first (`CommandDiscovery.rank`) and
 shows each command's current key equivalent (`ControlPresentation.shortcut(of:)`). The five commands
 run from it last are kept in `CommandPaletteRecents.json` in the private support folder
 (`CommandRecentsStore`): row identities only, read when the palette is first used, never an alert
