@@ -349,6 +349,9 @@ private final class SettingsKeyEquivalents: NSView {
     private let face = NSTextField(labelWithString: "")
     private let fontButton = NSButton(title: "Font…", target: nil, action: nil)
     private var shortcuts: ShortcutsPane!
+    private var shortcutsRow: SettingRow?
+    /// Whether the list was showing at the last resize, when its height was the person's choice.
+    private var listWasShown = false
     private var maintenancePending = false
     private var presentingError = false
     private var displayed: EditorSettings
@@ -738,6 +741,7 @@ private final class SettingsKeyEquivalents: NSView {
         // the commands whose shortcut was changed, and each has Use Default there.
         shortcuts = ShortcutsPane(
             width: Self.contentWidth - 40, settings: { [unowned self] in self.owner.value },
+            issues: { [unowned self] in self.owner.ignoredShortcutBindings },
             write: { [unowned self] update in try self.write(update) },
             confirmResetAll: { [unowned self] in self.confirmMaintenance(.resetShortcuts) },
             layoutChanged: { [unowned self] in self.resizeToContent() })
@@ -747,6 +751,15 @@ private final class SettingsKeyEquivalents: NSView {
             views: [shortcuts.view], differs: { !$0.shortcuts.isEmpty })
         // The list is as wide as the pane; nothing follows it in its row.
         list.view.setCustomSpacing(0, after: shortcuts.view)
+        shortcutsRow = list
+        // Extra height goes to the list and to nothing else.
+        shortcuts.view.heightAnchor.constraint(equalTo: list.view.heightAnchor).isActive = true
+        form.body.distribution = .fill
+        let listSection = section(.shortcuts)
+        listSection.stack.distribution = .fill
+        for view in [listSection.stack, list.view, shortcuts.view] {
+            view.setContentHuggingPriority(.init(1), for: .vertical)
+        }
 
         for section in sections { form.add(section.stack) }
         form.add(note("Changes apply when you finish editing a control."))
@@ -855,9 +868,13 @@ private final class SettingsKeyEquivalents: NSView {
         let window = form.window
         guard let content = window.contentView else { return }
         content.layoutSubtreeIfNeeded()
-        let size = NSSize(width: Self.contentWidth, height: ceil(content.fittingSize.height))
+        var size = NSSize(width: Self.contentWidth, height: ceil(content.fittingSize.height))
         window.contentMinSize = size
-        window.contentMaxSize = size
+        // The Shortcuts list grows with the window; every other pane is exactly its content.
+        let grows = shortcutsRow?.view.isHiddenOrHasHiddenAncestor == false
+        if grows, listWasShown { size.height = max(size.height, content.bounds.height) }
+        listWasShown = grows
+        window.contentMaxSize = grows ? NSSize(width: size.width, height: 10_000) : size
         let top = anchor ?? NSPoint(x: window.frame.minX, y: window.frame.maxY)
         var frame = window.frameRect(forContentRect: NSRect(origin: .zero, size: size))
         frame.origin = NSPoint(x: top.x, y: top.y - frame.height)

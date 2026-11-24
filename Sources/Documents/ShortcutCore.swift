@@ -14,6 +14,8 @@ extension MenuShortcut {
             ("home", "\u{f729}", "↖", "Home"), ("end", "\u{f72b}", "↘", "End"),
             ("pageup", "\u{f72c}", "⇞", "Page Up"), ("pagedown", "\u{f72d}", "⇟", "Page Down"),
             ("delete", "\u{8}", "⌫", "Delete"), ("forwarddelete", "\u{7f}", "⌦", "Forward Delete"),
+            // The function-key code for Forward Delete, which a menu draws the same way.
+            ("forwarddelete", "\u{f728}", "⌦", "Forward Delete"),
             ("tab", "\t", "⇥", "Tab"), ("backtab", "\u{19}", "⇤", "Backtab"), ("return", "\r", "↩", "Return"),
             ("enter", "\u{3}", "⌅", "Enter"), ("escape", "\u{1b}", "⎋", "Escape"), ("space", " ", "Space", "Space"),
             ("plus", "+", "+", "Plus")
@@ -129,41 +131,63 @@ package struct ShortcutRefusal: Equatable, Sendable {
 }
 
 package enum ShortcutPolicy {
-    /// DS-25: these keep their meaning in every Mac app. The standard editing keys are here too,
-    /// because every text field in every window relies on the menu for them.
-    private static let system: [(shortcut: MenuShortcut, meaning: String)] = [
-        (.init("q"), "Command-Q quits TextTank."), (.init("w"), "Command-W closes the tab or the window."),
-        (.init("h"), "Command-H hides TextTank."),
-        (.init("h", [.command, .option]), "Option-Command-H hides the other applications."),
-        (.init("m"), "Command-M minimizes the window."), (.init(","), "Command-Comma opens Settings."),
-        (.init("`"), "Command-Backtick moves to the next window."),
-        (.init("`", [.command, .shift]), "Shift-Command-Backtick moves to the previous window."),
-        (.init("f"), "Command-F opens Find."), (.init("g"), "Command-G finds the next match."),
-        (.init("g", [.command, .shift]), "Shift-Command-G finds the previous match."),
-        (.init("e"), "Command-E uses the selection for Find."), (.init("z"), "Command-Z is Undo in every text field."),
-        (.init("z", [.command, .shift]), "Shift-Command-Z is Redo in every text field."),
-        (.init("x"), "Command-X is Cut in every text field."), (.init("c"), "Command-C is Copy in every text field."),
-        (.init("v"), "Command-V is Paste in every text field."),
-        (.init("a"), "Command-A is Select All in every text field."),
-        (.init("\t"), "Command-Tab switches between applications."),
-        (.init("\t", [.command, .shift]), "Shift-Command-Tab switches between applications."),
-        (.init(" "), "Command-Space is used by macOS."),
-        (.init("\u{1b}", [.command, .option]), "Option-Command-Escape opens Force Quit."),
-        (.init("q", [.command, .shift]), "Shift-Command-Q logs out of macOS."),
-        (.init("q", [.command, .control]), "Control-Command-Q locks the screen.")
+    /// Why a key with Command or Control in it still cannot be given to a command.
+    package enum Reserved: Sendable, Equatable {
+        /// DS-25: Quit, Close, Hide, Hide Others, Minimize, Settings, window cycling and the Find set.
+        case system
+        /// Undo, Redo, Cut, Copy, Paste and Select All. They are not in DS-25, but every text
+        /// field in every window (Find, Go to Line, this one) gets them from the Edit menu's key
+        /// equivalents, so giving one away would break typing everywhere.
+        case editing
+        /// Keys macOS acts on before an application receives them. A menu item given one of
+        /// them would show a key that can never run it.
+        case macOS
+        var rule: String {
+            switch self {
+            case .system:
+                return
+                    "It is a system shortcut that keeps this meaning in every Mac app, so it cannot be given to another command. Choose a different shortcut."
+            case .editing:
+                return
+                    "Text fields in every window, this one included, take it from the Edit menu, so it cannot be given to another command. Choose a different shortcut."
+            case .macOS:
+                return
+                    "macOS acts on it before TextTank receives it, so it could never run a command. Choose a different shortcut."
+            }
+        }
+    }
+    /// Every reserved key. Nothing else that has Command or Control is refused by the policy;
+    /// a key some command already has is a conflict the person can answer, not a refusal.
+    package static let reserved: [(shortcut: MenuShortcut, kind: Reserved, meaning: String)] = [
+        (.init("q"), .system, "Command-Q quits TextTank."),
+        (.init("w"), .system, "Command-W closes the tab or the window."),
+        (.init("h"), .system, "Command-H hides TextTank."),
+        (.init("h", [.command, .option]), .system, "Option-Command-H hides the other applications."),
+        (.init("m"), .system, "Command-M minimizes the window."), (.init(","), .system, "Command-Comma opens Settings."),
+        (.init("`"), .system, "Command-Backtick moves to the next window."),
+        (.init("`", [.command, .shift]), .system, "Shift-Command-Backtick moves to the previous window."),
+        (.init("f"), .system, "Command-F opens Find."), (.init("g"), .system, "Command-G finds the next match."),
+        (.init("g", [.command, .shift]), .system, "Shift-Command-G finds the previous match."),
+        (.init("e"), .system, "Command-E uses the selection for Find."),
+        (.init("z"), .editing, "Command-Z is Undo in every text field."),
+        (.init("z", [.command, .shift]), .editing, "Shift-Command-Z is Redo in every text field."),
+        (.init("x"), .editing, "Command-X is Cut in every text field."),
+        (.init("c"), .editing, "Command-C is Copy in every text field."),
+        (.init("v"), .editing, "Command-V is Paste in every text field."),
+        (.init("a"), .editing, "Command-A is Select All in every text field."),
+        (.init("\t"), .macOS, "Command-Tab switches between applications."),
+        (.init("\t", [.command, .shift]), .macOS, "Shift-Command-Tab switches between applications."),
+        (.init("\u{1b}", [.command, .option]), .macOS, "Option-Command-Escape opens Force Quit."),
+        (.init("q", [.command, .shift]), .macOS, "Shift-Command-Q logs out of macOS."),
+        (.init("q", [.command, .control]), .macOS, "Control-Command-Q locks the screen.")
     ]
-    private static let systemMeanings: [String: String] = Dictionary(
-        uniqueKeysWithValues: system.map { ($0.shortcut.identity, $0.meaning) })
+    private static let reasons: [String: String] = Dictionary(
+        uniqueKeysWithValues: reserved.map { ($0.shortcut.identity, $0.meaning + " " + $0.kind.rule) })
 
-    package static func isSystem(_ shortcut: MenuShortcut) -> Bool { systemMeanings[shortcut.identity] != nil }
+    package static func isSystem(_ shortcut: MenuShortcut) -> Bool { reasons[shortcut.identity] != nil }
     /// Nil when the key may be given to a command.
     package static func refusal(for shortcut: MenuShortcut) -> ShortcutRefusal? {
-        if let meaning = systemMeanings[shortcut.identity] {
-            return .init(
-                kind: .system,
-                reason: meaning
-                    + " It keeps that meaning and cannot be given to another command. Choose a different shortcut.")
-        }
+        if let reason = reasons[shortcut.identity] { return .init(kind: .system, reason: reason) }
         let value = shortcut.normalized
         guard !value.isFunctionKey, value.modifiers.isDisjoint(with: [.command, .control]) else { return nil }
         let spoken = value.spokenText
