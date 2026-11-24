@@ -277,7 +277,7 @@ import EditorBridge
                     (outline.item(atRow: $0) as? WorkspaceBrowserNode)?.entry.url.lastPathComponent == name
                 }, "fixture: row for \(name)")
         }
-        outline.keyDown(with: try key(125, "\u{F701}", in: window))
+        outline.keyDown(with: try key(125, String(UnicodeScalar(UInt32(NSDownArrowFunctionKey))!), in: window))
         check(outline.selectedRow == 1, "the Down Arrow key moves the selection")
         outline.selectRowIndexes([try row("other.txt")], byExtendingSelection: false)
         let documentsBefore = NSDocumentController.shared.documents.count
