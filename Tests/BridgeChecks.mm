@@ -1016,6 +1016,18 @@ int main(int argc, char **argv) {
                   "Fold Current at a body line contracts the nearest real header only");
             check(fold.selectionCaret == caret && [peer message:SCI_GETLINEVISIBLE wParam:3],
                   "Fold Current preserves the caret byte position and the other view");
+            {
+                // A preview of a line hidden in a fold shows the fold's own line and unfolds nothing.
+                const NSInteger held = fold.selectionCaret;
+                check([fold previewLine:4 column:1] == 3 && !visible(3) && visible(2) && fold.statusInfo.line == 3
+                          && ![fold lineIsVisible:4] && [fold lineIsVisible:3] && [peer message:SCI_GETLINEVISIBLE wParam:3],
+                      "A Go to Line preview of a folded line leaves the fold closed and shows its header");
+                check([fold previewLine:4 column:3] == 3 && fold.selectionCaret == [engine message:SCI_POSITIONFROMLINE wParam:2]
+                          && [fold previewLine:0 column:1] == 0 && [fold previewLine:9999 column:1] == 0 && !visible(3),
+                      "A column is not applied to the header standing in for a folded line, and a line that does not exist changes nothing");
+                [fold setSelectionAnchor:held caret:held];
+                check(!visible(3) && fold.revision == revision, "Putting the caret back leaves the fold closed and the text unchanged");
+            }
             check([fold goToLine:4] && visible(3), "Explicit Go To Line reveals the target after folding");
             [fold goToLine:1];
             [fold executeCommand:@"foldLevel2"];
@@ -2113,6 +2125,43 @@ int main(int argc, char **argv) {
         check([ed goToLine:4] && ed.selectionCaret==18, "The empty line after a final line break is a line");
         check(![ed goToLine:0] && ![ed goToLine:5] && ![ed goToLine:-3] && ed.selectionCaret==18, "Out-of-range lines are rejected without moving the caret");
         check([ed goToLine:1] && ed.selectionCaret==0 && ed.revision==revision && !ed.modified, "goToLine never changes the document");
+        {
+            // The exact selection state a Go to Line preview has to put back.
+            auto get = [&](unsigned int message, uptr_t w = 0) { return [sv message:message wParam:w]; };
+            [sv message:SCI_SETSELECTION wParam:1 lParam:0]; [sv message:SCI_ADDSELECTION wParam:10 lParam:8]; [sv message:SCI_ADDSELECTION wParam:12 lParam:14];
+            [sv message:SCI_SETMAINSELECTION wParam:1];
+            NSArray<NSNumber *> *several = ed.selectionSnapshot;
+            check([ed previewLine:3 column:2] == 3 && get(SCI_GETSELECTIONS) == 1 && ed.selectionCaret == 13 && ed.selectionAnchor == 13,
+                  "A Go to Line preview puts one caret at the line and column");
+            check([ed restoreSelectionSnapshot:several] && get(SCI_GETSELECTIONS) == 3 && get(SCI_GETMAINSELECTION) == 1
+                      && get(SCI_GETSELECTIONNANCHOR, 0) == 0 && get(SCI_GETSELECTIONNCARET, 0) == 1 && get(SCI_GETSELECTIONNANCHOR, 1) == 8
+                      && get(SCI_GETSELECTIONNCARET, 1) == 10 && get(SCI_GETSELECTIONNANCHOR, 2) == 14 && get(SCI_GETSELECTIONNCARET, 2) == 12
+                      && get(SCI_GETSELECTIONMODE) == SC_SEL_STREAM && [ed.selectionSnapshot isEqual:several],
+                  "A selection snapshot restores every range, its direction and which range is the main selection");
+            [sv message:SCI_SETSELECTION wParam:1 lParam:1];
+            [sv message:SCI_SETSELECTIONMODE wParam:SC_SEL_RECTANGLE];
+            [sv message:SCI_SETRECTANGULARSELECTIONANCHOR wParam:1]; [sv message:SCI_SETRECTANGULARSELECTIONCARET wParam:14];
+            [sv message:SCI_SETRECTANGULARSELECTIONCARETVIRTUALSPACE wParam:3];
+            NSArray<NSNumber *> *rectangle = ed.selectionSnapshot;
+            const sptr_t rows = get(SCI_GETSELECTIONS), extends = get(SCI_GETMOVEEXTENDSSELECTION);
+            check(ed.selectionIsRectangular && rows == 3, "Fixture: a rectangular selection over three lines, into virtual space");
+            check([ed previewLine:1 column:1] == 1 && !ed.selectionIsRectangular && get(SCI_GETSELECTIONS) == 1 && !get(SCI_GETMOVEEXTENDSSELECTION),
+                  "A preview leaves rectangular mode for its one caret");
+            check([ed restoreSelectionSnapshot:rectangle] && ed.selectionIsRectangular && get(SCI_GETSELECTIONS) == rows
+                      && get(SCI_GETRECTANGULARSELECTIONANCHOR) == 1 && get(SCI_GETRECTANGULARSELECTIONCARET) == 14
+                      && get(SCI_GETRECTANGULARSELECTIONCARETVIRTUALSPACE) == 3 && get(SCI_GETMOVEEXTENDSSELECTION) == extends
+                      && [ed.selectionSnapshot isEqual:rectangle],
+                  "A selection snapshot restores a rectangular selection, its corners, virtual space and keyboard column mode");
+            [ed executeCommand:@"streamSelection"]; [ed setSelectionAnchor:0 caret:0];
+            NSArray<NSNumber *> *plain = ed.selectionSnapshot;
+            check(![ed restoreSelectionSnapshot:@[@1, @2]] && ![ed restoreSelectionSnapshot:(NSArray<NSNumber *> *)@[@"x", @0, @0, @0, @0, @0, @0, @0, @0, @0, @0, @0]]
+                      && ed.selectionCaret == 0, "Something that is not a snapshot is refused and changes nothing");
+            [ed replaceSelection:@"longer "];
+            check(![ed restoreSelectionSnapshot:plain] && ed.selectionCaret == 7, "A snapshot of text that has since changed length is refused");
+            [ed executeCommand:@"undo"];
+            check(ed.revision != revision || !ed.modified, "Fixture: the edit is undone");
+            ed.text=@"é one\r\ntwo\rthree\n";[ed resetUndoHistory];[ed setSavePoint];revision=ed.revision;
+        }
         ed.text=numbered(400);
         check([ed goToLine:350] && ed.firstVisibleLine>0 && ed.firstVisibleLine<=349 && [sv message:SCI_GETFIRSTVISIBLELINE]+[sv message:SCI_LINESONSCREEN]>349, "goToLine scrolls the target line into view");
         [ed setLanguage:@"cpp"];

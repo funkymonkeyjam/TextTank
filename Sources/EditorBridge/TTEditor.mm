@@ -1519,6 +1519,87 @@ static constexpr int TTNamedHistoryBase = 0x54540000;
     [self setSelectionAnchor:offset caret:offset];
     [self scrollCaretIntoView];
 }
+- (NSInteger)previewLine:(NSInteger)line column:(NSInteger)column {
+    [self assertThread];
+    if (line < 1 || line > [_engine message:SCI_GETLINECOUNT]) return 0;
+    // No SCI_ENSUREVISIBLE here: a preview must leave folding as it found it. A hidden line is
+    // stood in for by the visible header of the fold that hides it.
+    sptr_t row = line - 1;
+    while (row > 0 && ![_engine message:SCI_GETLINEVISIBLE wParam:row]) {
+        const sptr_t parent = [_engine message:SCI_GETFOLDPARENT wParam:row];
+        row = parent >= 0 && parent < row ? parent : row - 1;
+    }
+    const sptr_t target = row == line - 1 && column > 1
+        ? [_engine message:SCI_FINDCOLUMN wParam:row lParam:std::min<sptr_t>(column - 1, INT_MAX)]
+        : [_engine message:SCI_POSITIONFROMLINE wParam:row];
+    [self useStreamSelection];
+    [_engine message:SCI_SETSELECTION wParam:target lParam:target];
+    [_engine message:SCI_SCROLLCARET];
+    [self noteStateChange];
+    return row + 1;
+}
+- (BOOL)lineIsVisible:(NSInteger)line {
+    [self assertThread];
+    return line >= 1 && line <= [_engine message:SCI_GETLINECOUNT] && [_engine message:SCI_GETLINEVISIBLE wParam:line - 1] != 0;
+}
+// Layout: length, mode, moveExtends, main, rectangular anchor/caret and their virtual space,
+// then anchor, caret and their virtual space for each selection.
+- (NSArray<NSNumber *> *)selectionSnapshot {
+    [self assertThread];
+    NSMutableArray<NSNumber *> *state = [NSMutableArray array];
+    auto add = [&](sptr_t value) { [state addObject:@((long long)value)]; };
+    add([_engine message:SCI_GETLENGTH]);
+    add([_engine message:SCI_GETSELECTIONMODE]);
+    add([_engine message:SCI_GETMOVEEXTENDSSELECTION]);
+    add([_engine message:SCI_GETMAINSELECTION]);
+    add([_engine message:SCI_GETRECTANGULARSELECTIONANCHOR]);
+    add([_engine message:SCI_GETRECTANGULARSELECTIONCARET]);
+    add([_engine message:SCI_GETRECTANGULARSELECTIONANCHORVIRTUALSPACE]);
+    add([_engine message:SCI_GETRECTANGULARSELECTIONCARETVIRTUALSPACE]);
+    const sptr_t count = [_engine message:SCI_GETSELECTIONS];
+    for (sptr_t index = 0; index < count; ++index) {
+        add([_engine message:SCI_GETSELECTIONNANCHOR wParam:index]);
+        add([_engine message:SCI_GETSELECTIONNCARET wParam:index]);
+        add([_engine message:SCI_GETSELECTIONNANCHORVIRTUALSPACE wParam:index]);
+        add([_engine message:SCI_GETSELECTIONNCARETVIRTUALSPACE wParam:index]);
+    }
+    return state;
+}
+- (BOOL)restoreSelectionSnapshot:(NSArray<NSNumber *> *)snapshot {
+    [self assertThread];
+    if (![snapshot isKindOfClass:NSArray.class] || snapshot.count < 12 || (snapshot.count - 8) % 4 != 0) return NO;
+    for (id value in snapshot) if (![value isKindOfClass:NSNumber.class]) return NO;
+    auto at = [&](NSUInteger index) { return (sptr_t)snapshot[index].longLongValue; };
+    const sptr_t length = [_engine message:SCI_GETLENGTH];
+    const NSUInteger count = (snapshot.count - 8) / 4;
+    if (at(0) != length || at(3) < 0 || at(3) >= (sptr_t)count) return NO;
+    for (NSUInteger index = 0; index < count; ++index) {
+        for (NSUInteger field = 0; field < 2; ++field) {
+            const sptr_t position = at(8 + index * 4 + field);
+            if (position < 0 || position > length) return NO;
+        }
+    }
+    const sptr_t mode = at(1);
+    [_engine message:SCI_CHANGESELECTIONMODE wParam:mode];
+    if (mode == SC_SEL_RECTANGLE || mode == SC_SEL_THIN) {
+        // Scintilla derives the ranges of a rectangular selection from its two corners.
+        [_engine message:SCI_SETRECTANGULARSELECTIONANCHOR wParam:at(4)];
+        [_engine message:SCI_SETRECTANGULARSELECTIONANCHORVIRTUALSPACE wParam:at(6)];
+        [_engine message:SCI_SETRECTANGULARSELECTIONCARET wParam:at(5)];
+        [_engine message:SCI_SETRECTANGULARSELECTIONCARETVIRTUALSPACE wParam:at(7)];
+    } else {
+        for (NSUInteger index = 0; index < count; ++index) {
+            const NSUInteger base = 8 + index * 4;
+            [_engine message:index == 0 ? SCI_SETSELECTION : SCI_ADDSELECTION wParam:at(base + 1) lParam:at(base)];
+            [_engine message:SCI_SETSELECTIONNANCHORVIRTUALSPACE wParam:index lParam:at(base + 2)];
+            [_engine message:SCI_SETSELECTIONNCARETVIRTUALSPACE wParam:index lParam:at(base + 3)];
+        }
+        [_engine message:SCI_SETMAINSELECTION wParam:at(3)];
+    }
+    [_engine message:SCI_SETMOVEEXTENDSSELECTION wParam:at(2)];
+    [self noteStateChange];
+    return YES;
+}
 - (void)scrollCaretIntoView { [self assertThread]; [_engine message:SCI_SCROLLCARET]; }
 - (NSInteger)firstVisibleLine { [self assertThread]; return [_engine message:SCI_GETFIRSTVISIBLELINE]; }
 - (NSInteger)firstVisibleDocumentLine {
