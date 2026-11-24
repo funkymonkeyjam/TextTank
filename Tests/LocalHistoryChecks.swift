@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 import EditorBridge
 @testable import TextTankCore
@@ -216,6 +217,7 @@ import EditorBridge
         let before = store.usage()
         check(delegate.validateMenuItem(clearing), "V10 Clear Local History is available")
         delegate.clearLocalHistory(clearing)
+        _ = await waitUntil("V10 the clear confirmation to be asked") { prompts.count == 1 }
         let prompt = try requireValue(prompts.last, "V10 the clear confirmation")
         check(
             prompt.buttons.map(\.title) == ["Cancel", "Clear This File’s History", "Clear All History"]
@@ -231,11 +233,17 @@ import EditorBridge
         check(store.usage() == before, "V10 Cancel clears nothing")
         answer = .thisFile
         delegate.clearLocalHistory(clearing)
+        _ = await waitUntil("V10 this file's history to be cleared") {
+            prompts.count == 2 && delegate.workspaceWindow.lastTabMessage.hasPrefix("Cleared 1 earlier version of this file")
+        }
         check(
             try store.versions(forPath: key(other)).isEmpty && store.versions(forPath: key(renamed)).count == 5,
             "V10 clearing this file's history leaves every other file's")
         answer = .everything
         delegate.clearLocalHistory(clearing)
+        _ = await waitUntil("V10 all history to be cleared") {
+            prompts.count == 3 && delegate.workspaceWindow.lastTabMessage.hasPrefix("Cleared 5 earlier versions of 1 file")
+        }
         check(
             try store.usage() == LocalHistoryUsage(files: 0, versions: 0, bytes: 0)
                 && FileManager.default.contentsOfDirectory(atPath: home.path) == ["not-history.txt"],
@@ -246,8 +254,202 @@ import EditorBridge
             "V10 clearing changes no file and no open document")
         let asked = prompts.count
         delegate.clearLocalHistory(clearing)
+        _ = await waitUntil("V10 the nothing-to-clear message") {
+            delegate.workspaceWindow.lastTabMessage.contains("nothing to clear")
+        }
         check(
             prompts.count == asked && delegate.workspaceWindow.lastTabMessage.contains("nothing to clear"),
             "V10 with nothing kept, the command says so instead of asking")
+        try await fixRoundOne(delegate: delegate, doc: doc, folder: folder, command: command, clearing: clearing)
+    }
+    /// Fix round 1: a save never waits for the store, the version before the newest stays the
+    /// pre-save content after an eviction, expiry runs with the switch off, and an unreadable
+    /// settings file keeps nothing new and deletes nothing.
+    private static func fixRoundOne(
+        delegate: AppDelegate, doc: TextDocument, folder: URL, command: NSMenuItem, clearing: NSMenuItem
+    ) async throws {
+        final class Clock: @unchecked Sendable {
+            private let lock = NSLock()
+            private var value = Date()
+            var now: Date {
+                lock.lock()
+                defer { lock.unlock() }
+                return value
+            }
+            func advance(_ seconds: TimeInterval) {
+                lock.lock()
+                value += seconds
+                lock.unlock()
+            }
+        }
+        let clock = Clock()
+        var limits = LocalHistoryLimits()
+        limits.totalBytes = 100
+        let home = folder.appendingPathComponent("store-two/LocalHistory", isDirectory: true)
+        let store = LocalHistoryStore(directory: home, limits: limits, clock: { clock.now })
+        LocalHistory.store = store
+        LocalHistory.forgetNewest()
+        func settle() async {
+            store.waitUntilIdle()
+            // The store's reply reaches the main thread on its next turns.
+            for _ in 0..<5 { await Task.yield() }
+            try? await Task.sleep(nanoseconds: 30_000_000)
+        }
+        func write(_ text: String, to document: TextDocument, _ url: URL, _ operation: NSDocument.SaveOperationType = .saveOperation)
+            async throws
+        {
+            _ = document.editor.setSelectionAnchor(0, caret: document.editor.byteLength)
+            _ = document.editor.replaceSelection(text)
+            try await save(document, to: url, operation)
+            await settle()
+        }
+        // Finding 4: the newest version of a file is evicted by another file's save.
+        let small = folder.appendingPathComponent("small.txt"), large = folder.appendingPathComponent("large.txt")
+        try await write("small one\n", to: doc, small, .saveAsOperation)
+        let neighbour = DocumentFactory.makeUntitled(display: false)
+        defer { neighbour.close() }
+        clock.advance(10)
+        try await write(String(repeating: "L", count: 95) + "\n", to: neighbour, large, .saveAsOperation)
+        check(
+            try store.versions(forPath: key(small)).isEmpty && store.versions(forPath: key(large)).count == 1,
+            "F4 fixture: another file's save evicted this file's only version")
+        clock.advance(10)
+        try FileManager.default.removeItem(at: large)
+        try store.clear(path: key(large))
+        try await write("small two\n", to: doc, small)
+        let afterEviction = try store.versions(forPath: key(small))
+        check(
+            try afterEviction.map(\.kind) == [.saved, .replaced]
+                && store.data(forPath: key(small), version: afterEviction[1].id) == Data("small one\n".utf8),
+            "F4 after its newest version was evicted, the next save again keeps what it replaced")
+        clock.advance(10)
+        try await write("small three\n", to: doc, small)
+        check(
+            try store.versions(forPath: key(small)).map(\.kind) == [.saved, .saved, .replaced],
+            "F4 an ordinary next save keeps only what it wrote: history already ends with what it replaced")
+        // A record that fails leaves the newest version unknown, so the next save reads again.
+        let manifestFolder = try requireValue(
+            try FileManager.default.contentsOfDirectory(at: home, includingPropertiesForKeys: nil).first,
+            "F4 the file's history folder")
+        // The folder is moved aside and a plain file put in its place: nothing can be written there.
+        let aside = home.appendingPathComponent("aside")
+        try FileManager.default.moveItem(at: manifestFolder, to: aside)
+        try Data().write(to: manifestFolder)
+        clock.advance(10)
+        try await write("small four\n", to: doc, small)
+        _ = await waitUntil("F4 the status line to report the version that was not kept") {
+            let status = doc.presentation?.status
+            return ((status?.stringValue ?? "") + (status?.toolTip ?? "")).contains("An earlier version could not be kept")
+        }
+        try FileManager.default.removeItem(at: manifestFolder)
+        try FileManager.default.moveItem(at: aside, to: manifestFolder)
+        let status = doc.presentation?.status
+        check(
+            try store.versions(forPath: key(small)).count == 3 && Data(contentsOf: small) == Data("small four\n".utf8)
+                && ((status?.stringValue ?? "") + (status?.toolTip ?? "")).contains("An earlier version could not be kept"),
+            "F4 fixture: a version that cannot be written does not fail the save, and the status line says so")
+        clock.advance(10)
+        try await write("small five\n", to: doc, small)
+        let afterFailure = try store.versions(forPath: key(small))
+        check(
+            try afterFailure.prefix(2).map(\.kind) == [.saved, .replaced]
+                && store.data(forPath: key(small), version: afterFailure[1].id) == Data("small four\n".utf8),
+            "F4 after a failed record, the next save keeps the content that record missed")
+
+        // Finding 6: a save, and the Clear command, never wait for the store's queue.
+        let gate = DispatchSemaphore(value: 0)
+        store.prune { _ in gate.wait() }
+        _ = doc.editor.setSelectionAnchor(0, caret: 0)
+        _ = doc.editor.replaceSelection("while the store is busy ")
+        // Nothing remembered: before the fix this save asked the store, and waited for it.
+        LocalHistory.forgetNewest()
+        var finished = false
+        doc.save(to: small, ofType: TextDocument.plainTextType, for: .saveOperation) { _ in finished = true }
+        let saved = await waitUntil(timeout: 5, "F6 the save to finish while the store's queue is blocked") { finished }
+        var busyPrompts = 0
+        let priorConfirm = LocalHistory.confirmClear
+        LocalHistory.confirmClear = { _, _, reply in
+            busyPrompts += 1
+            reply(.cancel)
+        }
+        delegate.clearLocalHistory(clearing)
+        check(
+            try saved && !doc.isDocumentEdited && Data(contentsOf: small).starts(with: Data("while the store".utf8))
+                && busyPrompts == 0,
+            "F6 a save completes, and Clear returns, while the history queue is blocked")
+        gate.signal()
+        await settle()
+        _ = await waitUntil("F6 the clear confirmation once the store answers") { busyPrompts == 1 }
+        LocalHistory.confirmClear = priorConfirm
+        check(
+            try store.versions(forPath: key(small)).first?.kind == .saved,
+            "F6 the version handed over during the wait is kept once the queue is free")
+
+        // A rename that only changes case keeps the history, whatever the volume does with case.
+        let cased = folder.appendingPathComponent("SMALL.txt")
+        let kept = try store.versions(forPath: key(small)).map(\.id)
+        try require(rename(small.path, cased.path) == 0, "F7 fixture: the file is renamed by case alone")
+        doc.fileURL = cased
+        await settle()
+        check(
+            try store.versions(forPath: key(cased)).map(\.id) == kept,
+            "F7 a rename that changes only the case of the name keeps the history")
+        // Bytes another program wrote are not labelled with the document's own format.
+        clock.advance(10)
+        try Data([0xFF, 0xFE, 0x68, 0x00, 0x69, 0x00]).write(to: cased, options: .atomic)
+        _ = doc.editor.setSelectionAnchor(0, caret: doc.editor.byteLength)
+        _ = doc.editor.replaceSelection("after an outside rewrite\n")
+        // Save As over the document's own file is the one save allowed over an outside change.
+        try doc.writeSafely(to: cased, ofType: TextDocument.plainTextType, for: .saveAsOperation)
+        await settle()
+        let outside = try store.versions(forPath: key(cased))
+        check(
+            outside.prefix(2).map(\.kind) == [.saved, .replaced] && outside[1].format == nil
+                && outside[0].format == FileFormat(encoding: .utf8, bom: false),
+            "F7 bytes that another program wrote are kept without the document's format, to be detected on reading")
+        check(
+            try LocalHistory.snapshot(
+                store.data(forPath: key(cased), version: outside[1].id), of: outside[1], name: "x"
+            ).bytes == Data("hi".utf8),
+            "F7 and they are decoded by detection when compared")
+
+        // Finding 2: versions expire while the switch is off.
+        var options = delegate.settings.value
+        options.keepLocalHistory = false
+        _ = try delegate.settings.save(options)
+        clock.advance(31 * 24 * 60 * 60)
+        check(try store.versions(forPath: key(cased)).count >= 2, "F2 fixture: versions older than thirty days are still there")
+        LocalHistory.pruneAtLaunch()
+        await settle()
+        check(
+            store.usage() == LocalHistoryUsage(files: 0, versions: 0, bytes: 0),
+            "F2 with the switch off the launch prune still expires old versions")
+        options.keepLocalHistory = nil
+        _ = try delegate.settings.save(options)
+
+        // An unreadable settings file: keep nothing new, delete nothing.
+        clock.advance(10)
+        try await write("kept before settings broke\n", to: doc, cased)
+        let settingsURL = delegate.settings.url, good = try Data(contentsOf: settingsURL)
+        try Data("{ not settings".utf8).write(to: settingsURL)
+        let unreadable = AppDelegate()
+        unreadable.installEditorServices()
+        defer {
+            try? good.write(to: settingsURL)
+            delegate.installEditorServices()
+        }
+        try require(unreadable.settings.loadFailureMessage != nil, "F7 fixture: the settings file cannot be read")
+        let before = try store.versions(forPath: key(cased)).map(\.id)
+        check(
+            !LocalHistory.isEnabled && !doc.validateUserInterfaceItem(command),
+            "F7 with unreadable settings local history is off, not silently on")
+        clock.advance(10)
+        try await write("saved while settings are unreadable\n", to: doc, cased)
+        clock.advance(31 * 24 * 60 * 60)
+        LocalHistory.pruneAtLaunch()
+        await settle()
+        check(
+            try store.versions(forPath: key(cased)).map(\.id) == before && !before.isEmpty,
+            "F7 with unreadable settings a save keeps no version and nothing kept is expired or deleted")
     }
 }

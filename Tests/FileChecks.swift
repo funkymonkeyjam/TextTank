@@ -385,7 +385,9 @@ import os
                     store.record(
                         path: path, bytes: Data(text.utf8), format: FileFormat(),
                         replaced: replaced.map { Data($0.utf8) }
-                    ) { error in failure.withLock { $0 = error } }
+                    ) { result in
+                        if case .failure(let error) = result { failure.withLock { $0 = error } }
+                    }
                     store.waitUntilIdle()
                     if let error = failure.withLock({ $0 }) { throw error }
                 }
@@ -546,6 +548,114 @@ import os
                         && Data(contentsOf: stranger) == Data("keep".utf8),
                     "V10 clearing everything removes the store's own folders and nothing else")
                 check(try store.clear().files == 2 && store.usage().versions == 0, "V10 the first store clears too")
+                // Fix round 1, finding 3: a folder without a readable manifest is not a dead end.
+                func folder(_ store: LocalHistoryStore, _ path: String) -> URL {
+                    store.directory.appendingPathComponent(WorkspaceStore.fingerprint(Data(path.utf8)))
+                }
+                /// Leaves the folder as a stop or damage would: no manifest, or an unreadable one.
+                /// The bytes are dated now by this check's clock, as they would be by the real one.
+                func spoil(_ store: LocalHistoryStore, _ path: String, with garbage: Data? = nil) throws {
+                    let home = folder(store, path), manifest = home.appendingPathComponent("manifest.json")
+                    for name in try FileManager.default.contentsOfDirectory(atPath: home.path) where name.hasSuffix(".bytes") {
+                        try FileManager.default.setAttributes(
+                            [.modificationDate: clock.now], ofItemAtPath: home.appendingPathComponent(name).path)
+                    }
+                    if let garbage { try garbage.write(to: manifest) } else { try FileManager.default.removeItem(at: manifest) }
+                }
+                let healHome = base.appendingPathComponent("Heal", isDirectory: true)
+                let heal = LocalHistoryStore(directory: healHome, clock: { clock.now })
+                let h = "/synthetic/heal.txt", g = "/synthetic/garbled.txt"
+                try record(heal, h, "first bytes")
+                // As after a stop between the first version's bytes and its manifest.
+                try spoil(heal, h)
+                check(
+                    try heal.usage() == LocalHistoryUsage(files: 1, versions: 1, bytes: 11)
+                        && heal.usage(forPath: h).versions == 1 && texts(heal, h) == ["first bytes"],
+                    "F3 bytes without a manifest are counted, listed and readable for their file")
+                clock.advance(1)
+                try record(heal, h, "second bytes")
+                check(
+                    try texts(heal, h) == ["second bytes", "first bytes"]
+                        && FileManager.default.fileExists(atPath: folder(heal, h).appendingPathComponent("manifest.json").path),
+                    "F3 the next save of that file is kept and writes a manifest naming what was there")
+                try record(heal, g, "before damage")
+                try spoil(heal, g, with: Data("{ not a manifest".utf8))
+                clock.advance(1)
+                try record(heal, g, "after damage")
+                check(
+                    try texts(heal, g) == ["after damage", "before damage"],
+                    "F3 a damaged manifest does not block new versions, and the bytes it named are kept")
+                try spoil(heal, g, with: Data("{ not a manifest".utf8))
+                check(
+                    try heal.usage(forPath: g) == LocalHistoryUsage(files: 1, versions: 2, bytes: 25)
+                        && heal.clear(path: g).versions == 2
+                        && !FileManager.default.fileExists(atPath: folder(heal, g).path),
+                    "F3 a damaged folder is counted and can be cleared for its file")
+                // It also expires and counts toward the total, with no path to go by.
+                try record(heal, g, "damaged again")
+                try spoil(heal, g)
+                clock.advance(31 * 24 * 60 * 60)
+                heal.prune()
+                heal.waitUntilIdle()
+                check(
+                    try heal.usage() == LocalHistoryUsage(files: 0, versions: 0, bytes: 0)
+                        && FileManager.default.contentsOfDirectory(atPath: healHome.path).isEmpty,
+                    "F3 bytes without a manifest expire like any version")
+                // An interrupted move: the folder was renamed, its manifest still states the old path.
+                let from = "/synthetic/before-move.txt", to = "/synthetic/after-move.txt"
+                try record(heal, from, "moved one")
+                clock.advance(1)
+                try record(heal, from, "moved two")
+                try FileManager.default.moveItem(at: folder(heal, from), to: folder(heal, to))
+                check(
+                    try texts(heal, to) == ["moved two", "moved one"] && texts(heal, from).isEmpty
+                        && heal.versions(forPath: to).allSatisfy { $0.kind == .saved && $0.format == FileFormat() },
+                    "F3 a move that stopped after the rename still lists every version, with its record")
+                clock.advance(1)
+                try record(heal, to, "moved three")
+                check(
+                    try texts(heal, to) == ["moved three", "moved two", "moved one"],
+                    "F3 the next save after an interrupted move repairs the manifest")
+                // Joining two histories links the bytes before either manifest changes.
+                try record(heal, from, "late arrival")
+                heal.relocate(from: from, to: to)
+                heal.waitUntilIdle()
+                check(
+                    try texts(heal, to).first == "late arrival" && texts(heal, to).count == 4
+                        && !FileManager.default.fileExists(atPath: folder(heal, from).path),
+                    "F3 joining a moved history keeps every version of both and removes the old folder last")
+                // Finding 4: every reply says what each file's newest version now is.
+                var tight = LocalHistoryLimits()
+                tight.totalBytes = 12
+                let replyHome = base.appendingPathComponent("Reply", isDirectory: true)
+                let replying = LocalHistoryStore(directory: replyHome, limits: tight, clock: { clock.now })
+                let replies = OSAllocatedUnfairLock<[[String: String?]]>(initialState: [])
+                let p1 = "/synthetic/one.txt", p2 = "/synthetic/two.txt"
+                replying.record(path: p1, bytes: Data("12345678".utf8)) { result in
+                    if case .success(let change) = result { replies.withLock { $0.append(change.newest) } }
+                }
+                replying.waitUntilIdle()
+                clock.advance(1)
+                replying.record(path: p2, bytes: Data("abcdefgh".utf8)) { result in
+                    if case .success(let change) = result { replies.withLock { $0.append(change.newest) } }
+                }
+                replying.waitUntilIdle()
+                let told = replies.withLock { $0 }
+                check(
+                    told.count == 2 && told[0] == [p1: WorkspaceStore.fingerprint(Data("12345678".utf8))]
+                        && told[1] == [p2: WorkspaceStore.fingerprint(Data("abcdefgh".utf8)), p1: String?.none],
+                    "F4 a record's reply names the newest version of its file and of every file it evicted from")
+                // Finding 6: the asynchronous entry points answer without the caller waiting.
+                let answers = OSAllocatedUnfairLock<(LocalHistoryUsage?, LocalHistoryUsage)?>(initialState: nil)
+                replying.summary(forPath: p2) { own, all in answers.withLock { $0 = (own, all) } }
+                let cleared = OSAllocatedUnfairLock<Int>(initialState: -1)
+                replying.clear(path: nil) { result in cleared.withLock { $0 = (try? result.get().versions) ?? -2 } }
+                replying.waitUntilIdle()
+                check(
+                    answers.withLock { $0?.0 } == LocalHistoryUsage(files: 1, versions: 1, bytes: 8)
+                        && answers.withLock { $0?.1 } == LocalHistoryUsage(files: 1, versions: 1, bytes: 8)
+                        && cleared.withLock { $0 } == 1 && replying.usage().versions == 0,
+                    "F6 summary and clear answer through their completion")
                 try FileManager.default.removeItem(at: base)
             }
             Checks.section("F149 byte-exact recovery revision identity") {

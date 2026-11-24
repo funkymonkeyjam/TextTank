@@ -258,6 +258,31 @@ import UniformTypeIdentifiers
     private var quitHold: UInt64?
     nonisolated private let quitHoldFlag = QuitHoldFlag()
     var isHeldForQuit: Bool { quitHold != nil }
+    /// AppKit's quit review closes each document as soon as it is clean, saved or discarded,
+    /// while the person can still press Cancel on a later document's review. Until the quit is
+    /// certain such a close is only noted: the document leaves the list of open documents and
+    /// nothing else changes, so its tab, text, selection and Undo history are as they were. It
+    /// is really closed once the quit is certain, or registered again when the quit is cancelled.
+    private(set) var quitCloseDeferred = false
+    private(set) static var deferredQuitCloses: [TextDocument] = []
+    /// Set by the application delegate only while it closes everything for a quit that is certain.
+    static var quitIsCertain = false
+    /// The quit was cancelled: every document whose close was only noted is open again.
+    static func cancelDeferredQuitCloses() {
+        let deferred = deferredQuitCloses
+        deferredQuitCloses = []
+        for document in deferred where document.quitCloseDeferred {
+            document.quitCloseDeferred = false
+            if !document.isClosed, !NSDocumentController.shared.documents.contains(document) {
+                NSDocumentController.shared.addDocument(document)
+            }
+        }
+    }
+    /// The quit is certain: the noted closes are handed back to be carried out.
+    static func takeDeferredQuitCloses() -> [TextDocument] {
+        defer { deferredQuitCloses = [] }
+        return deferredQuitCloses
+    }
     /// An untitled document with unsaved text, whether or not a quit is holding it.
     var isEditedUntitled: Bool { isOpen && fileURL == nil && super.isDocumentEdited }
     override var isDocumentEdited: Bool { !quitHoldFlag.get() && super.isDocumentEdited }
@@ -302,6 +327,17 @@ import UniformTypeIdentifiers
     }
     /// The quit was cancelled, or the copy could not be confirmed: the document is edited again.
     func releaseQuitHold() {
+        guard quitHold != nil else { return }
+        quitHold = nil
+        quitHoldFlag.set(false)
+        // The tab, the title bar and the status row asked while the hold answered "not edited".
+        presentation?.host.metadataChanged()
+        presentations.forEach { $0.refreshStatusDetails() }
+        showSaveState(recoveryCopyKept: recoveryCopyKept)
+    }
+    /// The document was saved under a name while a quit held it: it is a file now, and the
+    /// recovery copy is no longer the document.
+    private func dropQuitHoldForSavedFile() {
         guard quitHold != nil else { return }
         quitHold = nil
         quitHoldFlag.set(false)
@@ -386,6 +422,7 @@ import UniformTypeIdentifiers
             if Thread.isMainThread {
                 MainActor.assumeIsolated {
                     LocalHistory.fileURLChanged(from: movedFrom, to: movedTo)
+                    if newValue != nil { dropQuitHoldForSavedFile() }
                     recoveryBase += 1
                     externalFile.invalidate()
                     // Only the existing main-thread setter route clears the recovered label.
@@ -782,6 +819,16 @@ import UniformTypeIdentifiers
     }
     override func close() {
         guard !isClosed else { return }
+        if !Self.quitIsCertain {
+            if quitCloseDeferred { return }
+            let reviewing = (NSDocumentController.shared as? TextDocumentController)?.isReviewingOpenDocuments == true
+            if reviewing || quitHold != nil {
+                quitCloseDeferred = true
+                Self.deferredQuitCloses.append(self)
+                NSDocumentController.shared.removeDocument(self)
+                return
+            }
+        }
         // Text typed after the copy was verified: write it again, or keep the earlier copy.
         if let quitHold, quitHold != recoveryRevision {
             let earlier = quitHold
@@ -806,7 +853,8 @@ import UniformTypeIdentifiers
         // NSDocument only reaches close after the user has chosen Save or Discard, or after a
         // quit has verified this untitled document's copy (DS-D9). That copy is the document
         // now: it is never removed here, and the next launch reopens it.
-        let store = Self.recovery, id = recoveryID, revision = recoveryRevision, kept = quitHold != nil
+        let store = Self.recovery, id = recoveryID, revision = recoveryRevision,
+            kept = quitHold != nil && fileURL == nil
         // Never block or prompt here: close runs once per document on the quit path. A snapshot
         // that could not be removed is found by the next launch's scan and offered or listed there.
         do {
@@ -1338,11 +1386,8 @@ import UniformTypeIdentifiers
         // A missing file is simply written again. A changed one is refused, except for Save As:
         // there the save panel has already asked the person to replace that file. Any other
         // failure (the path became a link, a folder or unreadable) still stops the save.
-        if inPlace, diskDigest != nil, try diskState(trustingSettledMetadata: true) == .changed,
-            saveOperation != .saveAsOperation
-        {
-            throw saveConflict(at: destination)
-        }
+        let changedOnDisk = try inPlace && diskDigest != nil && diskState(trustingSettledMetadata: true) == .changed
+        if changedOnDisk, saveOperation != .saveAsOperation { throw saveConflict(at: destination) }
         let submitted = try FileCodec.encode(Self.capturedText(from: editor.checkedUTF8Data), format: format),
             submittedFormat = format,
             submittedRevision = editor.revision
@@ -1352,8 +1397,10 @@ import UniformTypeIdentifiers
         // does not already end with it. Save Copy keeps no history: it is not this document's file.
         let history =
             saveOperation == .saveToOperation
-            ? nil : LocalHistory.pendingSave(to: destination, byteCount: submitted.count, knownDigest: inPlace ? diskDigest : nil)
-        let replacedFormat = inPlace ? savedFormat : nil
+            ? nil : LocalHistory.pendingSave(to: destination, knownDigest: inPlace && !changedOnDisk ? diskDigest : nil)
+        // The format last read or saved describes the replaced bytes only when they are those
+        // bytes; a file another program rewrote is decoded by detection when it is compared.
+        let replacedFormat = inPlace && history?.replacedDigest == diskDigest ? savedFormat : nil
         do {
             inPlaceWriteURL = inPlace && Thread.isMainThread ? destination : nil
             defer { inPlaceWriteURL = nil }
@@ -1510,55 +1557,107 @@ enum EditorCaptureError: LocalizedError, Equatable {
     /// An isolated support directory (a check, the bundle smoke run) keeps no history unless
     /// the check sets this.
     static var allowsIsolatedSupport = false
+    /// On when the stored setting is on, or absent, in a settings file that could be read. When
+    /// Settings.json cannot be read the person's choice is unknown: nothing new is kept and
+    /// nothing is deleted or expired until it can be read again.
     static var isEnabled: Bool {
-        EditorServices.current?.settings?.value.keepsLocalHistory != false
-            && (AppStorage.permitsLegacyDefaults || allowsIsolatedSupport)
+        guard settingsAreReadable, EditorServices.current?.settings?.value.keepsLocalHistory == true else {
+            return false
+        }
+        return storeIsOurs
     }
-    /// SHA-256 of the newest version this process recorded for a path, so that an ordinary save
-    /// neither reads the file it replaces nor waits for the store's queue.
-    private static var newest: [String: String] = [:]
+    static var settingsAreReadable: Bool {
+        guard let settings = EditorServices.current?.settings else { return false }
+        return settings.loadFailureMessage == nil
+    }
+    private static var storeIsOurs: Bool { AppStorage.permitsLegacyDefaults || allowsIsolatedSupport }
+    /// Versions expire by age and size whether or not new ones are being kept. Only an
+    /// unreadable settings file stops that.
+    static func pruneAtLaunch() {
+        guard settingsAreReadable, storeIsOurs else { return }
+        store.prune { result in
+            guard case .success(let change) = result else { return }
+            DispatchQueue.main.async { apply(change) }
+        }
+    }
+    /// What this process knows of each file's newest kept version, learned only from the
+    /// store's own replies. A path that is absent is unknown: a save of it reads what it is
+    /// about to replace and the store decides whether it already has those bytes. Nothing here
+    /// ever waits for the store's queue.
+    private enum Newest {
+        case none
+        case digest(String)
+    }
+    private static var newest: [String: Newest] = [:]
+    /// Saves of a path whose record has not been answered yet; its newest version is unknown.
+    private static var unanswered: [String: Int] = [:]
+    private static func apply(_ change: LocalHistoryChange) {
+        for (path, digest) in change.newest where unanswered[path] == nil {
+            newest[path] = digest.map(Newest.digest) ?? Newest.none
+        }
+    }
     struct PendingSave {
         let path: String
         let replaced: Data?
+        let replacedDigest: String?
     }
-    /// Called before the write. Nil when this save keeps no history.
-    static func pendingSave(to destination: URL, byteCount: Int, knownDigest: String?) -> PendingSave? {
+    /// Called before the write. Nil when this save keeps no history. The bytes about to be
+    /// replaced are read here, from the document's own file, unless the store has already said
+    /// that its newest version of this file is exactly those bytes.
+    static func pendingSave(to destination: URL, knownDigest: String?) -> PendingSave? {
         guard isEnabled, destination.isFileURL else { return nil }
-        let path = TextDocument.canonicalDiskURL(destination).path, limit = store.limits.versionBytes
-        let last = newest[path] ?? store.latestDigest(forPath: path)
-        if let knownDigest, knownDigest == last { return PendingSave(path: path, replaced: nil) }
-        guard let read = try? WorkspaceStore.readRegularFileSample(destination, maximumBytes: limit),
-            read.sample.digest != last
-        else { return PendingSave(path: path, replaced: nil) }
-        return PendingSave(path: path, replaced: read.data)
+        let path = TextDocument.canonicalDiskURL(destination).path
+        if let knownDigest, case .digest(let last)? = newest[path], last == knownDigest {
+            return PendingSave(path: path, replaced: nil, replacedDigest: nil)
+        }
+        guard
+            let read = try? WorkspaceStore.readRegularFileSample(destination, maximumBytes: store.limits.versionBytes)
+        else { return PendingSave(path: path, replaced: nil, replacedDigest: nil) }
+        return PendingSave(path: path, replaced: read.data, replacedDigest: read.sample.digest)
     }
     /// Called after the write succeeded. The store copies and prunes on its own queue; a failure
     /// there never fails the save and is said in the status line.
     static func recordSave(
         _ save: PendingSave, bytes: Data, format: FileFormat, replacedFormat: FileFormat?, in document: TextDocument
     ) {
-        if bytes.count <= store.limits.versionBytes { newest[save.path] = WorkspaceStore.fingerprint(bytes) }
-        let id = document.runtimeID
+        let id = document.runtimeID, path = save.path
+        newest[path] = nil
+        unanswered[path, default: 0] += 1
         store.record(
-            path: save.path, bytes: bytes, format: format, replaced: save.replaced, replacedFormat: replacedFormat
-        ) { error in
-            guard let reason = error?.localizedDescription else { return }
+            path: path, bytes: bytes, format: format, replaced: save.replaced, replacedFormat: replacedFormat
+        ) { result in
             DispatchQueue.main.async {
-                NSLog("TextTank: an earlier version could not be kept: %@", reason)
-                let open = NSDocumentController.shared.documents.compactMap { $0 as? TextDocument }
-                open.first { $0.runtimeID == id }?.presentation?.showTransientStatus(
-                    "Saved. An earlier version could not be kept: " + reason, seconds: 8)
+                let left = (unanswered[path] ?? 1) - 1
+                unanswered[path] = left > 0 ? left : nil
+                switch result {
+                case .success(let change): apply(change)
+                case .failure(let error):
+                    let reason = error.localizedDescription
+                    NSLog("TextTank: an earlier version could not be kept: %@", reason)
+                    let open = NSDocumentController.shared.documents.compactMap { $0 as? TextDocument }
+                    open.first { $0.runtimeID == id }?.presentation?.showTransientStatus(
+                        "Saved. An earlier version could not be kept: " + reason, seconds: 8)
+                }
             }
         }
     }
     /// A file that was renamed or moved takes its history with it. After Save As the earlier
     /// file is still there and keeps its own history; the new file starts one.
     static func fileURLChanged(from old: URL?, to new: URL?) {
-        guard isEnabled, let old, let new, old != new, !FileManager.default.fileExists(atPath: old.path) else {
-            return
+        guard isEnabled, let old, let new, old.path != new.path, wasRenamed(old, to: new) else { return }
+        newest[old.path] = nil
+        newest[new.path] = nil
+        store.relocate(from: old.path, to: new.path) { result in
+            guard case .success(let change) = result else { return }
+            DispatchQueue.main.async { apply(change) }
         }
-        if let digest = newest.removeValue(forKey: old.path) { newest[new.path] = digest }
-        store.relocate(from: old.path, to: new.path)
+    }
+    /// The earlier path is gone, or names the same file as the new one: a rename that changes
+    /// only the case of a name on a volume that ignores case leaves both spellings "existing".
+    nonisolated static func wasRenamed(_ old: URL, to new: URL) -> Bool {
+        var before = stat(), after = stat()
+        guard lstat(old.path, &before) == 0 else { return true }
+        return lstat(new.path, &after) == 0 && before.st_dev == after.st_dev && before.st_ino == after.st_ino
     }
     static func forgetNewest(path: String? = nil) {
         if let path { newest[path] = nil } else { newest = [:] }
@@ -1637,32 +1736,48 @@ enum EditorCaptureError: LocalizedError, Equatable {
             reply(prompt.buttons[index].choice)
         }
     }
-    /// Compare › Clear Local History…. Says so when there is nothing to clear.
+    /// Compare › Clear Local History…. Says so when there is nothing to clear. The counts and the
+    /// deletion are the store's asynchronous work; the main thread never waits for it.
     static func clear(for document: TextDocument?, in host: WorkspaceWindowController) {
-        let path = document?.diskURL?.path
-        let all = store.usage(), own = path.map { store.usage(forPath: $0) }
-        guard all.versions > 0 else {
+        let path = document?.diskURL?.path, name = path == nil ? nil : document?.displayName
+        let window = HostReference(host)
+        store.summary(forPath: path) { own, all in
+            DispatchQueue.main.async {
+                guard let host = window.host else { return }
+                confirm(ClearPrompt(name: name, own: own, all: all), path: path, in: host)
+            }
+        }
+    }
+    /// Carries the workspace window through the store's reply; read on the main thread only.
+    private final class HostReference: @unchecked Sendable {
+        weak var host: WorkspaceWindowController?
+        init(_ host: WorkspaceWindowController) { self.host = host }
+    }
+    private static func confirm(_ prompt: ClearPrompt, path: String?, in host: WorkspaceWindowController) {
+        guard prompt.all.versions > 0 else {
             host.showTabMessage("No earlier versions are kept, so there is nothing to clear.")
             return
         }
         guard let window = host.window, window.attachedSheet == nil else { return }
-        let prompt = ClearPrompt(name: path == nil ? nil : document?.displayName, own: own, all: all)
-        confirmClear(prompt, window) { [weak host] choice in
-            do {
-                switch choice {
-                case .cancel: return
-                case .thisFile:
-                    guard let path else { return }
-                    let removed = try store.clear(path: path)
-                    forgetNewest(path: path)
-                    host?.showTabMessage("Cleared \(ClearPrompt.versions(removed.versions)) of this file.")
-                case .everything:
-                    let removed = try store.clear()
-                    forgetNewest()
-                    host?.showTabMessage(
-                        "Cleared \(ClearPrompt.versions(removed.versions)) of \(ClearPrompt.files(removed.files)).")
+        let reference = HostReference(host)
+        confirmClear(prompt, window) { choice in
+            guard choice != .cancel, choice == .everything || path != nil else { return }
+            let target = choice == .thisFile ? path : nil
+            store.clear(path: target) { result in
+                DispatchQueue.main.async {
+                    forgetNewest(path: target)
+                    switch result {
+                    case .failure(let error):
+                        reference.host?.showTabMessage(
+                            "Local history could not be cleared. " + error.localizedDescription)
+                    case .success(let removed):
+                        reference.host?.showTabMessage(
+                            target == nil
+                                ? "Cleared \(ClearPrompt.versions(removed.versions)) of \(ClearPrompt.files(removed.files))."
+                                : "Cleared \(ClearPrompt.versions(removed.versions)) of this file.")
+                    }
                 }
-            } catch { host?.showTabMessage("Local history could not be cleared. " + error.localizedDescription) }
+            }
         }
     }
 }

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 import EditorBridge
 @testable import TextTankCore
@@ -181,11 +182,32 @@ import EditorBridge
             rf.isDocumentEdited && r1.isHeldForQuit && r2.isHeldForQuit
                 && controller.documents.filter(\.isDocumentEdited).map { $0 as? TextDocument } == [rf],
             "V9 the review covers the edited file only")
+        // Fix round 1, finding 1. AppKit's review closes a held document as clean while the file's
+        // review can still be cancelled. That close is only noted.
+        let placed = places(second.workspaceWindow, names), revisionBefore = r1.editor.revision
+        r1.close()
+        check(
+            r1.isOpen && r1.quitCloseDeferred && !controller.documents.contains(r1)
+                && second.workspaceWindow.presentations.contains { $0.document === r1 }
+                && places(second.workspaceWindow, names) == placed,
+            "F1 a close during a quit that can still be cancelled leaves the held tab where it is")
+        second.reviewed(controller, didReviewAll: false, contextInfo: nil)
+        check(
+            replies == [false, false] && controller.documents.contains(r1) && controller.documents.count == 3
+                && r1.isDocumentEdited && !r1.isHeldForQuit && !r1.quitCloseDeferred
+                && r1.editor.checkedUTF8Data == bytes[0] && r1.editor.revision == revisionBefore
+                && places(second.workspaceWindow, names) == placed,
+            "F1 the cancelled quit leaves that document open, registered and edited, with nothing changed")
+        check(second.applicationShouldTerminate(app) == .terminateLater, "F1 fixture: the quit is asked for again")
+        guard spinUntil("F1 the second review request", { requests == 3 }) else { return }
+        r1.close()
+        check(r1.isOpen && r1.isHeldForQuit, "F1 the held document is still open until the quit is certain")
         // As if the person chose Don't Save for the file.
         second.reviewed(controller, didReviewAll: true, contextInfo: nil)
         let afterReview = try required(LastSessionLayout.read(metadata))
+        check(!r1.isOpen, "F1 once the quit is certain the noted close is carried out")
         check(
-            replies == [false, true] && controller.documents.isEmpty && afterReview.untitled?.count == 2
+            replies == [false, false, true] && controller.documents.isEmpty && afterReview.untitled?.count == 2
                 && afterReview.files.count == 1,
             "V9 the reviewed quit keeps both untitled documents in the session")
         check(
@@ -216,7 +238,7 @@ import EditorBridge
         third.requestUnsavedReview = { _ in requests += 1 }
         third.replyToTerminate = { replies.append($0) }
         check(third.applicationShouldTerminate(app) == .terminateLater, "V9 off: an edited untitled document defers the quit")
-        guard spinUntil("V9 off: the review request", { requests == 3 }) else { return }
+        guard spinUntil("V9 off: the review request", { requests == 4 }) else { return }
         check(asked.isDocumentEdited && !asked.isHeldForQuit, "V9 off: the review asks about the untitled document")
         third.reviewed(controller, didReviewAll: true, contextInfo: nil)
         let offSession = try required(LastSessionLayout.read(metadata))
@@ -252,14 +274,14 @@ import EditorBridge
         fourth.replyToTerminate = { replies.append($0) }
         fourth.keptUntitledLimits.count = 1
         check(fourth.applicationShouldTerminate(app) == .terminateLater, "V9 over the count bound the quit is reviewed")
-        guard spinUntil("V9 the review request over the count bound", { requests == 4 }) else { return }
+        guard spinUntil("V9 the review request over the count bound", { requests == 5 }) else { return }
         check(
             c1.isHeldForQuit && !c2.isHeldForQuit && c2.isDocumentEdited,
             "V9 the count bound keeps the first tab and asks about the next")
         fourth.reviewed(controller, didReviewAll: false, contextInfo: nil)
         fourth.keptUntitledLimits = (count: 256, bytes: bytes[0].count + grown.count - 1)
         check(fourth.applicationShouldTerminate(app) == .terminateLater, "V9 over the size bound the quit is reviewed")
-        guard spinUntil("V9 the review request over the size bound", { requests == 5 }) else { return }
+        guard spinUntil("V9 the review request over the size bound", { requests == 6 }) else { return }
         check(
             c1.isHeldForQuit && !c2.isHeldForQuit && c2.isDocumentEdited && c2.editor.checkedUTF8Data == grown,
             "V9 the size bound asks about the document that does not fit and keeps its text")
@@ -268,13 +290,26 @@ import EditorBridge
             count: SizePolicy.standard.keptUntitledCount, bytes: SizePolicy.standard.keptUntitledTotal
         )
 
+        let extra = DocumentFactory.makeUntitled()
+        _ = extra.editor.replaceSelection("about to be saved under a name")
+        let extraID = extra.recoveryID
         // Text typed while the review is open is written again before anything closes.
         _ = rfEdit(controller)?.editor.replaceSelection("X")
         check(fourth.applicationShouldTerminate(app) == .terminateLater, "V9 fixture: a review is open")
-        guard spinUntil("V9 the review request before a late edit", { requests == 6 }) else { return }
+        guard spinUntil("V9 the review request before a late edit", { requests == 7 }) else { return }
         _ = c2.editor.replaceSelection(" late")
         let late = try required(c2.editor.checkedUTF8Data)
+        // Fix round 1, finding 5: a held document that is saved under a name before it closes is
+        // a file. Its recovery copy must not bring it back as a second, untitled tab.
+        let named = try requireValue(document(extraID), "F5 fixture: the third untitled document")
+        check(named.isHeldForQuit && (try? store.load(id: extraID)) != nil, "F5 fixture: it is held, with a verified copy")
+        named.fileURL = root.appendingPathComponent("became-a-file.txt")
         fourth.reviewed(controller, didReviewAll: true, contextInfo: nil)
+        let afterNaming = try required(LastSessionLayout.read(metadata))
+        check(
+            (try? store.load(id: extraID)) == nil && Set(afterNaming.untitled?.map(\.id.rawValue) ?? []) == Set(ids)
+                && afterNaming.files.contains { $0.url.lastPathComponent == "became-a-file.txt" },
+            "F5 a held document that became a file leaves no recovery copy and is not named as untitled")
         check(
             try controller.documents.isEmpty && Data(store.load(id: ids[1]).text.utf8) == late,
             "V9 an edit made during the review is in the kept copy")
