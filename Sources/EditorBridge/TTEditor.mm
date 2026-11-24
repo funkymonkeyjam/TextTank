@@ -818,7 +818,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         NSClipView *textArea = _engine.scrollView.contentView;
         textArea.postsFrameChangedNotifications = YES;
         _textAreaObserver = [NSNotificationCenter.defaultCenter addObserverForName:NSViewFrameDidChangeNotification object:textArea
-            queue:nil usingBlock:^(NSNotification *note) { [weakEditor updateCenteredColumn]; }];
+            queue:nil usingBlock:^(NSNotification *note) { [weakEditor normalizeTextArea]; [weakEditor updateCenteredColumn]; }];
         [_engine message:SCI_SETAUTOMATICFOLD wParam:SC_AUTOMATICFOLD_SHOW | SC_AUTOMATICFOLD_CLICK | SC_AUTOMATICFOLD_CHANGE];
         // Scintilla creates its scroll view at 100x10. Its initWithFrame does not
         // position the inner content. Start at zero so this real size transition also
@@ -1037,6 +1037,26 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 }
 - (NSInteger)textMarginLeft { [self assertThread]; return [_engine message:SCI_GETMARGINLEFT]; }
 - (NSInteger)textMarginRight { [self assertThread]; return [_engine message:SCI_GETMARGINRIGHT]; }
+/// The engine's scroll view lays its text area out by taking the gutter's width off whatever
+/// AppKit gave it. AppKit has sometimes already allowed for the gutter, and the text area is
+/// then a gutter's width short at the right; at other times it has not allowed for a scroll bar
+/// that is always shown, and the bar lies over the text. The text area is put where it belongs:
+/// from the gutter to the pane's edge, or to the vertical scroll bar when that takes space.
+- (void)normalizeTextArea {
+    NSScrollView *scroll = _engine.scrollView;
+    NSClipView *area = scroll.contentView;
+    NSRulerView *gutter = scroll.verticalRulerView;
+    if (!scroll || !area || !gutter || !scroll.rulersVisible) return;
+    const CGFloat left = gutter.requiredThickness;
+    CGFloat right = NSWidth(scroll.bounds);
+    NSScroller *bar = scroll.verticalScroller;
+    if (scroll.hasVerticalScroller && bar && !bar.hidden && scroll.scrollerStyle == NSScrollerStyleLegacy) right -= NSWidth(bar.frame);
+    NSRect frame = area.frame;
+    if (right <= left || (fabs(NSMinX(frame) - left) < 0.5 && fabs(NSMaxX(frame) - right) < 0.5)) return;
+    frame.origin.x = left;
+    frame.size.width = right - left;
+    area.frame = frame;
+}
 - (NSInteger)textAreaWidth { [self assertThread]; return (NSInteger)floor(_engine.scrollView.contentView.bounds.size.width); }
 - (NSInteger)textWidthOfColumns:(NSInteger)columns {
     [self assertThread];

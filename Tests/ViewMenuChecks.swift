@@ -657,6 +657,12 @@ import EditorBridge
         let (document, tab) = try open("column.txt", text, in: folder)
         defer { document.close() }
         let editor = document.editor
+        // A size of this section's own, whatever the screen is and whatever an earlier section
+        // left: wide enough for a 90-character column even beside the sidebar at its widest.
+        let window = try requireValue(host.window, "fixture: workspace window")
+        let sizeBefore = window.contentView?.frame.size ?? NSSize(width: 1400, height: 700)
+        defer { window.setContentSize(sizeBefore) }
+        window.setContentSize(NSSize(width: 1400, height: 700))
         host.window?.layoutIfNeeded()
         let plain = (editor.textMarginLeft, editor.textMarginRight)
         let digit = editor.textWidth(ofColumns: 1)
@@ -674,6 +680,16 @@ import EditorBridge
             // With Wrap Lines off there is no right margin: a long line runs to the pane's edge.
             return view.centeredColumnCharacters == characters && left == spare / 2 && left > plain.0
                 && right == (view.wrap ? spare - left : plain.1)
+        }
+        /// The margins are exactly what the view's own width gives, whatever that width is: the
+        /// column centred where there is room for it, the ordinary margins where there is not.
+        func follows(_ view: TTEditor, _ characters: Int) -> Bool {
+            let spare = textArea(view) - characters * view.textWidth(ofColumns: 1)
+            guard spare > plain.0 + plain.1 else {
+                return view.centeredColumnCharacters == characters && view.textMarginLeft == plain.0
+                    && view.textMarginRight == plain.1
+            }
+            return centered(view, characters)
         }
         check(
             app.settings.value.centeredColumn == true && (stored(app)["centeredColumn"] as? Bool) == true
@@ -703,24 +719,84 @@ import EditorBridge
         // The gutter takes its new width, and the text area gives it up, at the next drawing pass.
         host.window?.displayIfNeeded()
         let withBars = (editor.textMarginLeft, editor.textMarginRight, textArea(editor))
-        func undisturbed() -> Bool {
-            host.window?.contentView?.layoutSubtreeIfNeeded()
-            host.window?.displayIfNeeded()
-            return centered(editor, 90) && (editor.textMarginLeft, editor.textMarginRight, textArea(editor)) == withBars
-                && editor.changeBarsVisible && editor.changeTrackingActive
-        }
         check(centered(editor, 90) && withBars.2 == textArea(editor), "with change bars shown the column is centred in the text area beside the wider gutter")
-        tab.showFind(nil)
-        let findOnly = tab.findBarVisible && undisturbed()
-        tab.replaceDisclosure.performClick(nil)
-        let withReplace = tab.replaceRowShown && undisturbed()
-        tab.goToLine(nil)
-        let withGoToLine = tab.goToLineBarVisible && undisturbed()
-        tab.closeGoToLineBar(restoring: true, returningKeyboard: true)
-        tab.closeFindBar(returningKeyboard: true)
+        // At the window's own size, at a height the text just fits, at a small display's, and at
+        // the smallest window; with scrollers that overlay the text and with ones that are always
+        // shown and take width from it, as on a Mac with a mouse. The margins follow the text
+        // area's width and never its height.
+        let scroll = try requireValue(descendants(of: editor, as: NSScrollView.self).first, "fixture: the editor's scroll view")
+        let styleBefore = scroll.scrollerStyle
+        func settle() {
+            // The scroll view places its gutter and scrollers over two passes after a change.
+            for _ in 0..<2 {
+                window.contentView?.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+                window.display()
+            }
+        }
+        // A height at which the 40 lines just fit, so that a bar is what brings the scroller in.
+        settle()
+        let fitting = window.contentView!.frame.height + CGFloat(41 * editor.comparisonLineHeight + 6) - editor.frame.height
+        for size in [
+            NSSize(width: 1400, height: 700), NSSize(width: 1400, height: fitting), NSSize(width: 1024, height: fitting),
+            NSSize(width: 1024, height: 640), window.contentMinSize
+        ] {
+            for style in [NSScroller.Style.overlay, .legacy] {
+                window.setContentSize(size)
+                scroll.scrollerStyle = style
+                settle()
+                let label = "\(Int(size.width)) × \(Int(size.height)), \(style == .legacy ? "legacy" : "overlay") scrollers"
+                let before = (editor.textMarginLeft, editor.textMarginRight, textArea(editor))
+                var widths: [Int] = [before.2]
+                func barShown() -> Bool { style == .legacy && scroll.verticalScroller?.isHidden == false }
+                var barsShown: Set<Bool> = [barShown()]
+                func holds() -> Bool {
+                    settle()
+                    widths.append(textArea(editor))
+                    barsShown.insert(barShown())
+                    // Same width, same margins; another width, the margins that width gives.
+                    return follows(editor, 90) && editor.changeBarsVisible && editor.changeTrackingActive
+                        && (textArea(editor) != before.2 || (editor.textMarginLeft, editor.textMarginRight) == (before.0, before.1))
+                }
+                let atRest = follows(editor, 90)
+                tab.showFind(nil)
+                let findOnly = tab.findBarVisible && holds()
+                // The bar remembers its Replace row from one showing to the next.
+                if !tab.replaceRowShown { tab.replaceDisclosure.performClick(nil) }
+                let withReplace = tab.replaceRowShown && holds()
+                tab.goToLine(nil)
+                let withGoToLine = tab.goToLineBarVisible && holds()
+                if tab.findBarVisible, tab.replaceRowShown { tab.replaceDisclosure.performClick(nil) }
+                tab.closeGoToLineBar(restoring: true, returningKeyboard: true)
+                tab.closeFindBar(returningKeyboard: true)
+                let after = holds() && !tab.findBarVisible && !tab.goToLineBarVisible
+                check(
+                    atRest && findOnly && withReplace && withGoToLine && after,
+                    "at \(label), showing and hiding the find bar, its Replace row and the inline Go to Line bar leaves the margins what the text area's width gives, and the change-bar margin in place (rest \(atRest), find \(findOnly), replace \(withReplace), go to line \(withGoToLine), after \(after); text area \(widths))")
+                // Overlay scrollers take no width, so there the text area and margins never move.
+                // Overlay scrollers take no width, so there the text area is the pane beside the
+                // gutter and never moves. Scroll bars that are always shown take their own width.
+                let gutter = Int(scroll.verticalRulerView?.frame.width ?? 0)
+                let bar = style == .legacy && scroll.verticalScroller?.isHidden == false ? Int(scroll.verticalScroller?.frame.width ?? 0) : 0
+                check(
+                    before.2 == Int(scroll.frame.width) - gutter - bar,
+                    "at \(label) the text area is the pane less the gutter and a scroll bar that takes space: \(before.2) of \(Int(scroll.frame.width)) less \(gutter) and \(bar)")
+                check(
+                    Set(widths).count == 1 || barsShown.count > 1,
+                    "at \(label) no bar above the text changes the text area's width, unless a scroll bar that takes space came or went: \(widths)")
+            }
+        }
         check(
-            findOnly && withReplace && withGoToLine && !tab.findBarVisible && !tab.goToLineBarVisible && undisturbed(),
-            "showing and hiding the find bar, its Replace row and the inline Go to Line bar leaves the column's margins and the change-bar margin as they were (find \(findOnly), replace \(withReplace), go to line \(withGoToLine))")
+            follows(editor, 90) && textArea(editor) < 90 * digit && editor.textMarginLeft == plain.0
+                && editor.textMarginRight == plain.1,
+            "at the smallest window the text area (\(textArea(editor))) is narrower than the column (\(90 * digit)) and has the ordinary margins")
+        scroll.scrollerStyle = styleBefore
+        window.setContentSize(NSSize(width: 1400, height: 700))
+        settle()
+        check(
+            centered(editor, 90) && (editor.textMarginLeft, editor.textMarginRight, textArea(editor)) == withBars,
+            "back at the first size the column and its margins are as they were: \((editor.textMarginLeft, editor.textMarginRight, textArea(editor))) and \(withBars)")
         bars.changeBars = nil
         try app.settings.save(bars)
         // The gutter gives its width back on the next turn of the run loop, when it is drawn.
