@@ -1839,6 +1839,7 @@ import NativeSearch
                     defer { app.mainMenu = oldMenu }
                     try UnsavedWorkChecks.untitledSurvivesQuit(app: app, controller: documentController)
                     try AutomaticSessionQuitChecks.checkUntitled(in: root)
+                    try AutomaticSessionQuitChecks.checkHeldCancel(in: root)
                 }
             }
             section("clean quit") {

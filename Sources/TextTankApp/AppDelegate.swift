@@ -386,7 +386,7 @@ import AppKit
         }
         startReplacementRetention()
         // Local history's thirty-day limit also holds for a file that is not saved again.
-        if LocalHistory.isEnabled { LocalHistory.store.prune() }
+        LocalHistory.pruneAtLaunch()
         TextDocument.recovery.scanForLaunch { [weak self] result in
             self?.launchInventory = result
             self?.deliverLaunchInventory()
@@ -614,7 +614,14 @@ import AppKit
     /// cancelled. The tab windows are taken off screen first: closing a visible tab shows the
     /// tab that takes its place, and at quit that would show and lay out each remaining document.
     func closeAllForTermination() {
-        let documents = NSDocumentController.shared.documents
+        // Documents that AppKit's review already "closed" are still open here.
+        var documents = NSDocumentController.shared.documents
+        for noted in TextDocument.takeDeferredQuitCloses() + quitHeld where !documents.contains(noted) {
+            documents.append(noted)
+        }
+        quitHeld = []
+        TextDocument.quitIsCertain = true
+        defer { TextDocument.quitIsCertain = false }
         var hidden = Set<ObjectIdentifier>()
         for case let document as TextDocument in documents {
             if let host = document.presentation?.host, hidden.insert(ObjectIdentifier(host)).inserted {
@@ -638,7 +645,11 @@ import AppKit
         for case let document as TextDocument in NSDocumentController.shared.documents
         where !documents.contains(where: { $0 === document }) { documents.append(document) }
         var seen = Set<ObjectIdentifier>()
-        for document in documents where seen.insert(ObjectIdentifier(document)).inserted && document.isEditedUntitled {
+        // A document the review already asked about (its close is only noted) is not offered again.
+        for document in documents
+        where seen.insert(ObjectIdentifier(document)).inserted && document.isEditedUntitled
+            && (document.isHeldForQuit || !document.quitCloseDeferred)
+        {
             let size = document.editor.byteLength
             guard count < limits.count, size <= limits.bytes - bytes else {
                 document.releaseQuitHold()
@@ -647,6 +658,7 @@ import AppKit
             if document.holdForQuit() {
                 count += 1
                 bytes += size
+                if !quitHeld.contains(document) { quitHeld.append(document) }
             }
         }
     }
@@ -656,13 +668,23 @@ import AppKit
     var keptUntitledLimits = (
         count: SizePolicy.standard.keptUntitledCount, bytes: SizePolicy.standard.keptUntitledTotal
     )
+    /// The untitled documents this quit is holding. AppKit's review takes them for clean and
+    /// "closes" them before the person can still cancel; they stay here, open and untouched,
+    /// until the quit is certain or cancelled.
+    private var quitHeld: [TextDocument] = []
+    /// The quit was cancelled: every held document is registered again and edited again, in
+    /// its tab, as it was.
     private func releaseQuitHolds() {
+        let held = quitHeld
+        quitHeld = []
+        TextDocument.cancelDeferredQuitCloses()
+        held.forEach { $0.releaseQuitHold() }
         for case let document as TextDocument in NSDocumentController.shared.documents { document.releaseQuitHold() }
     }
     /// Just before the documents close: every held copy is still the document's text, or is
     /// written and verified again now. False means one could not be, and nothing may close.
     private func confirmQuitHolds() -> Bool {
-        for case let document as TextDocument in NSDocumentController.shared.documents where document.isHeldForQuit {
+        for document in quitHeld where document.isHeldForQuit {
             guard document.holdForQuit() else { return false }
         }
         return true
