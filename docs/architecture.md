@@ -276,8 +276,13 @@ a line uses the bridge's `preview(line:column:)`, which never unfolds: a line hi
 is stood in for by its fold header and the field says so. Everything else that closes the
 field (Escape, Cancel, Tab or Move Focus out of it, another tab, Find, Preview alone) puts the
 caret, the exact selection state (`selectionSnapshot`: every range, the main one, rectangular
-mode), the scroll position and so the folding back. Return on the line the field opened with
-changes nothing. A caret the person has since placed in the text themselves (a click) stands. Closing the document closes the
+mode), the scroll position and so the folding back. The editor holds that place (`holdPlace`)
+and moves it with every edit, so a change from another view or an automation never turns the
+previewed line into the place to go back to; if the edit deleted the caret's own text, Escape
+goes to where that text began and the field says so. A click closes the field: one that
+places a caret in the previewing pane's text stands, and any other (the other pane of a
+split, a margin, another group) first puts the previewing pane back. Return on the line the field opened with
+changes nothing. Closing the document closes the
 field, and a changed or retired target cannot navigate a stale editor.
 
 `VersionedLibrary` in `Sources/Documents/` shares their Foundation-only codec with

@@ -644,6 +644,9 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     NSMutableIndexSet *_insertedPairPositions;
     char _pairBytes[2];
     BOOL _hasSharedDocument;
+    NSMutableArray<NSNumber *> *_heldSelection;
+    sptr_t _heldTop, _heldDocument;
+    BOOL _heldDisplaced;
     id _accessibilityDisplayObserver;
     BOOL _braceCacheValid;
     sptr_t _braceCaret, _braceEndStyled;
@@ -1624,6 +1627,47 @@ static constexpr int TTNamedHistoryBase = 0x54540000;
     [_engine message:SCI_SETMOVEEXTENDSSELECTION wParam:at(2)];
     [self noteStateChange];
     return YES;
+}
+- (void)holdPlace {
+    [self assertThread];
+    _heldSelection = [self.selectionSnapshot mutableCopy];
+    _heldTop = [_engine message:SCI_POSITIONFROMLINE wParam:self.firstVisibleDocumentLine];
+    _heldDocument = [_engine message:SCI_GETDOCPOINTER];
+    _heldDisplaced = NO;
+}
+- (void)releaseHeldPlace { [self assertThread]; _heldSelection = nil; }
+/// The rule Scintilla applies to its own selections: text put in before a position moves it
+/// along, text taken out before it moves it back, and a position inside removed text lands
+/// where that text began. Only that last case loses the place.
+- (void)moveHeldPlaceAt:(sptr_t)start length:(sptr_t)length inserted:(BOOL)inserted {
+    if ([_engine message:SCI_GETDOCPOINTER] != _heldDocument) return;
+    auto moved = [&](sptr_t position) -> sptr_t {
+        if (position <= start) return position;
+        if (inserted) return position + length;
+        if (position >= start + length) return position - length;
+        _heldDisplaced = YES;
+        return start;
+    };
+    auto move = [&](NSUInteger index) { _heldSelection[index] = @((long long)moved((sptr_t)_heldSelection[index].longLongValue)); };
+    move(4); move(5);
+    for (NSUInteger index = 8; index + 1 < _heldSelection.count; index += 4) { move(index); move(index + 1); }
+    _heldSelection[0] = @((long long)[_engine message:SCI_GETLENGTH]);
+    _heldTop = moved(_heldTop);
+}
+- (NSArray<NSNumber *> *)heldSelectionSnapshot {
+    [self assertThread];
+    return _heldSelection && [_engine message:SCI_GETDOCPOINTER] == _heldDocument ? [_heldSelection copy] : nil;
+}
+- (NSInteger)heldTopDocumentLine {
+    [self assertThread];
+    if (!_heldSelection || [_engine message:SCI_GETDOCPOINTER] != _heldDocument) return -1;
+    return [_engine message:SCI_LINEFROMPOSITION wParam:std::min<sptr_t>(_heldTop, [_engine message:SCI_GETLENGTH])];
+}
+- (BOOL)heldPlaceDisplaced { [self assertThread]; return _heldDisplaced; }
+- (BOOL)textAreaContainsWindowPoint:(NSPoint)point {
+    [self assertThread];
+    NSView *content = _engine.content;
+    return self.window && content && NSPointInRect([content convertPoint:point fromView:nil], content.visibleRect);
 }
 - (void)scrollCaretIntoView { [self assertThread]; [_engine message:SCI_SCROLLCARET]; }
 - (NSInteger)firstVisibleLine { [self assertThread]; return [_engine message:SCI_GETFIRSTVISIBLELINE]; }
@@ -3231,6 +3275,9 @@ static sptr_t TTMacWordDestination(ScintillaView *engine, sptr_t caret, bool rig
     if (code == SCN_UPDATEUI) {
         if (notification->updated & SC_UPDATE_SELECTION) _selectionGeneration++;
         if (notification->updated & (SC_UPDATE_SELECTION | SC_UPDATE_CONTENT)) [self scheduleStateNotification];
+    }
+    if (_heldSelection && code == SCN_MODIFIED && (type & (SC_MOD_INSERTTEXT | SC_MOD_DELETETEXT))) {
+        [self moveHeldPlaceAt:notification->position length:notification->length inserted:(type & SC_MOD_INSERTTEXT) != 0];
     }
     if (code == SCN_MODIFIED && (type & (SC_MOD_INSERTTEXT | SC_MOD_DELETETEXT))) {
         // Every stale-result guard compares `revision`, so it advances with each step. The

@@ -2192,6 +2192,29 @@ int main(int argc, char **argv) {
             NSArray<NSNumber *> *plain = ed.selectionSnapshot;
             check(![ed restoreSelectionSnapshot:@[@1, @2]] && ![ed restoreSelectionSnapshot:(NSArray<NSNumber *> *)@[@"x", @0, @0, @0, @0, @0, @0, @0, @0, @0, @0, @0]]
                       && ed.selectionCaret == 0, "Something that is not a snapshot is refused and changes nothing");
+            {
+                // A held place follows edits, as Scintilla's own selections do.
+                [sv message:SCI_SETSELECTION wParam:10 lParam:8]; [sv message:SCI_ADDSELECTION wParam:12 lParam:14];
+                [ed holdPlace];
+                [ed previewLine:1 column:1];
+                [sv message:SCI_INSERTTEXT wParam:0 lParam:(sptr_t)"ab"];
+                NSArray<NSNumber *> *held = ed.heldSelectionSnapshot;
+                check(held != nil && !ed.heldPlaceDisplaced && ed.heldTopDocumentLine == 0 && [ed restoreSelectionSnapshot:held]
+                          && get(SCI_GETSELECTIONS) == 2 && get(SCI_GETSELECTIONNANCHOR, 0) == 10 && get(SCI_GETSELECTIONNCARET, 0) == 12
+                          && get(SCI_GETSELECTIONNANCHOR, 1) == 16 && get(SCI_GETSELECTIONNCARET, 1) == 14,
+                      "A held place moves along with text inserted before it and restores every range there");
+                [ed previewLine:1 column:1];
+                [sv message:SCI_DELETERANGE wParam:9 lParam:4];
+                held = ed.heldSelectionSnapshot;
+                check(ed.heldPlaceDisplaced && [ed restoreSelectionSnapshot:held] && get(SCI_GETSELECTIONNANCHOR, 0) == 9
+                          && get(SCI_GETSELECTIONNCARET, 0) == 9 && get(SCI_GETSELECTIONNANCHOR, 1) == 12 && get(SCI_GETSELECTIONNCARET, 1) == 10,
+                      "Deleting text a held position was in puts it where that text began and reports the place as displaced");
+                [ed releaseHeldPlace];
+                check(ed.heldSelectionSnapshot == nil && ed.heldTopDocumentLine == -1, "A released place is no longer held");
+                [ed executeCommand:@"undo"]; [ed executeCommand:@"undo"];
+                [ed setSelectionAnchor:0 caret:0];
+                plain = ed.selectionSnapshot;
+            }
             [ed replaceSelection:@"longer "];
             check(![ed restoreSelectionSnapshot:plain] && ed.selectionCaret == 7, "A snapshot of text that has since changed length is refused");
             [ed executeCommand:@"undo"];
