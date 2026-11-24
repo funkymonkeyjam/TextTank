@@ -48,6 +48,16 @@ package struct EditorSettings: Codable, Equatable {
     package var showLineEndingsEnabled: Bool { showLineEndings ?? false }
     package var reopenLastSession: Bool?
     package var reopensLastSession: Bool { reopenLastSession ?? true }
+    /// DS-D9. Quitting keeps each edited untitled document as a verified recovery copy and
+    /// reopens it at the next launch, without asking. Off gives the earlier Save / Delete /
+    /// Cancel review at quit. A missing member reads as on.
+    package var keepUntitledOnQuit: Bool?
+    package var keepsUntitledOnQuit: Bool { keepUntitledOnQuit ?? true }
+    /// DS-D10. Each save of a file keeps a private earlier version (twenty a file, thirty days,
+    /// 200 MB in all). Off keeps nothing new; versions already kept stay until they are cleared
+    /// or expire. A missing member reads as on.
+    package var keepLocalHistory: Bool?
+    package var keepsLocalHistory: Bool { keepLocalHistory ?? true }
     package var wrap: Bool
     package var appearance: String
     package var externalChangePolicy: ExternalChangePolicy?

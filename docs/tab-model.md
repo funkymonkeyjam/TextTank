@@ -246,7 +246,7 @@ DS-14/20-23/35/40-43/62/70-73/84/90-92/100-101 govern these additions.
 
 ## Docked Workspace Browser
 
-Owner decision DS-D9 (23 November 2026); DS-10/11/13/15/20-23/60/62/63/67/70-74 apply. The Workspace
+Owner decision DS-D11 (23 November 2026); DS-10/11/13/15/20-23/60/62/63/67/70-74 apply. The Workspace
 Browser is a sidebar inside the one workspace window. There is no browser panel: View > Workspace
 Browser, the Command Palette, Add Folder to Workspace and Monitor Current File all reach the same
 docked view. The browser's store, lists, open route and encoding offer are unchanged; only the view moved.

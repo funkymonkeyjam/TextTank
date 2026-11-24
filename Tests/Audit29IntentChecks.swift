@@ -59,7 +59,8 @@ import NativeSearch
                 composition,
                 [
                     "installCommandLine:", "findNextShared:", "findPreviousShared:", "actualSize:",
-                    "performCompareCommand:", "nextDocumentTab:", "previousDocumentTab:", "performTabCommand:"
+                    "performCompareCommand:", "nextDocumentTab:", "previousDocumentTab:", "performTabCommand:",
+                    "clearLocalHistory:"
                 ]
             ),
             (

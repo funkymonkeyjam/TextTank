@@ -249,7 +249,63 @@ import UniformTypeIdentifiers
     private var hasUnsavedState: Bool { editor.modified || format != savedFormat || !savepointMatchesDisk }
     /// Recovery also keeps an untouched restored document: its framework dirty flag is independent
     /// of the freshly loaded editor's save point and format checkpoint. Keep this broader rule distinct.
-    private var shouldKeepRecoveryCopy: Bool { isDocumentEdited || editor.modified || format != savedFormat }
+    private var shouldKeepRecoveryCopy: Bool {
+        super.isDocumentEdited || editor.modified || format != savedFormat
+    }
+    /// DS-D9: the recovery revision whose copy a quit has written, confirmed on storage and read
+    /// back. While it is set the document answers "not edited" to AppKit, so the quit review
+    /// neither counts nor asks about it; the tab and the recovery copy are unaffected.
+    private var quitHold: UInt64?
+    nonisolated private let quitHoldFlag = QuitHoldFlag()
+    var isHeldForQuit: Bool { quitHold != nil }
+    /// An untitled document with unsaved text, whether or not a quit is holding it.
+    var isEditedUntitled: Bool { isOpen && fileURL == nil && super.isDocumentEdited }
+    override var isDocumentEdited: Bool { !quitHoldFlag.get() && super.isDocumentEdited }
+    /// Writes this edited untitled document's recovery copy now, waits for it to reach storage
+    /// and reads it back (length, SHA-256 and bytes). True only when all of that succeeded for
+    /// the text as it is at this moment; the quit may then go on without asking about it.
+    /// False leaves the document edited and unheld, so the ordinary review asks.
+    @discardableResult func holdForQuit() -> Bool {
+        if let quitHold, quitHold == recoveryRevision { return true }
+        releaseQuitHold()
+        guard isEditedUntitled, !recoveryClosed, !automaticRecoveryPaused else { return false }
+        cancelRecoveryTimers()
+        recoveryGeneration += 1
+        preparingRecoveryGeneration = nil
+        deferredRecoveryCapture = false
+        let store = Self.recovery, revision = recoveryRevision, fault = dependencies.beforeQuitHold
+        do {
+            let snapshot = try RecoverySnapshot(
+                id: recoveryID, text: Self.capturedText(from: editor.checkedUTF8Data), format: format,
+                originalURL: recoveredOriginalURL, revision: revision)
+            try recoveryWriter.finish {
+                try fault?()
+                try store.save(snapshot)
+                try store.confirm(snapshot)
+            }
+            lastRecoveryError = nil
+            recoveryFailures.recordSuccess()
+            recoveryCopyKept = true
+            quitHold = revision
+            quitHoldFlag.set(true)
+            return true
+        } catch {
+            // No sheet here: the review that follows asks about this document by name.
+            lastRecoveryError = error
+            recoveryCopyKept = false
+            showRecoveryFailure(error)
+            NSLog(
+                "TextTank: untitled document %@ could not be kept for quit: %@", recoveryID.uuidString,
+                error.localizedDescription)
+            return false
+        }
+    }
+    /// The quit was cancelled, or the copy could not be confirmed: the document is edited again.
+    func releaseQuitHold() {
+        guard quitHold != nil else { return }
+        quitHold = nil
+        quitHoldFlag.set(false)
+    }
     private var recoveryRevision: UInt64 { recoveryBase + UInt64(editor.revision) }
     var hasSettledDiskSignature: Bool { diskSignature != nil }
     var originalDiskFingerprint: String? { diskDigest }
@@ -320,9 +376,12 @@ import UniformTypeIdentifiers
             let oldValue = super.fileURL
             super.fileURL = newValue
             guard newValue != oldValue else { return }
+            let movedFrom = diskLocation.get()
             diskLocation.set(newValue.map(Self.canonicalDiskURL))
+            let movedTo = diskLocation.get()
             if Thread.isMainThread {
                 MainActor.assumeIsolated {
+                    LocalHistory.fileURLChanged(from: movedFrom, to: movedTo)
                     recoveryBase += 1
                     externalFile.invalidate()
                     // Only the existing main-thread setter route clears the recovered label.
@@ -333,6 +392,7 @@ import UniformTypeIdentifiers
                 }
             } else {
                 DispatchQueue.main.async { [weak self] in
+                    LocalHistory.fileURLChanged(from: movedFrom, to: movedTo)
                     self?.recoveryBase += 1
                     self?.externalFile.invalidate()
                     self?.presentations.forEach { $0.previewKindMayHaveChanged() }
@@ -427,6 +487,11 @@ import UniformTypeIdentifiers
         if item.action == #selector(compareWithSavedVersion(_:)) {
             return EditorServices.current?.compare?.canCompareSaved(self) == true
         }
+        if item.action == #selector(compareWithEarlierVersion(_:)) {
+            let reason = LocalHistory.unavailableReason(for: self)
+            (item as? NSMenuItem)?.toolTip = reason
+            return reason == nil
+        }
         if item.action == #selector(checkExternalChanges(_:)) { return fileURL != nil }
         if item.action == #selector(toggleReadOnly(_:)) {
             (item as? NSMenuItem)?.state = editor.readOnly ? .on : .off
@@ -437,6 +502,12 @@ import UniformTypeIdentifiers
     @objc func compareWithSavedVersion(_ sender: Any?) {
         guard !CompareCommandScope.blocksWorkspace else { return }
         EditorServices.current?.compare?.compareSaved(self)
+    }
+    /// DS-D10: lists the earlier versions kept for this file and opens the existing comparison
+    /// on the one chosen. Nothing is restored here; that is Compare's own Apply Selected Changes.
+    @objc func compareWithEarlierVersion(_ sender: Any?) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
+        EditorServices.current?.compare?.chooseEarlierVersion(of: self)
     }
     @objc func checkExternalChanges(_ sender: Any?) {
         guard !CompareCommandScope.blocksWorkspace else { return }
@@ -577,7 +648,7 @@ import UniformTypeIdentifiers
         var status: String
         if let recoveredOrigin {
             status = recoveredOrigin
-        } else if isDocumentEdited {
+        } else if super.isDocumentEdited {
             status = recoveryCopyKept ? "Edited — recovery copy kept" : "Edited"
         } else if fileURL == nil {
             status = "Ready"
@@ -707,6 +778,14 @@ import UniformTypeIdentifiers
     }
     override func close() {
         guard !isClosed else { return }
+        // Text typed after the copy was verified: write it again, or keep the earlier copy.
+        if let quitHold, quitHold != recoveryRevision {
+            let earlier = quitHold
+            if !holdForQuit() {
+                self.quitHold = earlier
+                quitHoldFlag.set(true)
+            }
+        }
         presentation?.host.tabCommands.willClose(self)
         isClosed = true
         bulkReceipt = nil
@@ -720,11 +799,15 @@ import UniformTypeIdentifiers
         editor.onReadOnlyAttempt = nil
         editor.readOnly = true
         windowControllers.compactMap { $0 as? EditorWindowController }.forEach { $0.prepareForClose() }
-        // NSDocument only reaches close after the user has chosen Save or Discard.
-        let store = Self.recovery, id = recoveryID, revision = recoveryRevision
+        // NSDocument only reaches close after the user has chosen Save or Discard, or after a
+        // quit has verified this untitled document's copy (DS-D9). That copy is the document
+        // now: it is never removed here, and the next launch reopens it.
+        let store = Self.recovery, id = recoveryID, revision = recoveryRevision, kept = quitHold != nil
         // Never block or prompt here: close runs once per document on the quit path. A snapshot
         // that could not be removed is found by the next launch's scan and offered or listed there.
-        do { try recoveryWriter.finish { try store.remove(id: id, throughRevision: revision) } } catch {
+        do {
+            try recoveryWriter.finish { if !kept { try store.remove(id: id, throughRevision: revision) } }
+        } catch {
             lastRecoveryError = error
             NSLog(
                 "TextTank: recovery snapshot %@ could not be removed at close: %@", id.uuidString,
@@ -960,6 +1043,39 @@ import UniformTypeIdentifiers
         savepointMatchesDisk = false
         loading = false
         updateChangeCount(.changeDone)
+    }
+    /// DS-D9: reopens an untitled document that a quit kept, or that a crash left as a recovery
+    /// copy, without asking. It keeps the copy's identity, text, encoding and byte-order mark,
+    /// is still untitled and still edited, and is not shown or focused here: the session layout
+    /// places it. Undo history is not part of a recovery copy and starts empty.
+    static func openKeptUntitled(
+        _ snapshot: RecoverySnapshot, language: String? = nil, lineEnding: LineEnding? = nil
+    ) throws -> TextDocument {
+        let (base, overflow) = snapshot.revision.addingReportingOverflow(1)
+        guard !overflow else { throw RecoveryError.invalidSnapshot }
+        let doc = DocumentFactory.makeUntitled(
+            display: false, focus: false,
+            prepare: { document in
+                document.recoveryID = snapshot.id
+                document.recoveryBase = base
+            },
+            populate: { document in
+                document.loadUnsavedSnapshot(text: snapshot.text, format: snapshot.format)
+                if let lineEnding { document.editor.setLineEndingMode(lineEnding.nativeMode) }
+                // A draft of a file that was recovered earlier keeps saying which file it was.
+                if SnapshotLabel.origin(of: snapshot) != nil {
+                    document.recoveredOrigin = SnapshotLabel.status(for: snapshot)
+                    document.recoveredOriginalURL = SnapshotLabel.origin(of: snapshot)?.absoluteString
+                    if let name = SnapshotLabel.originName(of: snapshot) { document.displayName = "Recovered " + name }
+                }
+                if let language, language != LanguageProfile.plainTextID,
+                    document.editor.byteLength < SizePolicy.standard.largeDocumentThreshold
+                {
+                    _ = document.applyLanguage(language, using: EditorServices.current?.languages)
+                }
+            })
+        doc.flushRecovery()
+        return doc
     }
     /// Opens one recovery snapshot as a new unsaved document that keeps the snapshot's identity.
     @discardableResult static func openRecovered(_ snapshot: RecoverySnapshot, originalGroup: String? = nil) throws
@@ -1226,12 +1342,22 @@ import UniformTypeIdentifiers
             submittedRevision = editor.revision
         savePayload = submitted
         defer { savePayload = nil }
+        // DS-D10: what this save is about to replace, read before it is gone, when local history
+        // does not already end with it. Save Copy keeps no history: it is not this document's file.
+        let history =
+            saveOperation == .saveToOperation
+            ? nil : LocalHistory.pendingSave(to: destination, byteCount: submitted.count, knownDigest: inPlace ? diskDigest : nil)
+        let replacedFormat = inPlace ? savedFormat : nil
         do {
             inPlaceWriteURL = inPlace && Thread.isMainThread ? destination : nil
             defer { inPlaceWriteURL = nil }
             try super.writeSafely(to: destination, ofType: typeName, for: saveOperation)
         }
         try dependencies.afterWrite?()
+        if let history {
+            LocalHistory.recordSave(
+                history, bytes: submitted, format: submittedFormat, replacedFormat: replacedFormat, in: self)
+        }
         if saveOperation != .saveToOperation {
             // The baseline is what was submitted. The file's metadata is not recorded here:
             // another writer may already have replaced it, and only a hash can tell.
@@ -1273,6 +1399,22 @@ private final class DocumentDiskLocation: @unchecked Sendable {
         value = next
         lock.unlock()
         withExtendedLifetime(displaced) {}
+    }
+}
+
+/// NSDocument may ask whether a document is edited from a queue other than main.
+private final class QuitHoldFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var held = false
+    func get() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return held
+    }
+    func set(_ value: Bool) {
+        lock.lock()
+        held = value
+        lock.unlock()
     }
 }
 
@@ -1348,5 +1490,173 @@ enum EditorCaptureError: LocalizedError, Equatable {
     ) {
         let recovered = attemptRecovery(fromError: error, optionIndex: index)
         ErrorRecoveryReply.send(recovered, to: delegate, selector: didRecoverSelector, contextInfo: contextInfo)
+    }
+}
+
+/// DS-D10, owner decision B of 23 November 2026: local history on save. Each successful Save or
+/// Save As of a file keeps the bytes just written, and before them the bytes that save replaced
+/// when history does not already end with those. So the version listed before the newest is
+/// exactly what the file held before that save. The copies live in `LocalHistoryStore`, never
+/// beside the document; nothing is kept for an untitled document or for Save Copy.
+@MainActor enum LocalHistory {
+    /// Checks point this at a store in a folder of their own.
+    static var store = LocalHistoryStore(directory: AppStorage.url(.localHistory))
+    /// An isolated support directory (a check, the bundle smoke run) keeps no history unless
+    /// the check sets this.
+    static var allowsIsolatedSupport = false
+    static var isEnabled: Bool {
+        EditorServices.current?.settings?.value.keepsLocalHistory != false
+            && (AppStorage.permitsLegacyDefaults || allowsIsolatedSupport)
+    }
+    /// SHA-256 of the newest version this process recorded for a path, so that an ordinary save
+    /// neither reads the file it replaces nor waits for the store's queue.
+    private static var newest: [String: String] = [:]
+    struct PendingSave {
+        let path: String
+        let replaced: Data?
+    }
+    /// Called before the write. Nil when this save keeps no history.
+    static func pendingSave(to destination: URL, byteCount: Int, knownDigest: String?) -> PendingSave? {
+        guard isEnabled, destination.isFileURL else { return nil }
+        let path = TextDocument.canonicalDiskURL(destination).path, limit = store.limits.versionBytes
+        let last = newest[path] ?? store.latestDigest(forPath: path)
+        if let knownDigest, knownDigest == last { return PendingSave(path: path, replaced: nil) }
+        guard let read = try? WorkspaceStore.readRegularFileSample(destination, maximumBytes: limit),
+            read.sample.digest != last
+        else { return PendingSave(path: path, replaced: nil) }
+        return PendingSave(path: path, replaced: read.data)
+    }
+    /// Called after the write succeeded. The store copies and prunes on its own queue; a failure
+    /// there never fails the save and is said in the status line.
+    static func recordSave(
+        _ save: PendingSave, bytes: Data, format: FileFormat, replacedFormat: FileFormat?, in document: TextDocument
+    ) {
+        if bytes.count <= store.limits.versionBytes { newest[save.path] = WorkspaceStore.fingerprint(bytes) }
+        let id = document.runtimeID
+        store.record(
+            path: save.path, bytes: bytes, format: format, replaced: save.replaced, replacedFormat: replacedFormat
+        ) { error in
+            guard let reason = error?.localizedDescription else { return }
+            DispatchQueue.main.async {
+                NSLog("TextTank: an earlier version could not be kept: %@", reason)
+                let open = NSDocumentController.shared.documents.compactMap { $0 as? TextDocument }
+                open.first { $0.runtimeID == id }?.presentation?.showTransientStatus(
+                    "Saved. An earlier version could not be kept: " + reason, seconds: 8)
+            }
+        }
+    }
+    /// A file that was renamed or moved takes its history with it. After Save As the earlier
+    /// file is still there and keeps its own history; the new file starts one.
+    static func fileURLChanged(from old: URL?, to new: URL?) {
+        guard isEnabled, let old, let new, old != new, !FileManager.default.fileExists(atPath: old.path) else {
+            return
+        }
+        if let digest = newest.removeValue(forKey: old.path) { newest[new.path] = digest }
+        store.relocate(from: old.path, to: new.path)
+    }
+    static func forgetNewest(path: String? = nil) {
+        if let path { newest[path] = nil } else { newest = [:] }
+    }
+    /// Nil when Compare with Earlier Version can run for this document; otherwise why not.
+    static func unavailableReason(for document: TextDocument) -> String? {
+        if !isEnabled { return "Local history is turned off." }
+        if document.diskURL == nil { return "Save the document first. Earlier versions are kept each time a file is saved." }
+        if EditorServices.current?.compare?.hasSavedSource(document) != true {
+            return SizePolicy.standard.reviewTextNotice
+        }
+        return nil
+    }
+    nonisolated static func size(_ bytes: Int) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+    }
+    /// One row of the list: when, what and how large.
+    nonisolated static func title(_ version: LocalHistoryVersion) -> String {
+        let dates = DateFormatter()
+        dates.dateStyle = .medium
+        dates.timeStyle = .medium
+        let when = dates.string(from: version.savedAt)
+        return (version.kind == .saved ? "Saved " + when : "On disk before the save of " + when)
+            + " · " + size(version.byteCount)
+    }
+    /// The earlier version as fixed text for the comparison's read-only side.
+    nonisolated static func snapshot(_ bytes: Data, of version: LocalHistoryVersion, name: String) throws
+        -> TextSnapshot
+    {
+        let decoded =
+            try version.format.map { try FileCodec.decode(bytes, encoding: $0.encoding) } ?? FileCodec.decode(bytes)
+        let label = String((name + " — earlier version, " + title(version)).prefix(240))
+        return try TextSnapshot(
+            bytes: Data(decoded.text.utf8), source: .checkpoint(version.id), label: label, format: decoded.format)
+    }
+    enum ClearChoice: Equatable { case cancel, thisFile, everything }
+    /// The words of the Clear Local History confirmation (DS-41, DS-43): what is deleted, how
+    /// much, that the files themselves stay, and that it cannot be undone.
+    struct ClearPrompt: Equatable {
+        let name: String?
+        let own: LocalHistoryUsage?
+        let all: LocalHistoryUsage
+        var offersThisFile: Bool { (own?.versions ?? 0) > 0 && name != nil }
+        var message: String { "Clear local history?" }
+        static func versions(_ count: Int) -> String { count == 1 ? "1 earlier version" : "\(count) earlier versions" }
+        static func files(_ count: Int) -> String { count == 1 ? "1 file" : "\(count) files" }
+        var detail: String {
+            var text =
+                "TextTank keeps \(Self.versions(all.versions)) of \(Self.files(all.files)), \(LocalHistory.size(all.bytes)) in all, as private copies on this Mac."
+            if offersThisFile, let own, let name {
+                text += " “\(name)” accounts for \(Self.versions(own.versions)), \(LocalHistory.size(own.bytes)) of that."
+            }
+            return text
+                + " Clearing deletes those copies. Your files and open documents are not changed. This cannot be undone."
+        }
+        var buttons: [(title: String, choice: ClearChoice)] {
+            [("Cancel", .cancel)] + (offersThisFile ? [("Clear This File’s History", .thisFile)] : [])
+                + [("Clear All History", .everything)]
+        }
+    }
+    /// A sheet on the workspace window, never an app-modal alert (DS-44). Replaced in checks.
+    static var confirmClear: (ClearPrompt, NSWindow, @escaping (ClearChoice) -> Void) -> Void = { prompt, window, reply in
+        let alert = TTAlert()
+        alert.alertStyle = .warning
+        alert.messageText = prompt.message
+        alert.informativeText = prompt.detail
+        for (index, button) in prompt.buttons.enumerated() {
+            let added = alert.addButton(withTitle: button.title, role: index == 0 ? .cancel : .action)
+            added.hasDestructiveAction = index != 0
+        }
+        alert.beginSheetModal(for: window) { response in
+            guard case .button(let index) = TTAlert.Result(response), prompt.buttons.indices.contains(index) else {
+                reply(.cancel)
+                return
+            }
+            reply(prompt.buttons[index].choice)
+        }
+    }
+    /// Compare › Clear Local History…. Says so when there is nothing to clear.
+    static func clear(for document: TextDocument?, in host: WorkspaceWindowController) {
+        let path = document?.diskURL?.path
+        let all = store.usage(), own = path.map { store.usage(forPath: $0) }
+        guard all.versions > 0 else {
+            host.showTabMessage("No earlier versions are kept, so there is nothing to clear.")
+            return
+        }
+        guard let window = host.window, window.attachedSheet == nil else { return }
+        let prompt = ClearPrompt(name: path == nil ? nil : document?.displayName, own: own, all: all)
+        confirmClear(prompt, window) { [weak host] choice in
+            do {
+                switch choice {
+                case .cancel: return
+                case .thisFile:
+                    guard let path else { return }
+                    let removed = try store.clear(path: path)
+                    forgetNewest(path: path)
+                    host?.showTabMessage("Cleared \(ClearPrompt.versions(removed.versions)) of this file.")
+                case .everything:
+                    let removed = try store.clear()
+                    forgetNewest()
+                    host?.showTabMessage(
+                        "Cleared \(ClearPrompt.versions(removed.versions)) of \(ClearPrompt.files(removed.files)).")
+                }
+            } catch { host?.showTabMessage("Local history could not be cleared. " + error.localizedDescription) }
+        }
     }
 }

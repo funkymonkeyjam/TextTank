@@ -10,6 +10,7 @@ import AppKit
     var first: TextDocument!, second: TextDocument!, closeButton: NSButton!
     var expectedNames = [String]()
     var before = Data()
+    var expectedUntitled = ""
     init(_ documents: TextDocumentController, mode: String) {
         self.documents = documents
         self.mode = mode
@@ -26,6 +27,24 @@ import AppKit
     func applicationWillTerminate(_ notification: Notification) {
         do {
             let s = try requireValue(LastSessionLayout.read(AppStorage.url(.lastSession)), "final session on disk")
+            if mode.hasPrefix("untitled") {
+                // DS-D9: the genuine terminate path asked nothing and kept the untitled text.
+                require(!chosen, "no review appeared for unsaved untitled text")
+                require(
+                    s.version == 2 && s.untitled?.count == 1 && s.files.count == 2,
+                    "committed native quit names the untitled document beside the files")
+                let id = try requireValue(s.untitled?.first?.id.rawValue, "kept untitled identity")
+                require(
+                    s.layout.groups[0].tabs.map(\.documentID.rawValue).firstIndex(of: id) == 1
+                        && s.layout.groups[0].tabs[1].caretByte == 4,
+                    "the untitled tab keeps its place between the files and its caret")
+                require(
+                    try TextDocument.recovery.load(id: id).text == expectedUntitled,
+                    "the recovery copy on disk is the untitled document's text")
+                print("PASS GENUINE", mode)
+                fflush(stdout)
+                return
+            }
             require(
                 s.files.map { $0.url.lastPathComponent }.sorted() == expectedNames.sorted(),
                 "committed native quit retained the open file paths")
@@ -59,6 +78,10 @@ import AppKit
         LanguageController.bundledCatalogURL = TestPaths.resources.appendingPathComponent("LanguageProfiles.json")
         delegate.installEditorServices()
         delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+        if mode == "untitled-relaunch" {
+            try await relaunchWithKeptUntitled()
+            return
+        }
         require(
             documents.documents.isEmpty && !NSApp.windows.contains(where: \.isVisible)
                 && !FileManager.default.fileExists(atPath: AppStorage.url(.lastSession).path),
@@ -84,6 +107,12 @@ import AppKit
             return try DocumentFactory.openCaptured(WorkspaceStore.captureRegularFile(u), from: u, display: false)
         }
         first = try open("first")
+        if mode == "untitled" {
+            let kept = DocumentFactory.makeUntitled(display: false)
+            expectedUntitled = "UNTITLED KEPT 🥝\nsecond line"
+            _ = kept.editor.replaceSelection(expectedUntitled)
+            _ = kept.editor.setSelectionAnchor(4, caret: 4)
+        }
         second = try open("second")
         delegate.checkpointSession()
         let limit = Date().addingTimeInterval(5)
@@ -91,7 +120,7 @@ import AppKit
             try await Task.sleep(nanoseconds: 5_000_000)
         }
         before = try Data(contentsOf: AppStorage.url(.lastSession))
-        _ = first.editor.replaceSelection("DIRTY")
+        if mode != "untitled" { _ = first.editor.replaceSelection("DIRTY") }
         closeButton = delegate.workspaceWindow.window!.standardWindowButton(.closeButton)!
         expectedNames = ["first.txt", "second.txt"]
         if mode == "cancel" { expected = "Cancel" }
@@ -120,6 +149,40 @@ import AppKit
             closeButton.performClick(nil)
         }
     }
+    /// The real launch path: recovery scan, session restore, no recovery question.
+    func relaunchWithKeptUntitled() async throws {
+        delegate.applicationDidBecomeActive(Notification(name: NSApplication.didBecomeActiveNotification))
+        let deadline = Date().addingTimeInterval(8)
+        while documents.documents.count < 3 && Date() < deadline { try await Task.sleep(nanoseconds: 5_000_000) }
+        let open = documents.documents.compactMap { $0 as? TextDocument }
+        let kept = try requireValue(open.first { $0.fileURL == nil }, "the untitled document reopened at launch")
+        let host = delegate.workspaceWindow
+        require(
+            open.count == 3 && NSApp.modalWindow == nil && host.window?.attachedSheet == nil,
+            "launch reopened two files and the untitled document without a question")
+        require(
+            kept.editor.text == "UNTITLED KEPT 🥝\nsecond line" && kept.isDocumentEdited
+                && kept.editor.selectionCaret == 4 && kept.editor.selectionAnchor == 4,
+            "launch restored the untitled text, still edited, with its caret")
+        require(
+            host.presentations.map { ($0.document as? TextDocument)?.fileURL?.lastPathComponent ?? "untitled" }
+                == ["first.txt", "untitled", "second.txt"],
+            "launch restored the tab order")
+        require(
+            host.lastTabMessage == AppDelegate.restoredUntitledNotice(1), "a status message says text was restored")
+        _ = kept.editor.replaceSelection("AGAIN ")
+        _ = kept.editor.setSelectionAnchor(4, caret: 4)
+        expectedUntitled = kept.editor.text
+        closeButton = host.window!.standardWindowButton(.closeButton)!
+        let t = Timer(timeInterval: 0.025, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.pressReview() }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        RunLoop.main.add(t, forMode: .modalPanel)
+        print("ACTUAL red", mode)
+        fflush(stdout)
+        closeButton.performClick(nil)
+    }
     func pressReview() {
         guard !chosen else { return }
         func descend(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descend) }
@@ -127,7 +190,7 @@ import AppKit
             descend
         ).compactMap { $0 as? NSButton }
         if let b = buttons.first(where: {
-            $0.title == expected || (expected == "Don’t Save" && ["Don't Save", "Discard"].contains($0.title))
+            $0.title == expected || (expected == "Don’t Save" && ["Don't Save", "Discard", "Delete"].contains($0.title))
         }) {
             chosen = true
             print("ACTUAL choice", b.title)
@@ -138,7 +201,8 @@ import AppKit
 }
 @MainActor enum AutomaticSessionQuitChecks {
     static func runChild(mode: String) -> Never {
-        precondition(["fresh", "cancel"].contains(mode) && !AppStorage.permitsLegacyDefaults)
+        precondition(
+            ["fresh", "cancel", "untitled", "untitled-relaunch"].contains(mode) && !AppStorage.permitsLegacyDefaults)
         alarm(30)
         let documents = TextDocumentController(), app = NSApplication.shared
         let host = QuitHost(documents, mode: mode)
@@ -147,11 +211,18 @@ import AppKit
         exit(1)
     }
     static func checkBoth(in root: URL) throws {
-        for mode in ["fresh", "cancel"] {
-            let scratch = root.appendingPathComponent("native-quit-" + mode)
-            let support = scratch.appendingPathComponent("support")
-            try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
-            defer { try? FileManager.default.removeItem(at: scratch) }
+        for mode in ["fresh", "cancel"] { try runGenuine([mode], in: root.appendingPathComponent("native-quit-" + mode)) }
+    }
+    /// DS-D9 through AppKit's own terminate: a quit with unsaved untitled text, then a launch
+    /// from what that quit left, then a second quit. Both processes share one support folder.
+    static func checkUntitled(in root: URL) throws {
+        try runGenuine(["untitled", "untitled-relaunch"], in: root.appendingPathComponent("native-quit-untitled"))
+    }
+    private static func runGenuine(_ modes: [String], in scratch: URL) throws {
+        let support = scratch.appendingPathComponent("support")
+        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        for mode in modes {
             let child = Process(), output = Pipe()
             child.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
             child.arguments = ["--automatic-session-quit", mode]

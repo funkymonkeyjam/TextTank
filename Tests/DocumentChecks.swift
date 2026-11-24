@@ -1826,6 +1826,14 @@ import NativeSearch
                     try AutomaticSessionChecks.run(app: app, controller: documentController)
                 }
             }
+            section("unsaved untitled text survives quit") {
+                try withIsolatedSupportDirectory("unsaved-untitled") { root in
+                    let oldMenu = app.mainMenu
+                    defer { app.mainMenu = oldMenu }
+                    try UnsavedWorkChecks.untitledSurvivesQuit(app: app, controller: documentController)
+                    try AutomaticSessionQuitChecks.checkUntitled(in: root)
+                }
+            }
             section("clean quit") {
                 let termination = AppDelegate().applicationShouldTerminate(app)
                 check(termination == .terminateNow, "clean application quit does not wait for async reply")

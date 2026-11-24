@@ -430,7 +430,11 @@ extension DocumentChecks {
             var reviews = 0, replies: [Bool] = []
             quitting.requestUnsavedReview = { delegate in if delegate === quitting { reviews += 1 } }
             quitting.replyToTerminate = { replies.append($0) }
+            // A file: since DS-D9 an untitled document's unsaved text is kept, not reviewed, at quit.
+            let dirtyURL = root.appendingPathComponent("unsaved-at-quit.txt")
+            try Data().write(to: dirtyURL)
             let dirty = TextDocument()
+            dirty.fileURL = dirtyURL
             NSDocumentController.shared.addDocument(dirty)
             dirty.editor.text = "unsaved at quit"
             let clean = TextDocument()
@@ -995,7 +999,7 @@ extension DocumentChecks {
                 present == [
                     "Settings.json", "SearchOptions.json", "FolderSearchSettings.json", "WorkspaceBrowser.json",
                     "RunLibrary.json", "Session.texttanksession", "SessionLayout.texttanksession",
-                    "RecoverySnapshot.json", "ReminderBatch.json",
+                    "RecoverySnapshot.json", "ReminderBatch.json", "LastSession.json", "LastSession-untitled.json",
                     "MacroLibrary.json", "Automations.json", "Automations-before-flags.json", "LanguageCatalog.json",
                     "LanguageOverrides.json"
                 ], "every committed persistence fixture is decoded by a check")
@@ -1121,7 +1125,20 @@ extension DocumentChecks {
             let quickOpenWithKey: [[String: String]] = [
                 ["action": "quickOpen:", "object": "", "key": "O", "modifiers": "1048576", "target": "explicit"]
             ]
-            var accounted = identities(formerCommands + deliberatelyAdded + togglePreviewAdded + quickOpenWithKey)
+            // Added on 23 November 2026 (DS-D10, local history): Compare > Compare with Earlier
+            // Version… and Compare > Clear Local History…. Nothing was removed for them.
+            let localHistoryAdded: [[String: String]] = [
+                [
+                    "action": "compareWithEarlierVersion:", "object": "", "key": "", "modifiers": "1048576",
+                    "target": "responder",
+                ],
+                [
+                    "action": "clearLocalHistory:", "object": "", "key": "", "modifiers": "1048576",
+                    "target": "explicit",
+                ],
+            ]
+            var accounted = identities(
+                formerCommands + deliberatelyAdded + togglePreviewAdded + quickOpenWithKey + localHistoryAdded)
             var removedRowsInFixture = 0
             for removed in identities(deliberatelyRemoved + quickOpenWithoutKey) {
                 if let index = accounted.firstIndex(of: removed) {

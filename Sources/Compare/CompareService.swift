@@ -526,6 +526,63 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
         value.beginWithSavedVersion(expecting: identity)
     }
 
+    // MARK: Local history (DS-D10)
+    private var earlierPickers: [DocumentID: ChoicePanel] = [:]
+    /// Lists the earlier versions kept for the document's file, newest first, by date and size.
+    func chooseEarlierVersion(of document: TextDocument) {
+        guard LocalHistory.unavailableReason(for: document) == nil, let path = document.diskURL?.path else { return }
+        let id = document.runtimeID
+        if let open = earlierPickers[id] {
+            open.refresh()
+            open.form.window.makeKeyAndOrderFront(nil)
+            return
+        }
+        let versions: [LocalHistoryVersion]
+        do { versions = try LocalHistory.store.versions(forPath: path) } catch {
+            report(error)
+            return
+        }
+        guard !versions.isEmpty else {
+            document.presentation?.showTransientStatus(
+                "No earlier versions of “\(document.displayName ?? "this file")” are kept yet. TextTank keeps one each time you save.",
+                seconds: 8)
+            return
+        }
+        let panel = ChoicePanel(
+            title: "Earlier Versions of “\(document.displayName ?? "")”", identifier: "TextTank.EarlierVersions",
+            action: "Compare", filterLabel: "Filter earlier versions by date or size")
+        earlierPickers[id] = panel
+        panel.retainController(self)
+        panel.onClose = { [weak self] in self?.earlierPickers[id] = nil }
+        panel.rows = { versions.map { ChoicePanel.Row(id: $0.id.uuidString, title: LocalHistory.title($0)) } }
+        panel.choose = { [weak self, weak document] chosen in
+            guard let self, let document, document.isOpen,
+                let version = versions.first(where: { $0.id.uuidString == chosen })
+            else { throw FormFailure.documentChanged }
+            try self.compareEarlier(document, version: version)
+            return true
+        }
+        panel.show()
+    }
+    /// Opens the existing comparison with the earlier version as fixed, read-only text on the
+    /// original side and the open document on the modified side as the merge destination.
+    /// Restoring is that comparison's Apply Selected Changes: one Undo step in the document,
+    /// and the file is written only when the person saves.
+    func compareEarlier(_ document: TextDocument, version: LocalHistoryVersion) throws {
+        guard let path = document.diskURL?.path else { throw LocalHistoryError.missing }
+        guard windows.count + admissions < 2 else { throw CompareOpenFailure.limit }
+        let bytes = try LocalHistory.store.data(forPath: path, version: version.id)
+        let earlier = try LocalHistory.snapshot(bytes, of: version, name: document.displayName ?? "")
+        let current = try CompareDocumentInput(document.activeEditor)
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                _ = try await self.open(
+                    original: .snapshot(earlier), modified: .document(current), destination: .modified)
+            } catch { self.report(error) }
+        }
+    }
+
     @objc func markCurrent(_ sender: Any?) {
         guard let editor = currentEditor() else { return }
         do { try mark(editor) } catch { report(error) }

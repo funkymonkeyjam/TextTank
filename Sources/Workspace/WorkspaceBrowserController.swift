@@ -48,7 +48,7 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
     let monitor = DocumentMonitor()
     var chooseEncoding: @MainActor (URL, Error) -> FileEncoding? = EncodingChoice.present
     var currentDocument: () -> TextDocument? = { EditorServices.current?.activePresentation?.document as? TextDocument }
-    /// The workspace window that docks the browser. There is no other presentation (DS-D9).
+    /// The workspace window that docks the browser. There is no other presentation (DS-D11).
     var host: () -> WorkspaceWindowController = { WorkspaceWindowController.current }
     private var builtSidebar: WorkspaceSidebarView?
     /// The browser's one view, built the first time it is shown.

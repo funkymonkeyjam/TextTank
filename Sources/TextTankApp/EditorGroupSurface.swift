@@ -152,7 +152,7 @@ final class EditorGroupContainer: NSView, NSSplitViewDelegate {
 }
 
 /// The workspace window's root split: the docked Workspace Browser, when it is shown, and the
-/// editor groups (owner decision DS-D9). The editor area is always the last pane and is never
+/// editor groups (owner decision DS-D11). The editor area is always the last pane and is never
 /// removed or rebuilt, so showing and hiding the sidebar leaves every editor as it was.
 ///
 /// Widths follow `WorkspaceSidebarGeometry`: the sidebar keeps the width the person dragged it

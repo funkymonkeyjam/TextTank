@@ -49,7 +49,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     var tabStrip: DocumentTabStrip { groupSurfaces[.first]!.strip }
     var tabStrips: [DocumentTabStrip] { model.groups.compactMap { groupSurfaces[$0.slot]?.strip } }
     private let content = NSView()
-    /// The root split: the docked Workspace Browser, when shown, beside the editor groups (DS-D9).
+    /// The root split: the docked Workspace Browser, when shown, beside the editor groups (DS-D11).
     private(set) lazy var sidebarSplit = WorkspaceSidebarSplit(editorArea: content)
     private(set) var isSidebarShown = false
     /// True once the sidebar has been shown or a saved layout described it; until then a saved
@@ -238,7 +238,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
                     })
             })
     }
-    // MARK: Docked Workspace Browser (DS-D9)
+    // MARK: Docked Workspace Browser (DS-D11)
 
     /// The window's content minimum for the current layout and sidebar. The window grows to it
     /// when it is smaller and is otherwise left alone; a full-screen window is never resized.

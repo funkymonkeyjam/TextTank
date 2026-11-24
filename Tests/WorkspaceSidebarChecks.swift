@@ -4,7 +4,7 @@ import EditorBridge
 @testable import TextTankCore
 @testable import TextTankRuntime
 
-/// The docked Workspace Browser (owner decision DS-D9): the View menu toggle and its checkmark,
+/// The docked Workspace Browser (owner decision DS-D11): the View menu toggle and its checkmark,
 /// the keyboard, the saved width and visibility, and the layout at the smallest window. Driven
 /// through the application's own menu, workspace window and browser. Nothing here needs the
 /// window to be key, and no panel, sheet or alert is presented.

@@ -340,6 +340,10 @@ struct CommandRecents: Equatable {
             return ("Reads saved file • Reloads document contents after the normal review", nil)
         case "checkExternalChanges:", "compareWithSavedVersion:":
             return ("Reads active document and saved file • Shows differences or external status", nil)
+        case "compareWithEarlierVersion:":
+            return ("Reads active document and its earlier versions • Shows differences", nil)
+        case "clearLocalHistory:":
+            return ("Reads local history • Deletes kept earlier versions after confirmation", nil)
         case "saveSession:": return ("Reads workspace documents • Writes a saved session", nil)
         case "openSession:": return ("Reads saved session • Opens workspace documents", nil)
         case "exportUDL", "exportStyled:": return ("Reads language or styled text • Writes chosen file", nil)
