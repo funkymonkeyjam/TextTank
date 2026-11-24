@@ -398,6 +398,26 @@ private final class PreviewScrollReceiver: NSObject, WKScriptMessageHandler {
             ]))
     }
 
+    /// The one script world the application's scripts and their message handlers live in. It is
+    /// never the page's own world.
+    static let scriptWorld = WKContentWorld.defaultClient
+
+    /// Registers the link catcher and the scroll reporter with their message handlers. This is
+    /// the only place either is registered. `world` is always `scriptWorld` in the application;
+    /// the checks pass the page's world to a throwaway web view to show that their probe would
+    /// see a registration there.
+    static func installScripts(
+        on controller: WKUserContentController, linkReceiver: any WKScriptMessageHandler,
+        scrollReceiver: any WKScriptMessageHandler, world: WKContentWorld = scriptWorld
+    ) {
+        controller.add(linkReceiver, contentWorld: world, name: linkMessageName)
+        controller.addUserScript(
+            WKUserScript(source: linkScript, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: world))
+        controller.add(scrollReceiver, contentWorld: world, name: syncMessageName)
+        controller.addUserScript(
+            WKUserScript(source: syncScript, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: world))
+    }
+
     private func makeWebView(rules: WKContentRuleList) -> PreviewWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
@@ -409,17 +429,10 @@ private final class PreviewScrollReceiver: NSObject, WKScriptMessageHandler {
         configuration.userContentController.add(rules)
         let receiver = PreviewLinkReceiver()
         receiver.presenter = self
-        configuration.userContentController.add(receiver, contentWorld: .defaultClient, name: Self.linkMessageName)
-        configuration.userContentController.addUserScript(
-            WKUserScript(
-                source: Self.linkScript, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .defaultClient))
         let scrollReceiver = PreviewScrollReceiver()
         scrollReceiver.presenter = self
-        configuration.userContentController.add(
-            scrollReceiver, contentWorld: .defaultClient, name: Self.syncMessageName)
-        configuration.userContentController.addUserScript(
-            WKUserScript(
-                source: Self.syncScript, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .defaultClient))
+        Self.installScripts(
+            on: configuration.userContentController, linkReceiver: receiver, scrollReceiver: scrollReceiver)
         configuration.setURLSchemeHandler(handler, forURLScheme: PreviewScheme.name)
         let created = PreviewWebView(frame: view.bounds, configuration: configuration)
         created.navigationDelegate = self

@@ -71,6 +71,8 @@ import TextTankCore
     /// The source pane that scrolled while the preview was behind the text, to be followed
     /// when the preview has caught up.
     private weak var pendingSource: TTEditor?
+    /// Set by `contentWillChange`, used by the `refresh` that follows the new content.
+    private var rowsWereAligned = false
 
     /// True while it holds any observer. Read by the checks.
     var isWatching: Bool { !sources.isEmpty || rowWatch != nil || followedPage != nil }
@@ -103,11 +105,27 @@ import TextTankCore
         }
         watchSources()
         watchPreview(of: pane)
-        // The table or tree has caught up with the text: follow what scrolled meanwhile.
-        if rowWatch != nil, let editor = pendingSource, isOn(), isPreviewCurrent() {
+        // The table or tree has caught up with the text: follow what scrolled meanwhile, and
+        // put back rows that a new parse moved under an offset that stayed the same.
+        let realign = rowsWereAligned
+        rowsWereAligned = false
+        if rowWatch != nil, isOn(), isPreviewCurrent(), let editor = pendingSource ?? (realign ? editors().first : nil)
+        {
             pendingSource = nil
             showInPreview(line: editor.firstVisibleDocumentLine, pane)
         }
+    }
+
+    /// The table or tree is about to be given a new parse. Both keep their offset in points, so
+    /// rows added or removed above the top row would slide other rows under it. When the top
+    /// row is the row of the source's top line now, `refresh` puts the row of that line back
+    /// at the top afterwards. Costs one binary search.
+    func contentWillChange() {
+        rowsWereAligned = false
+        guard let rows = rowWatch?.rows, isEligible(), isOn(), let editor = editors().first,
+            let line = settledSourceLine[ObjectIdentifier(editor)], let top = rows.topRow
+        else { return }
+        rowsWereAligned = rows.row(forSourceLine: line) == top
     }
 
     /// Lets go of every observer and tells the page to report nothing.
@@ -117,6 +135,7 @@ import TextTankCore
         sources = []
         settledSourceLine = [:]
         pendingSource = nil
+        rowsWereAligned = false
         unwatchRows()
         unfollowPage()
     }

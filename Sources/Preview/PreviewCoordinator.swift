@@ -221,6 +221,7 @@ import TextTankCore
         // through the tab's visibility check, and must find the preview already current.
         shown = (revision, kind, documentURL)
         pane.setDocumentName(tab.documentName())
+        scrollSync.contentWillChange()
         pane.show(content, documentURL: documentURL)
         // Another presenter may be showing now: a table where there was a sentence.
         scrollSync.refresh()
