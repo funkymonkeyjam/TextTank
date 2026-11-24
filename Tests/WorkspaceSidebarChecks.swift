@@ -124,8 +124,11 @@ import EditorBridge
         let browser = app.workspaceBrowser
         let folder = root.appendingPathComponent("sidebar")
         let originalSize = window.contentView?.bounds.size ?? NSSize(width: 1080, height: 720)
-        window.setContentSize(NSSize(width: 1400, height: 700))
+        // Room that does not depend on the display; the too-small cases below inject their own.
+        let restoreRoom = WorkspaceRoom.grant(host)
+        try WorkspaceRoom.resize(window, to: NSSize(width: 1400, height: 700))
         defer {
+            restoreRoom()
             browser.hide()
             _ = host.setEditorLayout(.single)
             window.setContentSize(originalSize)
@@ -395,10 +398,10 @@ import EditorBridge
                 && frame(groups).width >= 800,
             "and at its maximum width, with the editor groups keeping theirs")
         split.setPosition(340, ofDividerAt: 0)
-        window.setContentSize(NSSize(width: 1500, height: 700))
+        try WorkspaceRoom.resize(window, to: NSSize(width: 1500, height: 700))
         window.contentView?.layoutSubtreeIfNeeded()
         check(abs(sidebar.frame.width - 340) < 0.5, "resizing the window keeps the sidebar's width")
-        window.setContentSize(NSSize(width: 1400, height: 700))
+        try WorkspaceRoom.resize(window, to: NSSize(width: 1400, height: 700))
 
         // Width and visibility survive a save and restore of the layout.
         let saved = try WorkspaceLayoutState.decoded(host.captureSessionLayout().encoded())
@@ -434,7 +437,6 @@ import EditorBridge
         host.setSidebarShown(false)
 
         // A restored sidebar that does not fit is kept, and shown when it next fits.
-        defer { host.sidebarAvailableContent = nil }
         host.sidebarAvailableContent = { TabGroupExtent(width: 1000, height: 700) }
         host.showTabMessage("fixture: status before the restore")
         let announcedBeforeRestore = NativeFixtureEnvironment.announcements.count
@@ -546,7 +548,7 @@ import EditorBridge
             "hiding by command is not kept as waiting")
         host.sidebarAvailableContent = { TabGroupExtent(width: 1000, height: 700) }
         host.reconcileSidebarWithRoom()
-        host.sidebarAvailableContent = nil
+        host.sidebarAvailableContent = { WorkspaceRoom.generous }
         host.reconcileSidebarWithRoom()
         check(!host.isSidebarShown, "a sidebar the person hid does not come back by itself")
 
@@ -663,7 +665,7 @@ import EditorBridge
                 "\(layout): sidebar, sources and previews never overlap")
             browser.hide()
             check(shown.allSatisfy { $0.setViewMode(.source, movingFocus: false) }, "fixture: back to Source")
-            window.setContentSize(NSSize(width: 1400, height: 700))
+            try WorkspaceRoom.resize(window, to: NSSize(width: 1400, height: 700))
         }
         check(host.setEditorLayout(.single), "fixture: one group again")
         host.activate(plainTab)

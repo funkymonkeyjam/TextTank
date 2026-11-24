@@ -460,6 +460,8 @@ import EditorBridge
             "Move Focus to Previous Area visits the same areas in the opposite order")
 
         // With the sidebar and the find bar shown: sidebar, tabs, find bar, text, status.
+        let restoreRoom = WorkspaceRoom.grant(host)
+        defer { restoreRoom() }
         check(host.setSidebarShown(true, browser: browser), "fixture: the Workspace Browser is shown")
         plainTab.showFind(nil)
         window.contentView?.layoutSubtreeIfNeeded()

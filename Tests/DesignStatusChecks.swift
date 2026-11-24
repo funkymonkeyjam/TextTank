@@ -446,6 +446,8 @@ enum DesignStatusChecks {
             "DB-R5 the collapsed row is still one row with every visible control inside it")
         // DS-D11: the docked sidebar takes width beside the editor groups; the row still collapses.
         let host = controller.host
+        let restoreRoom = WorkspaceRoom.grant(host)
+        defer { restoreRoom() }
         if host.setSidebarShown(true, browser: composition.workspaceBrowser) {
             window.setContentSize(window.contentMinSize)
             root.layoutSubtreeIfNeeded()
@@ -987,6 +989,8 @@ enum DesignStatusChecks {
             chooseFromMenu("ruby", expecting: "ruby", where: "the tab's preview")
         }
         controller.setViewMode(.source)
+        let restoreSidebarRoom = WorkspaceRoom.grant(host)
+        defer { restoreSidebarRoom() }
         if check(host.setSidebarShown(true, browser: composition.workspaceBrowser), "fixture: the sidebar is shown"),
             let outline = host.sidebarFocusView
         {
