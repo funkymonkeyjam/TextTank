@@ -102,7 +102,9 @@ Owner follow-up, 17 November 2026:
 - DS-35. There is one Find. Command-F opens and focuses the find bar; Return finds the next match,
   Shift-Return the previous one, Escape or Done closes it. Find Next, Find Previous and Use Selection for
   Find share its text with the system find pasteboard. The Find and Replace window (Option-Command-F) adds
-  scopes, modes and results; while it is open, Find Next and Find Previous act on it.
+  scopes, modes and results; while it is open, Find Next and Find Previous act on it. The bar and the
+  window show one Find text and one replacement, live, and offer one history of the last ten of each. A
+  new launch starts in Normal mode with an empty Find field.
 - DS-36. A search that finds nothing says so in words, visibly, and is announced (DS-62).
 
 ### Alerts, sheets and dialogs
