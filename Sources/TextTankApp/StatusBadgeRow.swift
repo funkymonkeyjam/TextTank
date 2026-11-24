@@ -354,6 +354,7 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
         guard value != progress else { return }
         let wasShown = progress != nil
         progress = value
+        if value == nil { moveKeyboardAway(from: cancelButton) }
         progressBar.isHidden = value == nil
         cancelButton.isHidden = value == nil
         guard let value else {
@@ -382,6 +383,7 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
     /// Offers a follow-up as a button beside the status message, or withdraws it.
     func setFollowUp(_ value: StatusFollowUp?) {
         followUp = value
+        if value == nil { moveKeyboardAway(from: followUpButton) }
         followUpButton.isHidden = value == nil
         if let value {
             followUpButton.title = value.title
@@ -392,6 +394,21 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
         needsLayout = true
     }
     @objc private func runFollowUp(_ sender: Any?) { followUp?.run() }
+    /// Puts the keyboard back in the text when the row has no field left to hold it.
+    var returnKeyboardToText: (() -> Void)?
+    /// A control of the row can leave while it has the keyboard: More when the window widens,
+    /// Cancel when its operation ends, a follow-up when it no longer applies, a field that
+    /// collapses or whose value goes (the selection). The first responder must never be left on
+    /// a control that is gone (DS-73): the keyboard moves to the row's last visible field, or
+    /// to the text when the row shows none. Call this before the control is hidden or removed.
+    private func moveKeyboardAway(from control: NSView) {
+        guard let window, let responder = window.firstResponder as? NSView,
+            responder === control || responder.isDescendant(of: control)
+        else { return }
+        let fields = popups.filter { $0 !== control && $0.superview != nil && !$0.isHidden }
+        if let last = fields.last, window.makeFirstResponder(last) { return }
+        if let returnKeyboardToText { returnKeyboardToText() } else { window.makeFirstResponder(nil) }
+    }
 
     let largeFileButton = NSButton(title: "Apply Language and Wrap Settings", target: nil, action: nil)
     var showsLargeFileAction: Bool {
@@ -560,6 +577,7 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
             return control
         }
         for (field, control) in prior where !shown.contains(where: { $0.field == field }) {
+            moveKeyboardAway(from: control)
             stack.removeArrangedSubview(control)
             control.removeFromSuperview()
             widths.removeValue(forKey: field)?.isActive = false
@@ -679,9 +697,11 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
         collapsedFields = Self.collapseOrder.filter { hidden.contains($0) }
         for popup in popups {
             let shouldHide = hidden.contains(popup.field)
+            if shouldHide, !popup.isHidden { moveKeyboardAway(from: popup) }
             if popup.isHidden != shouldHide { popup.isHidden = shouldHide }
         }
         if hidden.isEmpty, overflow.superview != nil {
+            moveKeyboardAway(from: overflow)
             stack.removeArrangedSubview(overflow)
             overflow.removeFromSuperview()
         } else if !hidden.isEmpty, overflow.superview == nil {

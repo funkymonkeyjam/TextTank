@@ -354,6 +354,10 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         }
         statusDetails.onCommand = { [weak self] field in self?.runStatusCommand(field) }
         statusDetails.onCancelOperation = { StatusOperationCenter.shared.cancel($0) }
+        statusDetails.returnKeyboardToText = { [weak self] in
+            guard let self else { return }
+            self.hostWindow?.makeFirstResponder(self.keyboardFocusView)
+        }
         // Editor events make the bar follow an edit or a selection change in the same turn of
         // the run loop; the timer started by visibilityChanged() covers state no event reports.
         stateObserver = NotificationCenter.default.addObserver(

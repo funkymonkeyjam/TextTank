@@ -527,7 +527,20 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
         let item = try requireValue(controller.menu().items.first, "fixture: Choose Language… item")
         check(
             item.action == #selector(EditorWindowController.chooseLanguage(_:)) && item.target == nil,
-            "DS-21 Choose Language… is sent to the document window that has the keyboard, so it is disabled without one")
+            "DS-21 Choose Language… is sent to the document window that has the keyboard")
+        // No document is open in this process. An untargeted item is enabled only when something
+        // in the responder chain answers its action, and the workspace window validates it for
+        // its active tab; with neither, the menu draws it disabled. With a tab, enabled and acting
+        // on that tab from the sidebar and from a preview: DesignStatusChecks, "DS-21 Choose
+        // Language… is enabled with the keyboard in …".
+        let noDocumentTarget = item.action.flatMap { NSApp.target(forAction: $0, to: nil, from: item) }
+        let menu = controller.menu()
+        menu.autoenablesItems = true
+        menu.update()
+        check(
+            NSDocumentController.shared.documents.isEmpty && noDocumentTarget == nil
+                && menu.items.first?.action == item.action && menu.items.first?.isEnabled == false,
+            "DS-21 Choose Language… is disabled without a document: \(String(describing: noDocumentTarget))")
         hasEditor = false
         controller.chooseLanguage(nil)
         check(presented.isEmpty && controller.chooser == nil, "SR-2 no chooser opens without a document")
