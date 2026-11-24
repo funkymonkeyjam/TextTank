@@ -591,7 +591,7 @@ tab removes both editor views, forms, callbacks and adapter ownership, without a
 save review. The cold process drains an explicit setup autorelease pool before asserting weak release;
 it performs no prior view removal. Final tabs retain the native document lifecycle.
 
-The shared group command owner supplies View, context and trailing picker definitions (DS-20-24,62,70-74).
+The shared group command owner supplies the View, context and Editor Layout toolbar definitions (DS-20-24,62,70-74, DS-D12).
 Menus capture the complete move set; a vanished member invalidates the entire move. Organization
 deduplication does not create history. Explicit tab closes capture exact view offsets and group slot;
 Reopen resolves a live document identity before fingerprint waits or disk reads, then restores a shared

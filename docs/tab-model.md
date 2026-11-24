@@ -33,7 +33,7 @@ Only the mounted active tab in a visible, non-minimized host runs recurring stat
 
 ## Empty state and persistence boundary
 
-Closing the final tab keeps the host open and TextTank running, without creating an untitled document. The empty host offers New/Open in the toolbar and menu; document commands are disabled. Its red close button still invokes Quit. Stage 1 adds the context commands, bulk close and reopen history described below. Stage 2 adds pin/reorder/multiselection UI below; additional visible groups and a layout picker remain excluded.
+Closing the final tab keeps the host open and TextTank running, without creating an untitled document. The empty host offers New/Open in the toolbar and menu; document commands are disabled. Its red close button still invokes Quit. Stage 1 adds the context commands, bulk close and reopen history described below. Stage 2 adds pin/reorder/multiselection UI below; additional visible groups and a layout choice remain excluded from that stage.
 
 WorkspaceLayoutState requires version 1, layout, focused slot and ordered group states. Each group has its slot, active-tab index and ordered tab records containing DocumentID, pinned flag, UTF-8 anchor/caret and first visible line. Validation rejects unknown or missing version, wrong counts/order/slots, duplicate documents per group, broken pin prefix, invalid active/focused references and negative offsets. No text or bytes are stored. A tab record may also carry `viewMode` (`preview` or `both`) and `previewSourceFraction` (the source's share of the width in Both, 0 to 1). Both are optional and are left out for a tab that shows Source, so records written before the fields existed read as Source and a Source tab is written exactly as before. An unknown mode or a fraction outside 0 to 1 is rejected. A tab record may carry `zoom`, the active pane's zoom level, and its split record `otherZoom` for the other pane, each −10 through 60. Both are optional and written only for a pane zoomed away from the Editor Settings default; a pane without one is restored at that default and follows it, so earlier records and unzoomed tabs are unchanged. A level outside the range is rejected. The mode is applied on restore only if the document still has a preview (see [preview-model](preview-model.md#presentation)). All four layout shapes round-trip in codec tests. Nothing writes this value to disk, and existing session/recovery schema and golden fixture bytes stay unchanged.
 
@@ -169,7 +169,13 @@ region-clamped index and UTF-8-clamped viewport; an existing destination stays u
 Session/recovery/all-document search stay one per document; capture selection from
 focused or per-document MRU live editor. Chooser rows use TabID plus group identity.
 
-The trailing layout picker stays outside scrolling strips. Native dividers enforce
+Owner decision DS-D12 (23 November 2026): the layout is chosen from the toolbar's Editor Layout
+item, a standard menu toolbar item in the default, customisable toolbar, and from View > Editor
+Groups > Editor Group Layout, which stays when the item is removed from the toolbar. Both menus are
+built by the group command owner and show one checkmark. No row sits between the toolbar and the
+tab strips: the group container starts at the top of the editor area. The earlier trailing layout
+picker and its 36-point row are gone; `TabGroupGeometry` still reserves those 36 points in the
+minimum height of a two-row layout, so no minimum shrank. Native dividers enforce
 320 x 200 total group bounds with responsive Find/status, shared chrome counted once,
 and screen-aware content/frame fit. Unfittable layout refuses atomically with status
 and announcement. Single retains its normal minimum; no gratuitous shrink. Same layout
@@ -252,7 +258,7 @@ Browser, the Command Palette, Add Folder to Workspace and Monitor Current File a
 docked view. The browser's store, lists, open route and encoding offer are unchanged; only the view moved.
 
 The window's content is one root split, `WorkspaceSidebarSplit`. Its last pane is the editor area (the
-layout picker and the editor group container), which is never removed or rebuilt. The sidebar is
+editor group container), which is never removed or rebuilt. The sidebar is
 inserted before it when shown and removed when hidden, so 1, 2 or 4 groups, their dividers, Clone
 panes and each tab's Source, Preview or Both share whatever width remains, exactly as they shared the
 whole window before. The sidebar draws on the window's background: no `NSVisualEffectView`, no

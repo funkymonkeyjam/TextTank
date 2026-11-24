@@ -431,9 +431,14 @@ import Darwin
         check(
             try heading(.first).isHidden && only.strip.frame.maxY == only.bounds.height,
             "a single group shows no heading and its tab strip takes the row (DS-10)")
+        let layoutToolbar = try requireValue(host.window?.toolbar, "fixture: workspace toolbar")
+        let layoutItem = try requireValue(
+            host.toolbar(
+                layoutToolbar, itemForItemIdentifier: EditorLayoutToolbarItem.identifier,
+                willBeInsertedIntoToolbar: false) as? NSMenuToolbarItem, "DS-D12 Editor Layout toolbar item")
         check(
-            host.layoutPicker.menu?.items.first?.isEnabled == true,
-            "the layout picker's title item stays enabled, so the control does not look unavailable")
+            host.validateToolbarItem(layoutItem) && layoutItem.menu.items.first?.isEnabled == true,
+            "DS-D12 the toolbar's Editor Layout item stays enabled, so the control does not look unavailable")
         reset()
         // A non-final saved close records that exact view. Missing disk cannot affect live reopen.
         let liveDoc = try saved("history-live", "é\nabcdef\n"), h1 = id(liveDoc)
@@ -703,10 +708,16 @@ import Darwin
         check(
             action?.handler?() == true && host.tabSelection.selected(in: host.model, group: .second) == [second, third]
                 && host.model.groups[0] == firstGroup, "T3 native AX selection stays group-local")
+        let picker = try requireValue(
+            host.toolbar(
+                try requireValue(host.window?.toolbar, "fixture: workspace toolbar"),
+                itemForItemIdentifier: EditorLayoutToolbarItem.identifier, willBeInsertedIntoToolbar: false)
+                as? NSMenuToolbarItem, "T3 Editor Layout toolbar item")
         check(
-            host.layoutPicker.superview !== strip && host.layoutPicker.accessibilityLabel() == "Editor group layout",
-            "T3 trailing picker is outside scrolling strip and labelled")
-        let choices = host.layoutPicker.menu!.items.filter {
+            picker.view == nil && picker.label == "Editor Layout" && !(picker.toolTip ?? "").isEmpty
+                && !descendants(strip).contains { $0 is NSPopUpButton },
+            "T3 the layout choice is a labelled toolbar item, outside the scrolling strips (DS-D12)")
+        let choices = picker.menu.items.filter {
             $0.identifier?.rawValue.hasPrefix("groups.layout.") == true
         }
         check(

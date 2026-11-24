@@ -46,6 +46,7 @@ Owner follow-up, 16 November 2026:
 
 - DS-D6. The toolbar has one Automations drop-down, with no individual automation buttons,
   including in restored configurations. Favorites prioritize the drop-down and editor context menu.
+  This limits how automations appear; it does not limit the toolbar to one menu item (DS-D12).
 - DS-D7. New, Open and Close must not animate the document window. The temporary tab-window
   arrangement positions the incoming window before showing it; the workspace-host decision is unchanged.
 
@@ -98,6 +99,19 @@ Owner decision, 23 November 2026:
   Showing it moves the keyboard only when the person chose the command; Escape or the same command
   returns the keyboard to the text (DS-73). `docs/tab-model.md` has the contract.
 
+- DS-D12. **The editor layout is chosen in the toolbar, not in a row of its own.** The row above the
+  tab strips that held only the Editor Group Layout pop-up is removed: the tab strips are the first
+  row of the window's content, directly under the toolbar (DS-10). The layouts (Single Group, Two
+  Columns, Two Rows, Grid 2 × 2) are offered by **Editor Layout**, a standard menu toolbar item
+  (`NSMenuToolbarItem`) with a symbol, a label and a tooltip, in the default toolbar; a person can
+  move or remove it like any other item (DS-30). View > Editor Groups keeps every group command, so
+  the toolbar is never the only route (DS-73). The toolbar menu and the View menu list the same
+  commands with the same checkmark, and the item is enabled by the group commands' own test
+  (DS-20 to DS-22). A toolbar arranged before this decision gains the item once; a person who then
+  removes it keeps it removed. DS-D6 stands as written for automations: one drop-down, no buttons of
+  their own. Editor Layout is a second menu item of a different kind, which DS-D6 never excluded and
+  DS-30 now names. DS-31 is met: nothing in the tab strip or the title bar chooses a layout.
+
 ## 3. Rules
 
 ### Windows and tabs
@@ -138,7 +152,9 @@ Owner decision, 23 November 2026:
 ### Toolbar
 
 - DS-30. Toolbar items are standard `NSToolbarItem`s with an SF Symbol and a label, for the actions used
-  most. The toolbar is customisable and remembers its arrangement.
+  most. The toolbar is customisable and remembers its arrangement. An item that offers a short list of
+  choices is a standard menu toolbar item (`NSMenuToolbarItem`); there are two, Automations (DS-D6) and
+  Editor Layout (DS-D12), and the menu bar lists everything either one offers.
 - DS-31. The toolbar does not repeat a control the tab strip or title bar already provides (DS-D3).
 
 ### Find

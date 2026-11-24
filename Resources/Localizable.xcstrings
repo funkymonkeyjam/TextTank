@@ -2533,6 +2533,28 @@
           }
         }
       }
+    },
+    "toolbar.layout": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Editor Layout"
+          }
+        }
+      }
+    },
+    "toolbar.layout.help": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose how many editor groups the window shows: one, two columns, two rows or a grid of four."
+          }
+        }
+      }
     }
   },
   "version": "1.0"
