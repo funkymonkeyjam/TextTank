@@ -90,11 +90,11 @@ enum DesignStatusChecks {
         try requireValue(field("status.language.0"), "fixture: language field").performClick(nil)
         row.onCommand = wired
         check(ran == [.position, .language], "SR-1 clicking the position or the language runs that field's one command")
-        check(FormPanel.visible.isEmpty, "fixture: no panel is open before Go to Line")
+        check(!controller.goToLineBarVisible, "fixture: Go to Line is not showing before the click")
         positionField.performClick(nil)
-        let lineForm = FormPanel.visible.first { $0.window.identifier?.rawValue == "TextTank.GoToLine" }
-        check(lineForm != nil, "SR-1 clicking the position field runs Go to Line itself")
-        lineForm?.close()
+        check(controller.goToLineBarVisible, "SR-1 clicking the position field runs Go to Line itself")
+        check(FormPanel.visible.isEmpty, "SR-1 Go to Line opens no separate panel")
+        controller.closeGoToLineBar(restoring: true, returningKeyboard: false)
         let items = [
             StatusItem(field: .position, text: "Ln 1, Col 1"),
             .init(field: .language, text: String(repeating: "Long language name ", count: 10)),
