@@ -576,7 +576,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                     : command.defaultMenuShortcut
                 item.isEnabled =
                     enabled && (!TTEditor.commandModifiesText(command.nativeIdentifier) || !editor.readOnly)
-                if command.isToggle { item.state = editor.commandIsChecked(command.nativeIdentifier) ? .on : .off }
+                if command.isToggle { item.state = isChecked(command, in: editor) ? .on : .off }
             }
         }
         func command(_ value: EditorCommand) { add(value.title, #selector(statusOption(_:)), self, value.rawValue) }
@@ -902,6 +902,12 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         guard let command = EditorCommand(rawValue: id) else { throw EditorCommandFailure.unsupported }
         if TTEditor.commandModifiesText(command.nativeIdentifier) { try editor.requireWritable() }
         let recorder = EditorServices.current?.macros
+        if let preference = command.viewPreference, let settings = EditorServices.current?.settings {
+            // One stored choice for every editor view; the settings write applies it to all of them.
+            recorder?.willExecuteCommand(id, on: editor)
+            settings.toggle(preference)
+            return
+        }
         let finishing: ((Bool) -> Void)?
         if command == .bookmarkCutLines || command == .bookmarkDeleteLines {
             finishing = recorder?.prepareUnrecordedChange(
@@ -919,6 +925,14 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         _ = editor.exchangeNextUndoName(priorName)
         finishing?(accepted && editor.revision != before)
         guard accepted else { throw EditorCommandFailure.unsupported }
+    }
+    /// A toggle's checkmark. The three stored View choices show the Editor Settings value, which
+    /// every view has; the other toggles show the given view's own state.
+    private func isChecked(_ command: EditorCommand, in editor: TTEditor) -> Bool {
+        if let preference = command.viewPreference, let settings = EditorServices.current?.settings {
+            return settings.isEnabled(preference)
+        }
+        return editor.commandIsChecked(command.nativeIdentifier)
     }
     deinit {
         precondition(Thread.isMainThread)
@@ -1424,7 +1438,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 guard activeEditor.hasBookmarks else { return false }
             default: break
             }
-            item.state = command.isToggle && activeEditor.commandIsChecked(command.nativeIdentifier) ? .on : .off
+            item.state = command.isToggle && isChecked(command, in: activeEditor) ? .on : .off
             return !TTEditor.commandModifiesText(command.nativeIdentifier) || !activeEditor.readOnly
         case #selector(toggleWrap(_:)):
             // Wrapping belongs to the view, as the status bar's Wrap field shows it.

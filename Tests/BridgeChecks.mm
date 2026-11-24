@@ -1340,6 +1340,30 @@ int main(int argc, char **argv) {
         [ed setSyntaxFont:STYLE_LINENUMBER name:@"Menlo" size:40];
         check(needed(sv,"99")>48 && margin(sv)>=needed(sv,"99"), "Line-number margin follows a larger line-number font");
         });
+        ttchecks::section("stored view choices", [&] {
+        // V4: the three View choices are plain per-view properties that Editor Settings sets on every view.
+        TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        ScintillaView *sv=(ScintillaView *)ed.subviews.firstObject;
+        check(ed.lineNumbersVisible && !ed.whitespaceVisible && !ed.lineEndingsVisible, "V4 a new view shows line numbers and hides whitespace and line-ending marks");
+        ed.lineNumbersVisible=NO; ed.whitespaceVisible=YES; ed.lineEndingsVisible=YES;
+        check([sv message:SCI_GETMARGINWIDTHN wParam:0]==0 && [sv message:SCI_GETVIEWWS]==SCWS_VISIBLEALWAYS && [sv message:SCI_GETVIEWEOL]==1,
+              "V4 the view-choice properties set the gutter, whitespace marks and line-ending marks");
+        check(![ed commandIsChecked:@"toggleLineNumbers"] && [ed commandIsChecked:@"showWhitespace"] && [ed commandIsChecked:@"toggleEOL"],
+              "V4 the catalog toggles report the same state the properties set");
+        ed.lineNumbersVisible=NO; ed.whitespaceVisible=YES; ed.lineEndingsVisible=YES;
+        check(!ed.lineNumbersVisible && ed.whitespaceVisible && ed.lineEndingsVisible, "V4 setting a view choice to its current value changes nothing");
+        [ed executeCommand:@"toggleLineNumbers"]; [ed executeCommand:@"showWhitespace"]; [ed executeCommand:@"toggleEOL"];
+        check(ed.lineNumbersVisible && [sv message:SCI_GETMARGINWIDTHN wParam:0]>=48 && !ed.whitespaceVisible && !ed.lineEndingsVisible,
+              "V4 the catalog toggles flip the properties, and showing the gutter sizes it");
+        check(ed.followsDefaultZoom, "V4 a new view follows the default zoom");
+        [ed applyDefaultZoomLevel:2];
+        check(ed.followsDefaultZoom && ed.zoomLevel==2, "V4 a default zoom change keeps a following view following");
+        ed.zoomLevel=5;
+        check(!ed.followsDefaultZoom, "V4 a view zoomed away from the default no longer follows it");
+        [ed resetZoomLevel];
+        check(ed.followsDefaultZoom && ed.zoomLevel==2, "V4 Actual Size returns the view to following the default");
+        [ed applyDefaultZoomLevel:0];
+        });
         ttchecks::section("line-ending mode", [&] {
         // F126: the line-ending mode is metadata only and governs later insertions.
         TTEditor *eol=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,400,300)];

@@ -950,14 +950,28 @@ extension DocumentChecks {
             controller.clone(nil)
             let clone = try requireValue(controller.secondary, "fixture: catalog toggle clone")
             _ = controller.hostWindow?.makeFirstResponder(clone)
-            clone.executeCommand(TTEditorCommandIdentifier(rawValue: "toggleEOL"))
+            // V4: Show Line Endings is one stored choice, so its checkmark is the same in both panes;
+            // Overtype stays a choice of the view that has the keyboard.
+            try controller.perform(command: "toggleEOL")
             check(
-                controller.validateMenuItem(endings) && endings.state == .on,
+                controller.validateMenuItem(endings) && endings.state == .on && clone.lineEndingsVisible
+                    && doc.editor.lineEndingsVisible,
+                "DS22 a stored view choice made with the clone focused checks its item and reaches both panes")
+            let overtype = item(#selector(EditorWindowController.command(_:)), "toggleOvertype")
+            clone.executeCommand(TTEditorCommandIdentifier(rawValue: "toggleOvertype"))
+            check(
+                controller.validateMenuItem(overtype) && overtype.state == .on,
                 "DS22 catalog toggle checkmarks follow the focused clone's own view state")
             _ = controller.hostWindow?.makeFirstResponder(doc.editor)
             check(
-                controller.validateMenuItem(endings) && endings.state == .off,
-                "DS22 returning to the source pane restores that view's toggle checkmark")
+                controller.validateMenuItem(endings) && endings.state == .on
+                    && controller.validateMenuItem(overtype) && overtype.state == .off,
+                "DS22 returning to the source pane restores that view's toggle checkmark and keeps the stored choice")
+            try controller.perform(command: "toggleEOL")
+            check(
+                controller.validateMenuItem(endings) && endings.state == .off && !clone.lineEndingsVisible
+                    && !doc.editor.lineEndingsVisible,
+                "DS22 turning the stored view choice off clears its checkmark and both panes")
             controller.closeSplit(nil)
             doc.close()
         }

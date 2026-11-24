@@ -1798,9 +1798,9 @@ static sptr_t TTMacWordDestination(ScintillaView *engine, sptr_t caret, bool rig
 - (BOOL)commandIsChecked:(TTEditorCommandIdentifier)identifier {
     [self assertThread];
     if (![identifier isKindOfClass:NSString.class]) return NO;
-    if ([identifier isEqualToString:@"showWhitespace"]) return [_engine message:SCI_GETVIEWWS] != SCWS_INVISIBLE;
-    if ([identifier isEqualToString:@"toggleEOL"]) return [_engine message:SCI_GETVIEWEOL] != 0;
-    if ([identifier isEqualToString:@"toggleLineNumbers"]) return [_engine message:SCI_GETMARGINWIDTHN wParam:0] != 0;
+    if ([identifier isEqualToString:@"showWhitespace"]) return self.whitespaceVisible;
+    if ([identifier isEqualToString:@"toggleEOL"]) return self.lineEndingsVisible;
+    if ([identifier isEqualToString:@"toggleLineNumbers"]) return self.lineNumbersVisible;
     if ([identifier isEqualToString:@"toggleOvertype"]) return [_engine message:SCI_GETOVERTYPE] != 0;
     if ([identifier isEqualToString:@"rectangularSelection"]) return [_engine message:SCI_GETSELECTIONMODE] == SC_SEL_RECTANGLE;
     if ([identifier isEqualToString:@"streamSelection"]) return [_engine message:SCI_GETSELECTIONMODE] == SC_SEL_STREAM;
@@ -2028,17 +2028,9 @@ static sptr_t TTMacWordDestination(ScintillaView *engine, sptr_t caret, bool rig
         [_engine message:SCI_FOLDALL wParam:[identifier isEqualToString:@"foldAll"] ? SC_FOLDACTION_CONTRACT : SC_FOLDACTION_EXPAND];
         return YES;
     }
-    if ([identifier isEqualToString:@"showWhitespace"]) {
-        [_engine message:SCI_SETVIEWWS wParam:[_engine message:SCI_GETVIEWWS] ? SCWS_INVISIBLE : SCWS_VISIBLEALWAYS]; return YES;
-    }
-    if ([identifier isEqualToString:@"toggleEOL"]) {
-        [_engine message:SCI_SETVIEWEOL wParam:![_engine message:SCI_GETVIEWEOL]]; return YES;
-    }
-    if ([identifier isEqualToString:@"toggleLineNumbers"]) {
-        if ([_engine message:SCI_GETMARGINWIDTHN wParam:0]) [_engine message:SCI_SETMARGINWIDTHN wParam:0 lParam:0];
-        else [self updateLineNumberMargin:YES];
-        return YES;
-    }
+    if ([identifier isEqualToString:@"showWhitespace"]) { self.whitespaceVisible = !self.whitespaceVisible; return YES; }
+    if ([identifier isEqualToString:@"toggleEOL"]) { self.lineEndingsVisible = !self.lineEndingsVisible; return YES; }
+    if ([identifier isEqualToString:@"toggleLineNumbers"]) { self.lineNumbersVisible = !self.lineNumbersVisible; return YES; }
     if ([identifier isEqualToString:@"toggleOvertype"]) {
         [_engine message:SCI_SETOVERTYPE wParam:![_engine message:SCI_GETOVERTYPE]]; return YES;
     }
@@ -2602,6 +2594,31 @@ static sptr_t TTMacWordDestination(ScintillaView *engine, sptr_t caret, bool rig
     [self assertThread];
     _followsDefaultZoom = YES;
     self.zoomLevel = _defaultZoomLevel;
+}
+- (BOOL)followsDefaultZoom { [self assertThread]; return _followsDefaultZoom; }
+- (BOOL)lineNumbersVisible { [self assertThread]; return [_engine message:SCI_GETMARGINWIDTHN wParam:0] != 0; }
+- (void)setLineNumbersVisible:(BOOL)visible {
+    [self assertThread];
+    if (visible == self.lineNumbersVisible) return;
+    if (visible) [self updateLineNumberMargin:YES];
+    else [_engine message:SCI_SETMARGINWIDTHN wParam:0 lParam:0];
+    // The margin change raises no synchronous notification.
+    [self invalidateLineNumbersIfChanged];
+    [self scheduleStateNotification];
+}
+- (BOOL)whitespaceVisible { [self assertThread]; return [_engine message:SCI_GETVIEWWS] != SCWS_INVISIBLE; }
+- (void)setWhitespaceVisible:(BOOL)visible {
+    [self assertThread];
+    if (visible == self.whitespaceVisible) return;
+    [_engine message:SCI_SETVIEWWS wParam:visible ? SCWS_VISIBLEALWAYS : SCWS_INVISIBLE];
+    [self scheduleStateNotification];
+}
+- (BOOL)lineEndingsVisible { [self assertThread]; return [_engine message:SCI_GETVIEWEOL] != 0; }
+- (void)setLineEndingsVisible:(BOOL)visible {
+    [self assertThread];
+    if (visible == self.lineEndingsVisible) return;
+    [_engine message:SCI_SETVIEWEOL wParam:visible];
+    [self scheduleStateNotification];
 }
 - (void)applyFontToStyle:(NSInteger)index name:(NSString *)name size:(NSNumber *)size {
     NSString *face = name ?: _baseFontName;
