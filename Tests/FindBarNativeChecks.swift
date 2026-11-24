@@ -490,9 +490,7 @@ import EditorBridge
             "a column past the end of the line is the end of the line")
 
         // The buttons, for the pointer; and the status row's entry.
-        let item = NSMenuItem(title: "Go to Line…", action: nil, keyEquivalent: "")
-        item.representedObject = "goToLine"
-        tab.perform(NSSelectorFromString("statusOption:"), with: item)
+        tab.runStatusCommand(.position)
         check(tab.goToLineBarVisible && field.stringValue == "200", "the status row's Go to Line… opens the same field")
         typed("7", into: field, of: tab)
         bar.goButton.performClick(nil)
