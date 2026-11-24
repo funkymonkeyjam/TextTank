@@ -736,8 +736,13 @@ import EditorBridge
             }
         }
         // Hiding the bars narrows the gutter. The text stays at its left edge, not scrolled
-        // sideways under it. (That the strip the gutter gives up is repainted is seen only on
-        // screen: a check that draws the window itself repaints it.)
+        // sideways under it, and the gutter clips its drawing: unclipped, what it drew while
+        // wider stayed over the first characters of every line. (The picture itself is seen
+        // only on screen: a check that draws the window repaints it.)
+        check(
+            scroll.verticalRulerView?.clipsToBounds == true
+                && scroll.verticalRulerView?.subviews.allSatisfy { $0.clipsToBounds } == true,
+            "the gutter and the filler numbers in it clip their drawing to the gutter")
         settle()
         let shownOrigin = scroll.contentView.bounds.origin.x
         bars.changeBars = false
