@@ -85,12 +85,90 @@ struct WorkspaceFileIndex: Sendable {
     }
 }
 
+/// Asks the file system about paths on a few threads of its own, to a deadline.
+///
+/// `stat` on a volume that has stopped answering does not return and cannot be interrupted. A
+/// question is therefore put on a thread that may be abandoned: the caller waits for the
+/// deadline at most, takes the answers that arrived and reads the rest as not known. A thread
+/// left behind ends when its call returns. Threads are counted across every caller: no more
+/// than `ceiling` exist at once, so paths that never answer cannot multiply them; while the
+/// ceiling is reached, further questions are answered "not known" at once.
+final class FileProbePool: @unchecked Sendable {
+    enum Outcome: Equatable, Sendable {
+        /// A regular file, with the name of its volume and file number.
+        case found(String)
+        case missing
+        /// Not answered in time.
+        case unknown
+        var file: String? {
+            if case .found(let file) = self { return file }
+            return nil
+        }
+    }
+    typealias Probe = @Sendable (URL) -> String?
+    static let shared = FileProbePool(width: 4, ceiling: 8)
+    let width: Int, ceiling: Int
+    private let lock = NSLock()
+    private var running = 0
+    /// Threads that are asking, or stuck asking, now.
+    var busy: Int { lock.withLock { running } }
+    init(width: Int, ceiling: Int) {
+        self.width = max(1, width)
+        self.ceiling = max(1, ceiling)
+    }
+    private final class Batch: @unchecked Sendable {
+        let condition = NSCondition()
+        var outcomes: [Outcome]
+        var next = 0, answered = 0, abandoned = false
+        init(count: Int) { outcomes = Array(repeating: .unknown, count: count) }
+    }
+    /// One outcome a path, in order. Returns when every path has answered or at the deadline
+    /// (in `ProcessInfo.systemUptime` seconds), whichever is first.
+    func outcomes(for urls: [URL], until deadline: TimeInterval, probe: @escaping Probe) -> [Outcome] {
+        guard !urls.isEmpty else { return [] }
+        let threads = lock.withLock { () -> Int in
+            let granted = max(0, min(width, urls.count, ceiling - running))
+            running += granted
+            return granted
+        }
+        let batch = Batch(count: urls.count)
+        for _ in 0..<threads {
+            Thread.detachNewThread { [self] in
+                while true {
+                    batch.condition.lock()
+                    let index = batch.next
+                    let stop = batch.abandoned || index >= urls.count
+                    if !stop { batch.next += 1 }
+                    batch.condition.unlock()
+                    if stop { break }
+                    let file = probe(urls[index])
+                    batch.condition.lock()
+                    batch.outcomes[index] = file.map(Outcome.found) ?? .missing
+                    batch.answered += 1
+                    batch.condition.broadcast()
+                    batch.condition.unlock()
+                }
+                lock.withLock { running -= 1 }
+            }
+        }
+        batch.condition.lock()
+        defer { batch.condition.unlock() }
+        if threads > 0 {
+            let limit = Date(timeIntervalSinceNow: deadline - ProcessInfo.processInfo.systemUptime)
+            while batch.answered < urls.count, batch.condition.wait(until: limit) {}
+        }
+        batch.abandoned = true
+        return batch.outcomes
+    }
+}
+
 /// What Quick Open lists: open documents first, then recent files that still exist, then the
 /// files of the workspace folders. A file appears once, under the first kind that has it.
 ///
 /// Building the list never reads a file's contents. `inspect` asks the file system whether a
-/// path exists and which file it is, which can wait on a slow volume, so it is used off the
-/// main thread only and stops at its deadline.
+/// path exists and which file it is. That can wait for ever on a volume that has stopped
+/// answering, so it is asked through a `FileProbePool`, off the main thread: a path that has
+/// not answered by the deadline is read as not known and its thread is left behind.
 struct QuickOpenList: Sendable {
     enum Kind: Int, Sendable {
         case open, recent, workspace
@@ -141,7 +219,7 @@ struct QuickOpenList: Sendable {
         (url.deletingLastPathComponent().path as NSString).abbreviatingWithTildeInPath
     }
     /// The file a path names: its volume and file number. Nil if it is missing or not a regular file.
-    private static func inspect(_ url: URL) -> String? {
+    static let inspect: FileProbePool.Probe = { url in
         var info = stat()
         guard url.isFileURL, stat(url.path, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { return nil }
         return "file:\(info.st_dev):\(info.st_ino)"
@@ -153,14 +231,42 @@ struct QuickOpenList: Sendable {
         seen.formUnion(names)
         return true
     }
+    /// The files of the open documents that have one, asked to a deadline. Nil where the
+    /// document is untitled or its file did not answer.
+    static func files(
+        of documents: [OpenDocument], deadline: TimeInterval = ProcessInfo.processInfo.systemUptime + 1,
+        pool: FileProbePool = .shared, probe: @escaping FileProbePool.Probe = inspect
+    ) -> [String?] {
+        let saved = documents.compactMap(\.url)
+        var answers = pool.outcomes(for: saved, until: deadline, probe: probe).map(\.file).makeIterator()
+        return documents.map { $0.url == nil ? nil : (answers.next() ?? nil) }
+    }
+    /// Whether each recent file is still there. At most `recentLimit` are asked; one beyond
+    /// that, or one that has not answered by the deadline, is not known.
+    static func outcomes(
+        recent urls: [URL], deadline: TimeInterval = ProcessInfo.processInfo.systemUptime + 2,
+        pool: FileProbePool = .shared, probe: @escaping FileProbePool.Probe = inspect
+    ) -> [FileProbePool.Outcome] {
+        let asked = Array(urls.prefix(recentLimit))
+        return pool.outcomes(for: asked, until: deadline, probe: probe)
+            + Array(repeating: .unknown, count: urls.count - asked.count)
+    }
+    /// The file each workspace file is, asked to a deadline; nil where it did not answer.
+    static func files(
+        of workspace: [WorkspaceFileIndex.File], deadline: TimeInterval = ProcessInfo.processInfo.systemUptime + 2,
+        pool: FileProbePool = .shared, probe: @escaping FileProbePool.Probe = inspect
+    ) -> [String?] {
+        pool.outcomes(for: workspace.map(\.url), until: deadline, probe: probe).map(\.file)
+    }
     /// Open documents, in the order given. An untitled document is listed by its display name.
     /// Two documents never share a file, but a document's file is remembered so that the same
-    /// file is not listed again as a recent or workspace file.
-    mutating func add(open documents: [OpenDocument], inspecting: Bool) {
-        for document in documents {
+    /// file is not listed again as a recent or workspace file. `files` is what `files(of:)`
+    /// answered, or nil before it has.
+    mutating func add(open documents: [OpenDocument], files: [String?]? = nil) {
+        for (index, document) in documents.enumerated() {
             var place = "Not saved yet"
             if let url = document.url {
-                _ = claim(url, file: inspecting ? Self.inspect(url) : nil)
+                _ = claim(url, file: files.flatMap { $0.indices.contains(index) ? $0[index] : nil })
                 place = Self.folder(url)
             }
             let detail = document.group.map { place + " — " + $0 } ?? place
@@ -171,15 +277,18 @@ struct QuickOpenList: Sendable {
                     pathKey: Self.key(document.url?.path ?? document.name)))
         }
     }
-    /// Recent files that are still there, newest first. At most `recentLimit` are looked at, and
-    /// none after the deadline; one that was not looked at is left out, never listed unchecked.
-    mutating func add(recent urls: [URL], deadline: TimeInterval = ProcessInfo.processInfo.systemUptime + 2) {
+    mutating func add(open documents: [OpenDocument], inspecting: Bool) {
+        add(open: documents, files: inspecting ? Self.files(of: documents) : nil)
+    }
+    /// Recent files that are still there, newest first. One whose existence is not known is
+    /// left out, never listed unchecked, and `limited` then says so.
+    mutating func add(recent urls: [URL], outcomes: [FileProbePool.Outcome]) {
         for (index, url) in urls.enumerated() {
-            guard index < Self.recentLimit, ProcessInfo.processInfo.systemUptime < deadline, !Task.isCancelled else {
+            guard outcomes.indices.contains(index), outcomes[index] != .unknown else {
                 limited = true
-                break
+                continue
             }
-            guard let file = Self.inspect(url), claim(url, file: file) else { continue }
+            guard let file = outcomes[index].file, claim(url, file: file) else { continue }
             let name = url.lastPathComponent
             entries.append(
                 Entry(
@@ -188,21 +297,28 @@ struct QuickOpenList: Sendable {
                     pathKey: Self.key(url.path)))
         }
     }
-    /// Workspace files in scan order. The index already holds regular files only; each is asked
-    /// for its identity until the deadline, and by path alone after it.
     mutating func add(
-        workspace files: [WorkspaceFileIndex.File], deadline: TimeInterval = ProcessInfo.processInfo.systemUptime + 2
+        recent urls: [URL], deadline: TimeInterval = ProcessInfo.processInfo.systemUptime + 2,
+        pool: FileProbePool = .shared, probe: @escaping FileProbePool.Probe = inspect
     ) {
-        for file in files {
-            if Task.isCancelled { break }
-            let known = ProcessInfo.processInfo.systemUptime < deadline ? Self.inspect(file.url) : nil
-            guard claim(file.url, file: known) else { continue }
+        add(recent: urls, outcomes: Self.outcomes(recent: urls, deadline: deadline, pool: pool, probe: probe))
+    }
+    /// Workspace files in scan order. The index already holds regular files only; one whose
+    /// identity is not known is told apart by its path alone.
+    mutating func add(workspace files: [WorkspaceFileIndex.File], identities: [String?]) {
+        for (index, file) in files.enumerated() {
+            guard claim(file.url, file: identities.indices.contains(index) ? identities[index] : nil) else { continue }
             entries.append(
                 Entry(
                     kind: .workspace, id: "file:" + file.url.standardizedFileURL.absoluteString,
                     title: file.url.lastPathComponent, detail: Self.folder(file.url), url: file.url, root: file.root,
                     nameKey: file.nameKey, pathKey: file.pathKey))
         }
+    }
+    mutating func add(
+        workspace files: [WorkspaceFileIndex.File], deadline: TimeInterval = ProcessInfo.processInfo.systemUptime + 2
+    ) {
+        add(workspace: files, identities: Self.files(of: files, deadline: deadline))
     }
 
     /// Best name match first; among equal matches, open documents, then recent files, then
@@ -242,6 +358,10 @@ struct QuickOpenList: Sendable {
     private(set) var list = QuickOpenList()
     /// False while recent files or workspace folders are still being read.
     private(set) var isComplete = false
+    /// How the file system is asked, and for how long about recent files. Checks replace them.
+    var probe: FileProbePool.Probe = QuickOpenList.inspect
+    var pool = FileProbePool.shared
+    var recentBound: TimeInterval = 2
     static let addFolderIdentifier = "workspace.quickOpen.addFolder"
     static let statusIdentifier = "workspace.quickOpen.status"
 
@@ -271,29 +391,40 @@ struct QuickOpenList: Sendable {
             addFolder()
         }
         add.isHidden = !roots.isEmpty
-        var first = QuickOpenList()
-        first.add(open: documents, inspecting: false)
-        list = first
-        isComplete = false
-        let checked = Task.detached(priority: .userInitiated) { () -> QuickOpenList in
-            var list = QuickOpenList()
-            list.add(open: documents, inspecting: true)
-            list.add(recent: recent)
-            return list
+        // Three questions, none waiting for another: which files the open documents are, which
+        // recent files are still there, and what the workspace folders hold. The list is put
+        // together again from whatever has answered, always in the order open, recent, workspace.
+        let probe = probe, pool = pool, recentBound = recentBound
+        var openFiles: [String?]?
+        var recentOutcomes: [FileProbePool.Outcome]?
+        var workspace: (index: WorkspaceFileIndex, files: [String?])?
+        let rebuild = { [weak self] in
+            var next = QuickOpenList()
+            next.add(open: documents, files: openFiles)
+            if let recentOutcomes { next.add(recent: recent, outcomes: recentOutcomes) }
+            if let workspace { next.add(workspace: workspace.index.files, identities: workspace.files) }
+            self?.list = next
+            self?.isComplete = recentOutcomes != nil && (roots.isEmpty || workspace != nil)
         }
-        let scanned = Task.detached(priority: .utility) { () -> (QuickOpenList, WorkspaceFileIndex) in
-            var list = await checked.value
+        rebuild()
+        let identified = Task.detached(priority: .userInitiated) {
+            QuickOpenList.files(of: documents, pool: pool, probe: probe)
+        }
+        let checked = Task.detached(priority: .userInitiated) {
+            QuickOpenList.outcomes(
+                recent: recent, deadline: ProcessInfo.processInfo.systemUptime + recentBound, pool: pool, probe: probe)
+        }
+        let scanned = Task.detached(priority: .utility) { () -> (WorkspaceFileIndex, [String?]) in
             let inventory = WorkspaceFileIndex.scan(roots)
-            list.add(workspace: inventory.files)
-            return (list, inventory)
+            return (inventory, QuickOpenList.files(of: inventory.files, pool: pool, probe: probe))
         }
         panel.onClose = { [weak self] in
+            identified.cancel()
             checked.cancel()
             scanned.cancel()
             self?.panel = nil
             self?.list = QuickOpenList()
         }
-        var inventory: WorkspaceFileIndex?
         panel.filteredRows = { [weak self] text in
             guard let self else { return [] }
             let visible = list.matches(text)
@@ -305,8 +436,8 @@ struct QuickOpenList: Sendable {
                 message += roots.isEmpty ? " Checking recent files…" : " Reading recent and workspace file names…"
             }
             if list.limited { message += " Some recent files were not checked in time." }
-            if inventory?.limited == true { message += " The workspace index reached its scan limit." }
-            if let unreadable = inventory?.unreadable, unreadable > 0 {
+            if workspace?.index.limited == true { message += " The workspace index reached its scan limit." }
+            if let unreadable = workspace?.index.unreadable, unreadable > 0 {
                 message += " Unreadable folders: \(Strings.number(unreadable))."
             }
             if roots.isEmpty { message += " Add a folder to the workspace to find its files here too." }
@@ -320,17 +451,30 @@ struct QuickOpenList: Sendable {
             return try open(entry.root, url)
         }
         panel.show()
-        Task { @MainActor [weak self, weak panel] in
-            let recent = await checked.value
-            guard let self, let panel, self.panel === panel else { return }
-            list = recent
-            if roots.isEmpty { isComplete = true }
+        let current = { [weak self, weak panel] () -> ChoicePanel? in
+            guard let self, let panel, self.panel === panel else { return nil }
+            return panel
+        }
+        Task { @MainActor in
+            let files = await identified.value
+            guard let panel = current() else { return }
+            openFiles = files
+            rebuild()
             panel.refresh()
-            guard !roots.isEmpty else { return }
-            let all = await scanned.value
-            guard self.panel === panel else { return }
-            (list, inventory) = all
-            isComplete = true
+        }
+        Task { @MainActor in
+            let outcomes = await checked.value
+            guard let panel = current() else { return }
+            recentOutcomes = outcomes
+            rebuild()
+            panel.refresh()
+        }
+        guard !roots.isEmpty else { return }
+        Task { @MainActor in
+            let found = await scanned.value
+            guard let panel = current() else { return }
+            workspace = found
+            rebuild()
             panel.refresh()
         }
     }

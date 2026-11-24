@@ -525,6 +525,55 @@ extension DocumentChecks {
                 palette.commands(in: bar).first { ($0.item.representedObject as? String) == upper }?.row.accessory == "⇧⌘J",
                 "a shortcut assigned in Settings is the one the palette shows")
             try sessionDelegate.settings.save(before)
+            // A default that yields: a person's own Shift-Command-O takes the key from Quick Open,
+            // and each row shows the key its command has at that moment.
+            let quickOpenPath = "File › Quick Open…"
+            var taken = before
+            taken.setShortcut("O", for: upper)
+            try sessionDelegate.settings.save(taken)
+            let yielded = palette.commands(in: bar)
+            check(
+                yielded.first { $0.path == quickOpenPath }?.row.accessory == ""
+                    && yielded.first { ($0.item.representedObject as? String) == upper }?.row.accessory == "⇧⌘O"
+                    && yielded.filter { $0.row.accessory == "⇧⌘O" }.count == 1,
+                "a default that gave way shows no key, and the command that took the key shows it")
+            try sessionDelegate.settings.save(before)
+            let restored = palette.commands(in: bar)
+            check(
+                restored.first { $0.path == quickOpenPath }?.row.accessory == "⇧⌘O"
+                    && restored.first { ($0.item.representedObject as? String) == upper }?.row.accessory == "",
+                "when the assignment is removed the default's key is shown again")
+
+            // A remembered command the menu bar no longer has: Close Split View became one toggle.
+            let real = try requireValue(
+                entries.first { $0.path == "View › Split Tab View" }?.row.id, "palette row for View › Split Tab View")
+            let gone = ["View", "Close Split View", "closeSplitView:", "", "0"].map { "\($0.utf8.count):\($0)" }.joined()
+            let stale = folder.appendingPathComponent("stale.json")
+            try JSONSerialization.data(withJSONObject: ["version": 1, "commands": [gone, real]]).write(to: stale)
+            let stalePalette = CommandDiscovery(recentsURL: stale)
+            let current = stalePalette.commands(in: bar)
+            let listed = CommandDiscovery.matches(current, query: "", recent: stalePalette.recentCommands)
+            check(
+                stalePalette.recentCommands == [gone, real] && listed.first?.row.id == real
+                    && listed.count == current.count && Set(listed.map(\.row.id)).count == listed.count
+                    && !listed.contains { $0.row.id == gone || $0.name == "Close Split View" },
+                "a recent command that no longer exists is not listed, and the next recent one leads")
+            check(
+                CommandDiscovery.matches(current, query: "close split view", recent: stalePalette.recentCommands)
+                    .map(\.path).contains("View › Split Tab View"),
+                "its old name finds the command that replaced it")
+            // The same commands and the same recent list always give the same order.
+            let rebuilt = palette.commands(in: bar)
+            let remembered = stalePalette.recentCommands
+            let unstable = ["", "s", "sort", "view", "open", "split", "show line", "tab", "e"].filter { query in
+                let once = CommandDiscovery.matches(entries, query: query, recent: remembered).map(\.row.id)
+                return once != CommandDiscovery.matches(entries, query: query, recent: remembered).map(\.row.id)
+                    || once != CommandDiscovery.matches(rebuilt, query: query, recent: remembered).map(\.row.id)
+                    || once != CommandDiscovery.matches(entries.reversed().reversed(), query: query, recent: remembered)
+                        .map(\.row.id)
+                    || Set(once).count != once.count
+            }
+            check(unstable.isEmpty, "ranking is deterministic: the same commands give the same order every time: \(unstable)")
 
             // The palette itself: the row that says nothing matched, and a retained query.
             FormPanel.visible.filter { $0.window.identifier?.rawValue == "command.palette" }.forEach { $0.close() }
@@ -553,6 +602,13 @@ extension DocumentChecks {
                     && !chooser.tableView(chooser.table, shouldSelectRow: 0) && chooser.table.selectedRow == -1
                     && chooser.selectedID == nil && !choose.isEnabled,
                 "DS-36 nonsense shows one No matching commands row that cannot be selected or run")
+            // The caret is put at the start first, so that the selection checked is the one
+            // opening the palette again makes, not one left from setting the text.
+            chooser.form.window.makeFirstResponder(chooser.filter)
+            chooser.filter.currentEditor()?.selectedRange = NSRange(location: 0, length: 0)
+            try require(
+                chooser.filter.currentEditor()?.selectedRange == NSRange(location: 0, length: 0),
+                "fixture: nothing of the retained query is selected before the palette is opened again")
             palette.show(editor: { nil })
             let editing = chooser.filter.currentEditor()
             check(
