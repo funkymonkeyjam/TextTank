@@ -1612,8 +1612,8 @@
   },
   {
     "action" : "toggleDocumentPreview:",
-    "key" : "V",
-    "modifiers" : "1048576",
+    "key" : "v",
+    "modifiers" : "1310720",
     "object" : "",
     "position" : "4.0.3",
     "target" : "responder",

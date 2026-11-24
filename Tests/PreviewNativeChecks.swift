@@ -403,7 +403,7 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         }
         Checks.section("jumps into a Preview tab") { try jumpsRevealSource(root: root, app: app, host: host) }
         Checks.section("settings routes for the preview") { try previewSettingsRoutes(root: root, app: app, host: host) }
-        Checks.section("Shift-Command-V from the preview") { try toggleKeyFromPreview(root: root, host: host) }
+        Checks.section("Control-Command-V from the preview") { try toggleKeyFromPreview(root: root, host: host) }
         Checks.section("scroll sync: Markdown") {
             try scrollSyncMarkdown(root: root, app: app, host: host, listener: listener)
         }
@@ -2095,37 +2095,73 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
             preview.items.firstIndex { $0 === toggle } == 3 && preview.items[2].title == "Both"
                 && preview.items[4].isSeparatorItem && toggle.title == "Toggle Preview" && toggle.target == nil,
             "Toggle Preview is directly under Source, Preview and Both, and goes to the first responder")
+        // Owner decision, 24 November 2026: Control-Command-V. Shift-Command-V, the first default,
+        // can be held system-wide by another application and then never reaches TextTank.
+        let toggleKey = MenuShortcut("v", [.control, .command]), formerKey = MenuShortcut("V")
         check(
-            toggle.keyEquivalent == "V" && toggle.keyEquivalentModifierMask == .command && toggle is DefaultShortcutItem,
-            "its shortcut is Shift-Command-V, a default that yields to a shortcut assigned in Settings")
-        var chords: [String] = []
-        func walk(_ menu: NSMenu, _ path: String) {
-            for item in menu.items {
-                let here = path + " > " + item.title
-                var key = item.keyEquivalent, flags = item.keyEquivalentModifierMask.intersection([.command, .shift, .option, .control])
-                if key.count == 1, key != key.lowercased() {
-                    key = key.lowercased()
-                    flags.insert(.shift)
+            toggle.keyEquivalent == "v" && toggle.keyEquivalentModifierMask == [.control, .command]
+                && toggle is DefaultShortcutItem && DocumentViewCommands.toggleShortcut == toggleKey,
+            "its shortcut is V with Control and Command, a default that yields to a shortcut assigned in Settings")
+        func holders(_ shortcut: MenuShortcut) -> [String] {
+            var found: [String] = []
+            func walk(_ menu: NSMenu, _ path: String) {
+                for item in menu.items {
+                    let here = path + " > " + item.title
+                    if MenuShortcut(item)?.identity == shortcut.identity { found.append(here) }
+                    if let child = item.submenu { walk(child, here) }
                 }
-                if key == "v", flags == [.command, .shift] { chords.append(here) }
-                if let child = item.submenu { walk(child, here) }
             }
+            walk(bar, "")
+            return found
         }
-        walk(bar, "")
-        check(chords == [" > View > Preview > Toggle Preview"], "no other menu item uses Shift-Command-V: \(chords)")
         check(
-            !EditorSettings.protectedShortcuts.contains("V") && !EditorCommand.defaultShortcuts.values.contains("V")
-                && !SettingsController.reservedShortcuts(in: bar).contains("V"),
-            "the key is not a protected, default or reserved editor shortcut, so saved shortcuts still load")
-        var custom = app.settings.value
+            holders(toggleKey) == [" > View > Preview > Toggle Preview"],
+            "no other menu item uses Control-Command-V: \(holders(toggleKey))")
+        check(holders(formerKey).isEmpty, "Shift-Command-V is no longer bound to anything by default: \(holders(formerKey))")
+        let context = app.settings.shortcutContext
+        let catalogDefaults =
+            EditorCommand.allCases.compactMap { $0.extendedMenuShortcut }
+            + EditorCommand.defaultShortcuts.values.compactMap(MenuShortcut.init(storedText:))
+        check(
+            ShortcutPolicy.refusal(for: toggleKey) == nil && context.fixed[toggleKey.identity] == nil
+                && context.fixed[formerKey.identity] == nil
+                && !catalogDefaults.contains { $0.identity == toggleKey.identity }
+                && context.commands.filter { $0.value.standard?.identity == toggleKey.identity }.map(\.key)
+                    == ["toggleDocumentPreview:"]
+                && context.commands["toggleDocumentPreview:"]?.yields == true
+                && !context.commands.values.contains { $0.standard?.identity == formerKey.identity },
+            "Control-Command-V is not a system, fixed or editor-command key and is the default of this command alone; nothing has Shift-Command-V by default")
+        // The person's own assignments win, for the new key and for the old one.
+        let clean = app.settings.value
+        var custom = clean
+        custom.assignShortcut(toggleKey, to: EditorCommand.upper.rawValue, in: context)
+        try app.settings.save(custom)
+        check(
+            toggle.keyEquivalent.isEmpty && app.settings.ignoredShortcutBindings.isEmpty
+                && holders(toggleKey) == [" > Edit > Convert Case > Uppercase"],
+            "a person's own Control-Command-V shortcut is kept, and Toggle Preview gives up the key: \(holders(toggleKey))")
+        try app.settings.save(clean)
+        check(toggle.keyEquivalent == "v" && holders(toggleKey).count == 1, "fixture: the default shortcut returns")
+        custom = clean
         custom.setShortcut("V", for: EditorCommand.upper.rawValue)
         try app.settings.save(custom)
         check(
-            toggle.keyEquivalent.isEmpty && app.settings.ignoredShortcutBindings.isEmpty,
-            "a person's own Shift-Command-V shortcut is kept, and Toggle Preview gives up the key")
-        custom.setShortcut("", for: EditorCommand.upper.rawValue)
-        try app.settings.save(custom)
-        check(toggle.keyEquivalent == "V", "fixture: the default shortcut returns")
+            holders(formerKey) == [" > Edit > Convert Case > Uppercase"] && toggle.keyEquivalent == "v"
+                && toggle.keyEquivalentModifierMask == [.control, .command] && app.settings.ignoredShortcutBindings.isEmpty,
+            "a settings file that gives Shift-Command-V to another command still does, and Toggle Preview keeps its new key")
+        // A file written while Shift-Command-V was the default may hold it for Toggle Preview itself.
+        let kept = try EditorSettings.load(
+            Data(#"{"version":2,"tabWidth":4,"useTabs":true,"wrap":false,"appearance":"system","shortcuts":{"toggleDocumentPreview:":"V"}}"#.utf8),
+            context: context)
+        try app.settings.save(kept.settings)
+        check(
+            kept.issues.isEmpty && holders(formerKey) == [" > View > Preview > Toggle Preview"] && holders(toggleKey).isEmpty,
+            "a person who assigned Shift-Command-V to Toggle Preview keeps it there: \(holders(formerKey))")
+        try app.settings.save(clean)
+        check(
+            toggle.keyEquivalent == "v" && toggle.keyEquivalentModifierMask == [.control, .command]
+                && holders(formerKey).isEmpty,
+            "fixture: the defaults again")
         check(
             view.items.filter { !$0.isSeparatorItem && !$0.isHidden }.count <= 20,
             "DS-23 View lists no more than twenty items (\(view.items.filter { !$0.isSeparatorItem && !$0.isHidden }.count))")
@@ -2744,9 +2780,9 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         let window = try requireValue(host.window, "workspace window")
         let key = try requireValue(
             NSEvent.keyEvent(
-                with: .keyDown, location: .zero, modifierFlags: [.command, .shift], timestamp: 0,
-                windowNumber: window.windowNumber, context: nil, characters: "V", charactersIgnoringModifiers: "V",
-                isARepeat: false, keyCode: 9), "fixture: Shift-Command-V")
+                with: .keyDown, location: .zero, modifierFlags: [.command, .control], timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, characters: "\u{16}", charactersIgnoringModifiers: "v",
+                isARepeat: false, keyCode: 9), "fixture: Control-Command-V")
         let toggle = #selector(EditorWindowController.toggleDocumentPreview(_:))
         /// Whether the action, sent to the first responder, reaches this tab: the walk AppKit makes.
         func reaches(_ tab: EditorWindowController) -> Bool {
@@ -2766,9 +2802,9 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
             window.makeFirstResponder(focus)
             check(keyboard(in: focus, of: host), "fixture: the keyboard is in the preview of \(name)")
             let swallowed = window.performKeyEquivalent(with: key)
-            print("NOTE \(name): the preview's views \(swallowed ? "answered" : "did not answer") Shift-Command-V themselves")
+            print("NOTE \(name): the preview's views \(swallowed ? "answered" : "did not answer") Control-Command-V themselves")
             if !(focus is WKWebView), descendants(of: focus, as: WKWebView.self).isEmpty {
-                check(!swallowed, "no view of the \(name) preview takes Shift-Command-V for itself, so it reaches the menu")
+                check(!swallowed, "no view of the \(name) preview takes Control-Command-V for itself, so it reaches the menu")
             }
             check(
                 reaches(tab) && tab.validateMenuItem(NSMenuItem(title: "", action: toggle, keyEquivalent: "")),
@@ -2782,7 +2818,7 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         check(tab.findBarVisible && !keyboard(in: tab.primaryEditor, of: host), "fixture: the keyboard is in the find field")
         check(
             !window.performKeyEquivalent(with: key),
-            "the find field does not take Shift-Command-V for itself")
+            "the find field does not take Control-Command-V for itself")
         check(reaches(tab) && host.active === tab, "and the menu's action reaches the active tab from the find field")
         tab.hideFind(nil)
         document.close()

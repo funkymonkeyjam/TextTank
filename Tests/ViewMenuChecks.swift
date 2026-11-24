@@ -70,6 +70,7 @@ import EditorBridge
         try splitToggle(folder: folder, app: app, host: host)
         try syncScrolling(folder: folder, app: app, host: host)
         try changeBars(folder: folder, app: app, host: host)
+        try changeBarsThroughSaves(folder: folder, app: app, host: host)
         try centeredColumn(folder: folder, app: app, host: host)
     }
 
@@ -117,7 +118,7 @@ import EditorBridge
         }
         let before = [
             "setDocumentViewMode:/source/responder/", "setDocumentViewMode:/preview/responder/",
-            "setDocumentViewMode:/both/responder/", "toggleDocumentPreview://responder/V", "clone://responder/",
+            "setDocumentViewMode:/both/responder/", "toggleDocumentPreview://responder/v", "clone://responder/",
             "toggleWrap://responder/", "command:/showWhitespace/responder/", "command:/toggleEOL/responder/",
             "command:/toggleLineNumbers/responder/", "toggleIndentGuides://explicit/",
             "toggleCurrentLineHighlight://explicit/", "toggleBraceHighlight://explicit/", "command:/zoomIn/responder/+",
@@ -260,6 +261,16 @@ import EditorBridge
             ] && shown.allSatisfy { $0.name == $0.row.title && $0.path == "View › Show › " + $0.item.title },
             "DS-24 a Show item is titled by what it shows in the menu, and the palette names the command in full: \(shown.map(\.row.title))")
         check(
+            found("View › Guides and Highlights") == [
+                "View › Show › Indentation Guides", "View › Show › Current Line Highlight", "View › Show › Matching Braces"
+            ]
+                && CommandDiscovery.rows(entries, matching: "View › Guides and Highlights").map(\.detail)
+                    == ["View › Show", "View › Show", "View › Show"]
+                && CommandDiscovery.rows(entries, matching: "View › Guides and Highlights").map(\.title) == [
+                    "Show Indentation Guides", "Show Current Line Highlight", "Show Matching Braces"
+                ],
+            "searching the old path View › Guides and Highlights finds exactly the three guide commands, each shown with its new place, View › Show: \(found("View › Guides and Highlights"))")
+        check(
             CommandDiscovery.rows(entries, matching: "show whitespace").first?.title == "Show Whitespace"
                 && CommandDiscovery.rows(entries, matching: "close split").map(\.title) == ["Split Tab View"]
                 && !entries.contains { $0.path.contains("Guides and Highlights") || $0.path.contains("Close Split") },
@@ -386,11 +397,22 @@ import EditorBridge
             fresh.editor.changeBarsVisible && fresh.editor.changeTrackingActive && clone.changeBarsVisible
                 && clone.changeTrackingActive,
             "an unedited document shows the margin and records changes at once, in both panes of a split")
+        let pending = EditorSettingsApplication.changeBarsPendingMessage
         check(
-            edited.editor.changeBarsVisible && !edited.editor.changeTrackingActive
-                && editedTab.statusText == EditorSettingsApplication.changeBarsPendingMessage
-                && freshTab.statusText != EditorSettingsApplication.changeBarsPendingMessage,
-            "a document edited earlier shows the margin with no bars, and its tab says why: \(editedTab.statusText)")
+            edited.editor.changeBarsVisible && !edited.editor.changeTrackingActive && host.active === freshTab
+                && !editedTab.isPresented && editedTab.statusText != pending
+                && EditorSettingsApplication.awaitsChangeBarsExplanation(editedTab) && freshTab.statusText != pending,
+            "a document edited earlier shows the margin with no bars; its tab is behind another, so the explanation waits for it: \(editedTab.statusText)")
+        host.activate(editedTab)
+        check(
+            editedTab.isPresented && editedTab.statusText == pending
+                && !EditorSettingsApplication.awaitsChangeBarsExplanation(editedTab),
+            "when that tab is next shown its status row says why it has no bars, once: \(editedTab.statusText)")
+        host.activate(freshTab)
+        host.activate(editedTab)
+        check(
+            bars.toolTip == EditorSettingsApplication.changeBarsHelp && bars.toolTip?.contains("revert or reopen") == true,
+            "DS-85 the menu item's help says what the bars mean and when a document edited earlier gets them")
         check(
             edited.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
                 && edited.editor.text == "alpha\nbeta\n",
@@ -399,6 +421,25 @@ import EditorBridge
         check(
             edited.editor.changeBarsVisible && edited.editor.changeTrackingActive,
             "its record starts when the document is loaded again")
+
+        // An explanation that stopped being true while its tab was hidden is not given.
+        var off = app.settings.value
+        off.changeBars = false
+        try app.settings.save(off)
+        let (stale, staleTab) = try open("stale.txt", "x\n", in: folder)
+        defer { stale.close() }
+        stale.editor.setSelectionAnchor(0, caret: 0)
+        check(stale.editor.replaceSelection("y"), "fixture: a second document edited while Change Bars is off")
+        host.activate(freshTab)
+        off.changeBars = true
+        try app.settings.save(off)
+        check(EditorSettingsApplication.awaitsChangeBarsExplanation(staleTab), "fixture: its hidden tab owes the explanation")
+        try stale.read(from: Data("x\n".utf8), ofType: TextDocument.plainTextType)
+        host.activate(staleTab)
+        check(
+            stale.editor.changeTrackingActive && staleTab.statusText != pending
+                && !EditorSettingsApplication.awaitsChangeBarsExplanation(staleTab),
+            "a document loaded again before its tab was shown has bars, and is not told it has none")
 
         let (later, laterTab) = try open("later.txt", "new\n", in: folder)
         defer { later.close() }
@@ -447,11 +488,165 @@ import EditorBridge
             descendants(of: content, as: NSButton.self).first { $0.identifier?.rawValue == "settings.changeBars" },
             "fixture: the Show change bars row")
         check(box.state == .on && box.title == "Show change bars", "the Appearance row shows the stored choice")
+        check(
+            box.toolTip == EditorSettingsApplication.changeBarsHelp && box.accessibilityHelp() == box.toolTip,
+            "DS-85 the Settings row carries the same standing explanation, to the pointer and to assistive technology")
         box.performClick(nil)
         check(
             !app.settings.value.changeBarsEnabled && state(bars, in: host) == (true, .off) && !fresh.editor.changeBarsVisible,
             "and turning it off there unchecks the menu item and hides the margin")
         freshTab.closeSplit(nil)
+    }
+
+    /// The change bars of the first `lines` lines as they are drawn in the gutter of the tab in
+    /// front: "-" none, "U" the wide unsaved bar, "S" the narrow saved bar at the left, "R" the
+    /// hollow middle bar of a line undone to its original text after a save. The engine has no
+    /// query for a line's mark, so the pixels are read, as the bridge checks do.
+    private static func marks(_ editor: TTEditor, lines: Int, host: WorkspaceWindowController) -> String {
+        // The first drawing after a change still shows the gutter as it was: the engine brings
+        // it up to date on the pass after. Read twice and keep the second.
+        _ = drawnMarks(editor, lines: lines, host: host)
+        return drawnMarks(editor, lines: lines, host: host)
+    }
+    private static func drawnMarks(_ editor: TTEditor, lines: Int, host: WorkspaceWindowController) -> String {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        host.window?.display()
+        // The gutter draws with its window: the whole content view is drawn and the gutter read from it.
+        guard let ruler = descendants(of: editor, as: NSScrollView.self).first?.verticalRulerView,
+            ruler.bounds.width > 8, let content = host.window?.contentView,
+            let rep = content.bitmapImageRepForCachingDisplay(in: content.bounds)
+        else { return "no gutter" }
+        // The engine redraws its gutter on the pass after the one that changed it.
+        ruler.needsDisplay = true
+        if let warm = ruler.bitmapImageRepForCachingDisplay(in: ruler.bounds) { ruler.cacheDisplay(in: ruler.bounds, to: warm) }
+        if let warm = content.bitmapImageRepForCachingDisplay(in: content.bounds) { content.cacheDisplay(in: content.bounds, to: warm) }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        content.cacheDisplay(in: content.bounds, to: rep)
+        let scale = Double(rep.pixelsWide) / Double(content.bounds.width)
+        let corner = ruler.convert(NSPoint(x: 0, y: ruler.isFlipped ? 0 : ruler.bounds.height), to: content)
+        let top = content.isFlipped ? Double(corner.y) : Double(content.bounds.height - corner.y)
+        // The change-bar margin is the last 8 points of the gutter.
+        let left = Double(corner.x) + Double(ruler.bounds.width) - 8, height = Double(editor.comparisonLineHeight)
+        func parts(_ bgr: Int) -> [Double] { [0, 8, 16].map { Double((bgr >> $0) & 0xFF) / 255 } }
+        let unsaved = parts(editor.unsavedChangeColour), saved = parts(editor.savedChangeColour)
+        func kind(_ x: Double, _ y: Double) -> Character {
+            guard let colour = rep.colorAt(x: Int(x * scale), y: Int(y * scale))?.usingColorSpace(.sRGB) else { return "?" }
+            let seen = [Double(colour.redComponent), Double(colour.greenComponent), Double(colour.blueComponent)]
+            func distance(_ other: [Double]) -> Double { zip(seen, other).map { abs($0 - $1) }.reduce(0, +) }
+            // The window is drawn in its display's colour space; the two bar colours are 0.9 apart.
+            return distance(unsaved) < 0.3 ? "u" : distance(saved) < 0.3 ? "s" : "."
+        }
+        return String(
+            (0..<lines).map { line -> Character in
+                let y = top + (Double(line) + 0.5) * height
+                switch String([kind(left + 1.5, y), kind(left + 3.5, y), kind(left + 6.5, y)]) {
+                case "uuu": return "U"
+                case "ss.": return "S"
+                case ".u.": return "R"
+                case "...": return "-"
+                default: return "?"
+                }
+            })
+    }
+
+    /// Change bars through the document's own Save, Save As, Revert and reload routes, on a file.
+    private static func changeBarsThroughSaves(folder: URL, app: AppDelegate, host: WorkspaceWindowController) throws {
+        var on = app.settings.value
+        on.changeBars = true
+        try app.settings.save(on)
+        defer {
+            on.changeBars = nil
+            _ = try? app.settings.save(on)
+        }
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let url = folder.appendingPathComponent("saved.txt"), copy = folder.appendingPathComponent("saved-as.txt")
+        try Data("one\ntwo\nthree\n".utf8).write(to: url)
+        // Opened the way a file is opened from disk, which is also how a session restores it.
+        let document = try DocumentFactory.openCaptured(WorkspaceStore.captureRegularFile(url, maximumBytes: Int.max), from: url)
+        defer { document.close() }
+        let tab = try requireValue(document.presentation, "fixture: the file's tab"), editor = document.editor
+        host.activate(tab)
+        func bars() -> String { marks(editor, lines: 3, host: host) }
+        func type(_ text: String, at byte: Int) -> Bool {
+            editor.setSelectionAnchor(byte, caret: byte)
+            return editor.replaceSelection(text)
+        }
+        check(
+            editor.changeBarsVisible && editor.changeTrackingActive && bars() == "---" && !document.isDocumentEdited,
+            "a file opened from disk, as a restored session opens it, records changes and starts with no bars: \(bars())")
+        check(type("2", at: 4) && bars() == "-U-" && document.isDocumentEdited, "an edit is a wide unsaved bar: \(bars())")
+        try document.writeSafely(to: url, ofType: TextDocument.plainTextType, for: .saveOperation)
+        check(
+            try bars() == "-S-" && !editor.modified && String(contentsOf: url, encoding: .utf8) == "one\n2two\nthree\n",
+            "Save writes the file and turns the bar into the narrow saved one at that moment: \(bars())")
+        check(type("3", at: 9) && bars() == "-SU", "a later edit is unsaved beside the saved one: \(bars())")
+        try document.writeSafely(to: copy, ofType: TextDocument.plainTextType, for: .saveAsOperation)
+        check(
+            try bars() == "-SS" && !editor.modified && String(contentsOf: copy, encoding: .utf8) == "one\n2two\n3three\n",
+            "Save As to another file marks everything written as saved: \(bars())")
+        check(type("1", at: 0) && bars() == "USS", "fixture: one more unsaved edit: \(bars())")
+        check(
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo")) && bars() == "-SS" && !editor.modified,
+            "Undo back to the saved text leaves only saved bars: \(bars())")
+        check(
+            editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo")) && bars() == "-SR" && editor.modified,
+            "Undo past the save shows that line back at its original text and not saved: \(bars())")
+        try document.revert(toContentsOf: url, ofType: TextDocument.plainTextType)
+        check(
+            editor.text == "one\n2two\nthree\n" && bars() == "---" && editor.changeTrackingActive && !editor.modified,
+            "Revert loads the file and clears the bars: they count from the reverted text: \(bars())")
+        check(type("x", at: 0) && bars() == "U--", "and an edit after Revert is marked: \(bars())")
+        try document.writeSafely(to: url, ofType: TextDocument.plainTextType, for: .saveOperation)
+        check(bars() == "S--", "fixture: saved again: \(bars())")
+        // Another application rewrites the file; the document takes the new bytes the way
+        // Reload does once they have been read.
+        try Data("outside\nchange\nhere\n".utf8).write(to: url)
+        try document.acceptExternalRead(WorkspaceStore.captureRegularFile(url, maximumBytes: Int.max), from: url)
+        check(
+            editor.text == "outside\nchange\nhere\n" && bars() == "---" && editor.changeTrackingActive
+                && !document.isDocumentEdited,
+            "Reload after an outside change shows the new text with no bars, as a reverted document does: \(bars())")
+        check(type("!", at: 8) && bars() == "-U-", "and edits to the reloaded text are marked from then on: \(bars())")
+        editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+    }
+
+    /// Printing and export read the document, never the view: identical with the column on and off.
+    private static func printAndExport(
+        document: TextDocument, tab: EditorWindowController, column: NSMenuItem, text: String, app: AppDelegate,
+        host: WorkspaceWindowController
+    ) throws {
+        struct Output: Equatable {
+            var printed: String, page: NSSize, glyphs: Int, used: NSRect, saved: Data, rtf: Data, html: Data, plain: String
+        }
+        func output() throws -> Output {
+            host.activate(tab)
+            let operation = try document.printOperation(withSettings: [:])
+            let page = try requireValue(operation.view as? NSTextView, "fixture: the print view")
+            let layout = try requireValue(page.layoutManager, "fixture: print layout")
+            let container = try requireValue(page.textContainer, "fixture: print container")
+            layout.ensureLayout(for: container)
+            let rtf = try app.utilities.exportData(format: "rtf"), html = try app.utilities.exportData(format: "html")
+            return Output(
+                printed: page.string, page: page.frame.size, glyphs: layout.numberOfGlyphs, used: layout.usedRect(for: container),
+                saved: try document.data(ofType: TextDocument.plainTextType), rtf: rtf.0, html: html.0, plain: rtf.1)
+        }
+        check(app.settings.value.centeredColumnEnabled && tab.primaryEditor.centeredColumnCharacters == 90, "fixture: the column is on")
+        let on = try output()
+        tab.primaryEditor.wrap = true
+        let onWrapped = try output()
+        tab.primaryEditor.wrap = false
+        check(choose(column, in: host) && tab.primaryEditor.centeredColumnCharacters == 0, "fixture: the column is off")
+        let off = try output()
+        check(choose(column, in: host) && tab.primaryEditor.centeredColumnCharacters == 90, "fixture: the column is on again")
+        check(
+            on.printed == text && on.printed == off.printed && on.page == off.page && on.glyphs == off.glyphs
+                && on.used == off.used && on.glyphs > 0,
+            "the printed page is the same text in the same layout with Centered Text Column on and off (\(on.page) / \(off.page))")
+        check(
+            on.saved == off.saved && on.rtf == off.rtf && on.html == off.html && on.plain == off.plain && on.plain == text
+                && !on.rtf.isEmpty && !on.html.isEmpty,
+            "the saved bytes and the RTF and HTML exports are byte for byte the same with it on and off")
+        check(onWrapped == on, "and with Wrap Lines on, when the column has both margins")
     }
 
     // MARK: Centered text column
@@ -475,8 +670,10 @@ import EditorBridge
         check(choose(column, in: host), "choosing View > Centered Text Column")
         func centered(_ view: TTEditor, _ characters: Int) -> Bool {
             let left = view.textMarginLeft, right = view.textMarginRight
-            return view.centeredColumnCharacters == characters && abs(left - right) <= 1
-                && left + right + characters * view.textWidth(ofColumns: 1) == textArea(view) && left > plain.0
+            let spare = textArea(view) - characters * view.textWidth(ofColumns: 1)
+            // With Wrap Lines off there is no right margin: a long line runs to the pane's edge.
+            return view.centeredColumnCharacters == characters && left == spare / 2 && left > plain.0
+                && right == (view.wrap ? spare - left : plain.1)
         }
         check(
             app.settings.value.centeredColumn == true && (stored(app)["centeredColumn"] as? Bool) == true
@@ -485,6 +682,18 @@ import EditorBridge
         check(
             editor.text == text && !document.isDocumentEdited && !editor.wrap,
             "the document, its edited state and Wrap Lines are untouched")
+        // View > Wrap Lines, the command itself, gives the column its right margin and takes it away.
+        let wrapItem = try item(["View", "Wrap Lines"])
+        check(editor.textMarginRight == plain.1, "with Wrap Lines off the column has no right margin")
+        check(choose(wrapItem, in: host) && editor.wrap, "fixture: Wrap Lines on from the menu")
+        check(
+            centered(editor, 90) && abs(editor.textMarginLeft - editor.textMarginRight) <= 1
+                && editor.textMarginLeft + editor.textMarginRight + editor.textWidth(ofColumns: 90) == textArea(editor),
+            "Wrap Lines on: equal margins either side, so the text wraps at the column")
+        check(
+            choose(wrapItem, in: host) && !editor.wrap && centered(editor, 90) && editor.textMarginRight == plain.1,
+            "Wrap Lines off again: the right margin goes and the left one stays")
+        try printAndExport(document: document, tab: tab, column: column, text: text, app: app, host: host)
 
         // The find bar, its Replace row, the inline Go to Line bar and the status row are above
         // and below the text: they change its height, never its width or its margins.

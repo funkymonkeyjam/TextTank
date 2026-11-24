@@ -685,7 +685,7 @@ import NativeSearch
             "V8 an automation's own shortcut is shown read-only with where to change it")
         // Commands the other slices added are ordinary rows: each can be given a key.
         for (title, key, status) in [
-            ("File › Quick Open…", "⇧⌘O", "Default"), ("View › Preview › Toggle Preview", "⇧⌘V", "Default"),
+            ("File › Quick Open…", "⇧⌘O", "Default"), ("View › Preview › Toggle Preview", "⌃⌘V", "Default"),
             ("Compare › Compare with Earlier Version…", "", "None"), ("Compare › Clear Local History…", "", "None"),
             ("View › Show › Whitespace", "", "None"), ("View › Show › Line Endings", "", "None"),
             ("View › Show › Line Numbers", "", "None")
@@ -700,9 +700,9 @@ import NativeSearch
             listed() == ["File › Save Copy…"], "V8 the list is searched by the words of a command: \(listed())")
         try find("⌘S")
         check(listed().contains("File › Save") && listed().allSatisfy { !$0.isEmpty }, "V8 and by a key as it is shown")
-        try find("command-shift-v")
+        try find("command-control-v")
         check(listed().isEmpty, "V8 fixture: modifiers are said in the menu bar's order")
-        try find("shift-command-v")
+        try find("control-command-v")
         check(listed() == ["View › Preview › Toggle Preview"], "V8 and by a key in words: \(listed())")
         try find("")
 
@@ -800,9 +800,9 @@ import NativeSearch
         // A yielding default gives way without a question, and shows that it did.
         let toggle = try item("toggleDocumentPreview:")
         try select("Edit › Convert Case › Uppercase")
-        try press("V", [.command, .shift], code: 9)
+        try press("v", [.control, .command], code: 9)
         check(
-            try settings.value.shortcuts["upper"] == "V" && replace.isHidden && toggle.keyEquivalent.isEmpty
+            try settings.value.shortcuts["upper"] == "ctrl+cmd+v" && replace.isHidden && toggle.keyEquivalent.isEmpty
                 && text(try row("View › Preview › Toggle Preview"), 1).isEmpty
                 && text(try row("View › Preview › Toggle Preview"), 2) == "Default, given up",
             "V8 a yielding default gives way to the assignment and the list says so")
@@ -849,7 +849,7 @@ import NativeSearch
         try press("j", .command, code: 38)
         check(
             try settings.value.shortcuts["deleteLine"] == "k" && settings.value.shortcuts["duplicateLine"] == "j"
-                && settings.value.shortcuts["upper"] == "V" && text(try row("Edit › Lines › Delete Line"), 1) == "⌘K",
+                && settings.value.shortcuts["upper"] == "ctrl+cmd+v" && text(try row("Edit › Lines › Delete Line"), 1) == "⌘K",
             "G396 the real Settings list keeps several assignments, each saved as it is made")
         try button("default").performClick(nil)
         try select("Edit › Lines › Delete Line")
@@ -863,8 +863,8 @@ import NativeSearch
         try select("Edit › Convert Case › Uppercase")
         try button("default").performClick(nil)
         check(
-            try settings.value.shortcuts["upper"] == nil && toggle.keyEquivalent == "V"
-                && toggle.keyEquivalentModifierMask == .command && text(try row("View › Preview › Toggle Preview"), 2) == "Default",
+            try settings.value.shortcuts["upper"] == nil && toggle.keyEquivalent == "v"
+                && toggle.keyEquivalentModifierMask == [.control, .command] && text(try row("View › Preview › Toggle Preview"), 2) == "Default",
             "V8 Use Default removes one assignment and the yielding default has its key again")
         try select("File › New")
         try button("default").performClick(nil)

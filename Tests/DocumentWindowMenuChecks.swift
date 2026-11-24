@@ -510,11 +510,11 @@ extension DocumentChecks {
                     && entries.allSatisfy { $0.row.accessory == (ControlPresentation.shortcut(of: $0.item) ?? "") },
                 "every palette row whose command has a key shows it, and no other row shows one")
             check(
-                key("File › Save") == "⌘S" && key("File › Save All") == "⌥⌘S" && key("View › Preview › Toggle Preview") == "⇧⌘V"
+                key("File › Save") == "⌘S" && key("File › Save All") == "⌥⌘S" && key("View › Preview › Toggle Preview") == "⌃⌘V"
                     && key("File › Quick Open…") == "⇧⌘O" && key("Window › Next Tab") == "⌃⇥"
                     && key("Edit › Undo") == "⌘Z" && key("Edit › Redo") == "⇧⌘Z"
                     && key("Find › Bookmarks › Toggle Bookmark") == functionKeyTwo
-                    && entries.first { $0.path == "View › Preview › Toggle Preview" }?.row.accessoryLabel == "Shortcut Shift-Command-V",
+                    && entries.first { $0.path == "View › Preview › Toggle Preview" }?.row.accessoryLabel == "Shortcut Control-Command-V",
                 "keys read as the menu bar draws them: \(["File › Save All", "Window › Next Tab", "Find › Bookmarks › Toggle Bookmark"].map { key($0) ?? "none" })")
             let upper = EditorCommand.upper.rawValue
             let before = sessionDelegate.settings.value
