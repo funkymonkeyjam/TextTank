@@ -1940,7 +1940,7 @@
     "modifiers" : "1048576",
     "object" : "",
     "position" : "4.13.0",
-    "target" : "explicit",
+    "target" : "responder",
     "title" : "Choose Language…"
   },
   {

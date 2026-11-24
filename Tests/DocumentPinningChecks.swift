@@ -1041,6 +1041,49 @@ extension DocumentChecks {
                     return [row] + (item.submenu.map { snapshot($0, path: position) } ?? [])
                 }
             }
+            // DB-R3: the commands the status row's position menu used to list are reachable in
+            // the menu bar; Clear Selection and the document's indentation are in no menu here
+            // and stay in their own status fields (DesignStatusChecks checks the keyboard route).
+            let listed = walk(bar, "").filter { !$0.1.isHidden }
+            let marksBefore = document.editor.bookmarkCount
+            for command in ["bookmarkToggle", "bookmarkNext", "bookmarkPrevious"] {
+                let found = listed.first { $0.1.representedObject as? String == command }
+                check(
+                    found?.0 == "Find > Bookmarks > " + (found?.1.title ?? "") && found?.1.target == nil
+                        && found?.1.action == #selector(EditorWindowController.command(_:))
+                        && found.map { controller.validateMenuItem($0.1) } == true,
+                    "DB-R3 \(command) is reachable in the menu bar under Find > Bookmarks: \(found?.0 ?? "missing")")
+            }
+            if let toggle = listed.first(where: { $0.1.representedObject as? String == "bookmarkToggle" })?.1 {
+                controller.command(toggle)
+                check(
+                    document.editor.bookmarkCount == marksBefore + 1,
+                    "DB-R3 the menu bar's bookmark command acts on the document")
+                controller.command(toggle)
+            }
+            let selectAllItem = listed.first { $0.1.action == #selector(NSText.selectAll(_:)) }
+            check(
+                selectAllItem?.0 == "Edit > Select All" && selectAllItem?.1.keyEquivalent == "a",
+                "DB-R3 Select All is reachable in the menu bar: \(selectAllItem?.0 ?? "missing")")
+            check(
+                listed.first { $0.1.action == #selector(EditorWindowController.goToLine(_:)) }?.0 == "Find > Go to Line…"
+                    && listed.first { $0.1.action == #selector(EditorWindowController.toggleWrap(_:)) }?.0
+                        == "View > Wrap Lines"
+                    && listed.first { $0.1.representedObject as? String == "zoomIn" }?.0.hasPrefix("View > ") == true
+                    && listed.first { $0.1.action == #selector(EditorWindowController.chooseLanguage(_:)) }?.0
+                        == "View > Syntax Highlighting > Choose Language…",
+                "DB-R3 Go to Line, wrapping, text size and the language are reachable in the menu bar")
+            check(
+                !listed.contains { $0.1.representedObject as? String == "clearSelection" }
+                    && !listed.contains {
+                        ["tabs", "spaces", "width.4"].contains($0.1.representedObject as? String ?? "")
+                    }
+                    && controller.statusOptionsMenu("selection")?.items.map { $0.representedObject as? String ?? "" }
+                        == ["clearSelection"]
+                    && controller.statusOptionsMenu("indent")?.items.contains {
+                        $0.representedObject as? String == "spaces"
+                    } == true,
+                "DB-R3 Clear Selection and the document's indentation are in no menu of the bar and stay in their status fields")
             let menuSnapshot = snapshot(bar)
             var chords = Set<String>(), conflicts: [String] = []
             for (path, item) in walk(bar, "") where !item.keyEquivalent.isEmpty {
@@ -1168,7 +1211,7 @@ extension DocumentChecks {
             // Added on 23 November 2026: View > Syntax Highlighting > Choose Language…, the
             // filterable chooser the status bar's language field also opens. Nothing was removed.
             let chooseLanguageAdded: [[String: String]] = [
-                ["action": "chooseLanguage:", "object": "", "key": "", "modifiers": "1048576", "target": "explicit"]
+                ["action": "chooseLanguage:", "object": "", "key": "", "modifiers": "1048576", "target": "responder"]
             ]
             var accounted = identities(
                 formerCommands + deliberatelyAdded + togglePreviewAdded + quickOpenWithKey + localHistoryAdded

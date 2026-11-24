@@ -53,7 +53,7 @@ private final class LanguageMenu: NSMenu {
         } catch {}
     }
 }
-@MainActor final class LanguageController: NSObject, NSMenuDelegate, NSMenuItemValidation {
+@MainActor final class LanguageController: NSObject, NSMenuDelegate {
     private let editorProvider: () -> TTEditor?
     private let languageProvider: () -> String
     private let setLanguage: (String) -> Void
@@ -159,7 +159,9 @@ private final class LanguageMenu: NSMenu {
         menu.removeAllItems()
         // The filterable chooser comes first: it is the quick way to a language by name. The
         // ranges below keep every profile, the internal ones included, one level down (DS-23).
-        menu.addItem(commandItem("Choose Language…", #selector(chooseLanguage(_:))))
+        // No target: the document window that has the keyboard answers, as it does for Go to
+        // Line, and the item is disabled when there is none (DS-21).
+        menu.addItem(NSMenuItem(title: "Choose Language…", action: #selector(chooseLanguage(_:)), keyEquivalent: ""))
         menu.addItem(.separator())
         var languages = languageMenuItems()
         if let plain = languages.firstIndex(where: { $0.representedObject as? String == LanguageProfile.plainTextID }) {
@@ -727,10 +729,6 @@ private final class LanguageMenu: NSMenu {
             return true
         }
         presentChooser(panel, parent)
-    }
-    func validateMenuItem(_ item: NSMenuItem) -> Bool {
-        // DS-21: there is nothing to choose a language for without a document.
-        item.action == #selector(chooseLanguage(_:)) ? editorProvider() != nil : true
     }
     @objc func complete() {
         guard let editor = editorProvider(), let profile = profile(identifier: languageProvider()) else { return }
