@@ -11,6 +11,234 @@ import Darwin
     @MainActor static func descendants(_ view: NSView) -> [NSView] {
         [view] + view.subviews.flatMap(descendants)
     }
+    /// Quick Open over open documents, recent files and workspace files.
+    @MainActor static func quickOpenChecks(in root: URL) throws {
+        let manager = FileManager.default
+        let folder = root.appendingPathComponent("quick-open")
+        let support = root.appendingPathComponent("quick-open-support")
+        for directory in [folder, support] {
+            try manager.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        func file(_ name: String) throws -> URL {
+            let url = folder.appendingPathComponent(name)
+            try Data(name.utf8).write(to: url)
+            return url
+        }
+        let alphaURL = try file("alpha-open.txt"), betaURL = try file("beta-recent.txt")
+        let goneURL = try file("gamma-gone.txt"), deltaURL = try file("delta-open.txt")
+        _ = try file("epsilon-workspace.txt")
+        let controller = WorkspaceBrowserController(
+            storeURL: support.appendingPathComponent("WorkspaceBrowser.json"), recordsSystemRecent: false)
+        let alpha = try controller.open(alphaURL)
+        try controller.open(betaURL).close()
+        try controller.open(goneURL).close()
+        try manager.removeItem(at: goneURL)
+        let untitled = DocumentFactory.makeUntitled()
+        let delta = try controller.open(deltaURL)
+        defer { [alpha, untitled, delta].filter(\.isOpen).forEach { $0.close() } }
+        let untitledName = try requireValue(untitled.displayName, "fixture: the untitled document has a display name")
+        try require(controller.store.state.folders.isEmpty, "fixture: this workspace has no folder")
+        let host = try requireValue(alpha.presentation?.host, "fixture: the workspace window of the open documents")
+        try require(host.active?.document === delta, "fixture: the document opened last is showing")
+
+        controller.quickOpen(nil)
+        let chooser = controller.fileChooser
+        let panel = try requireValue(chooser.panel, "fixture: Quick Open is showing")
+        @MainActor func rows(_ kind: String) -> [String] {
+            panel.displayedRows.filter { $0.accessory == kind }.map(\.title)
+        }
+        check(
+            rows("Open").contains("alpha-open.txt") && rows("Open").contains(untitledName)
+                && rows("Recent").isEmpty && !chooser.isComplete,
+            "Quick Open lists open documents at once, before any file has been looked at")
+        spinUntil("Quick Open to finish checking recent files") { chooser.isComplete }
+        let shown = panel.displayedRows
+        let kinds = shown.map(\.accessory)
+        check(
+            kinds == kinds.filter { $0 == "Open" } + kinds.filter { $0 == "Recent" } && rows("Workspace").isEmpty
+                && rows("Open").contains("alpha-open.txt") && rows("Open").contains("delta-open.txt")
+                && rows("Recent").contains("beta-recent.txt"),
+            "with no workspace folder Quick Open lists open documents, then recent files: \(shown.map(\.title))")
+        check(
+            shown.filter { $0.title == "alpha-open.txt" }.map(\.accessory) == ["Open"]
+                && shown.filter { $0.title == "beta-recent.txt" }.map(\.accessory) == ["Recent"],
+            "an open document is not listed again as the recent file it also is")
+        check(
+            !shown.contains { $0.title == "gamma-gone.txt" } && controller.store.state.recent.contains {
+                $0.lastPathComponent == "gamma-gone.txt"
+            },
+            "a recent file that no longer exists is not listed")
+        let untitledRow = shown.first { $0.title == untitledName }
+        check(
+            untitledRow?.accessory == "Open" && untitledRow?.detail == "Not saved yet"
+                && untitledRow?.accessoryLabel == "Open document",
+            "an untitled open document is listed by its display name")
+        let add = try requireValue(
+            descendants(panel.form.window.contentView!).compactMap { $0 as? NSButton }.first {
+                $0.identifier?.rawValue == WorkspaceQuickOpen.addFolderIdentifier
+            }, "Quick Open's Add Folder button")
+        let status = try requireValue(
+            descendants(panel.form.window.contentView!).compactMap { $0 as? NSTextField }.first {
+                $0.identifier?.rawValue == WorkspaceQuickOpen.statusIdentifier
+            }, "Quick Open's status line")
+        check(
+            !add.isHidden && add.isEnabled && add.title == "Add Folder…"
+                && status.stringValue.hasSuffix("Add a folder to the workspace to find its files here too."),
+            "DS-85 without a workspace folder Quick Open offers Add Folder: \(status.stringValue)")
+        let cell = try requireValue(
+            panel.table.view(atColumn: 0, row: 0, makeIfNecessary: true), "fixture: the first Quick Open row")
+        check(
+            descendants(cell).compactMap { ($0 as? NSTextField)?.stringValue }.last == "Open",
+            "a row carries a small label for its kind")
+
+        // Choosing an open document shows its tab; it never opens a second copy.
+        let openBefore = NSDocumentController.shared.documents.count, tabsBefore = host.presentations.count
+        panel.filter.stringValue = "alpha-open"
+        panel.refresh()
+        let alphaRow = try requireValue(panel.displayedRows.first, "fixture: the row for alpha-open.txt")
+        let choseAlpha = try panel.choose(alphaRow.id)
+        check(
+            alphaRow.title == "alpha-open.txt" && alphaRow.accessory == "Open" && choseAlpha,
+            "the open document is found by name and can be chosen")
+        check(
+            host.active?.document === alpha && NSDocumentController.shared.documents.count == openBefore
+                && host.presentations.count == tabsBefore,
+            "choosing an open document selects its tab and opens no second copy")
+        // The same when its tab is in the other group and that group is not the focused one.
+        if host.setEditorLayout(.twoColumns), let alphaTab = alpha.presentation?.tabID,
+            let deltaTab = delta.presentation
+        {
+            host.moveTabs([alphaTab], target: alphaTab, to: .second)
+            host.show(deltaTab, sender: nil)
+            try require(
+                host.active?.document === delta && host.model.focusedGroup == .first,
+                "fixture: the first group is focused and alpha-open.txt is in the second")
+            panel.refresh()
+            let grouped = try requireValue(panel.displayedRows.first, "fixture: the row for alpha-open.txt")
+            let choseGrouped = try panel.choose(grouped.id)
+            check(
+                choseGrouped && host.active?.document === alpha && host.model.focusedGroup == .second
+                    && NSDocumentController.shared.documents.count == openBefore
+                    && host.presentations.count == tabsBefore,
+                "an open document in another group is selected there, not opened again")
+            check(
+                controller.quickOpenDocuments().first { $0.name == "alpha-open.txt" }?.group == host.groupLabel(.second),
+                "with two groups an open document's row names its group")
+            _ = host.setEditorLayout(.single)
+        } else {
+            print("SKIP Quick Open across groups: the two-column layout does not fit this screen")
+        }
+        // A recent file opens as a document; a document closed meanwhile is reported, not reopened.
+        panel.filter.stringValue = "beta-recent"
+        panel.refresh()
+        let betaRow = try requireValue(panel.displayedRows.first, "fixture: the row for beta-recent.txt")
+        let choseBeta = try panel.choose(betaRow.id)
+        check(
+            betaRow.title == "beta-recent.txt" && betaRow.accessory == "Recent" && choseBeta
+                && NSDocumentController.shared.documents.count == openBefore + 1
+                && (host.active?.document as? TextDocument)?.fileURL?.lastPathComponent == "beta-recent.txt",
+            "choosing a recent file opens it")
+        NSDocumentController.shared.document(for: betaURL)?.close()
+        panel.filter.stringValue = "delta-open"
+        panel.refresh()
+        let deltaRow = try requireValue(
+            panel.displayedRows.first { $0.title == "delta-open.txt" }, "fixture: the row for delta-open.txt")
+        let replacement = DocumentFactory.makeUntitled()
+        delta.close()
+        rejects("a document closed while Quick Open was showing is not reopened") { _ = try panel.choose(deltaRow.id) }
+        replacement.close()
+        panel.form.close()
+        check(chooser.panel == nil && chooser.list.entries.isEmpty, "closing Quick Open releases its list")
+
+        // The pure list: one row a file, whichever names reach it, and bounded checking.
+        let link = root.appendingPathComponent("quick-open-link")
+        try manager.createSymbolicLink(at: link, withDestinationURL: folder)
+        var list = QuickOpenList()
+        list.add(open: [.init(id: "one", name: "alpha-open.txt", url: alphaURL, group: nil)], inspecting: true)
+        list.add(recent: [
+            link.appendingPathComponent("beta-recent.txt"), link.appendingPathComponent("alpha-open.txt"), goneURL,
+            betaURL, folder
+        ])
+        list.add(workspace: WorkspaceFileIndex.scan([folder]).files)
+        check(
+            list.entries.map { "\($0.kind.label) \($0.title)" } == [
+                "Open alpha-open.txt", "Recent beta-recent.txt", "Workspace delta-open.txt",
+                "Workspace epsilon-workspace.txt"
+            ] && !list.limited,
+            "one row a file by file identity, in the order open, recent, workspace: \(list.entries.map(\.title))")
+        check(
+            list.matches("epsilon").map(\.title) == ["epsilon-workspace.txt"]
+                && list.matches("-open.").map(\.title) == ["alpha-open.txt", "delta-open.txt"]
+                && list.matches("").count == 4 && list.matches("no-such-file-name").isEmpty,
+            "Quick Open matches names across the three kinds, an open document first among equals")
+        var late = QuickOpenList()
+        late.add(recent: [betaURL], deadline: 0)
+        var many = QuickOpenList()
+        many.add(recent: Array(repeating: goneURL, count: QuickOpenList.recentLimit) + [betaURL])
+        check(
+            late.entries.isEmpty && late.limited && many.entries.isEmpty && many.limited,
+            "recent files are checked up to a count and a deadline, and one not checked is left out")
+
+        // The panel with a workspace folder, and the Add Folder button of one without.
+        let direct = WorkspaceQuickOpen()
+        var added = 0, opened: [(URL?, URL)] = []
+        direct.show(
+            roots: [folder], documents: [.init(id: "one", name: "alpha-open.txt", url: alphaURL, group: nil)],
+            recent: [betaURL, alphaURL], select: { _ in true },
+            open: { root, url in
+                opened.append((root, url))
+                return true
+            }, addFolder: { added += 1 })
+        let withFolder = try requireValue(direct.panel, "fixture: Quick Open with a workspace folder")
+        spinUntil("Quick Open to read the workspace folder") { direct.isComplete }
+        check(
+            withFolder.displayedRows.map { "\($0.accessory) \($0.title)" } == [
+                "Open alpha-open.txt", "Recent beta-recent.txt", "Workspace delta-open.txt",
+                "Workspace epsilon-workspace.txt"
+            ],
+            "with a workspace folder its files follow the open documents and recent files, each file once")
+        let hiddenAdd = descendants(withFolder.form.window.contentView!).compactMap { $0 as? NSButton }.first {
+            $0.identifier?.rawValue == WorkspaceQuickOpen.addFolderIdentifier
+        }
+        check(hiddenAdd?.isHidden == true, "Add Folder is offered only while the workspace has no folder")
+        let workspaceRow = try requireValue(
+            withFolder.displayedRows.first { $0.title == "epsilon-workspace.txt" }, "fixture: a workspace row")
+        let choseWorkspace = try withFolder.choose(workspaceRow.id)
+        check(
+            choseWorkspace && opened.count == 1 && opened.first?.0 == folder
+                && opened.first?.1.lastPathComponent == "epsilon-workspace.txt",
+            "a workspace file is opened with the folder it was found in")
+        withFolder.form.close()
+        direct.show(roots: [], documents: [], recent: [], select: { _ in true }, open: { _, _ in true }) { added += 1 }
+        let empty = try requireValue(direct.panel, "fixture: Quick Open with nothing to list")
+        let emptyAdd = try requireValue(
+            descendants(empty.form.window.contentView!).compactMap { $0 as? NSButton }.first {
+                $0.identifier?.rawValue == WorkspaceQuickOpen.addFolderIdentifier
+            }, "the Add Folder button of an empty Quick Open")
+        emptyAdd.performClick(nil)
+        check(
+            added == 1 && direct.panel == nil && !empty.form.window.isVisible,
+            "Add Folder closes Quick Open and runs the workspace's Add Folder command once")
+
+        // Shift-Command-O is a default that yields, and nothing else has the key.
+        let item = controller.menuItem(.quickOpen)
+        check(
+            item is DefaultShortcutItem && item.keyEquivalent == "O" && item.keyEquivalentModifierMask == .command
+                && ControlPresentation.shortcut(of: item) == "⇧⌘O" && item.target === controller,
+            "Quick Open's shortcut is Shift-Command-O, a default that yields to one assigned in Settings")
+        check(
+            !EditorSettings.protectedShortcuts.contains("O") && !EditorCommand.defaultShortcuts.values.contains("O")
+                && !EditorCommand.allCases.contains {
+                    $0.extendedMenuShortcut.map { $0.key.lowercased() == "o" && $0.modifiers == [.command, .shift] } == true
+                },
+            "the key is not a protected or default editor shortcut, so saved shortcuts still load")
+        var settings = EditorSettings()
+        settings.setShortcut("O", for: EditorCommand.upper.rawValue)
+        (item as? DefaultShortcutItem)?.applyEditorOverrides(settings)
+        check(item.keyEquivalent.isEmpty, "a person's own Shift-Command-O shortcut is kept, and Quick Open gives up the key")
+        (item as? DefaultShortcutItem)?.applyEditorOverrides(EditorSettings())
+        check(item.keyEquivalent == "O", "fixture: the default shortcut returns")
+    }
     @MainActor static func main() {
         Checks.run("WorkspaceBrowserChecks") {
             // F148: there is no bundle here, so the suite names the bundled language catalog itself.
@@ -650,6 +878,7 @@ import Darwin
             check(listed() > 0, "fixture: the panel lists documents before it closes")
             controller.window?.close()
             check(listed() == 0, "a closed panel holds no documents")
+            try quickOpenChecks(in: root)
             try ExternalFileObservationChecks.run(in: root)
             try ExternalFilePolicyChecks.run(in: root)
             try ExternalFileWatchChecks.run(in: root)

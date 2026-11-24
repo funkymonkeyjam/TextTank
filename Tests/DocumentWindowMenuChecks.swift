@@ -546,7 +546,7 @@ extension DocumentChecks {
             // Path, key, modifiers, enabled without a document, enabled with one untitled document.
             let expected: [(String, String, NSEvent.ModifierFlags, Bool, Bool)] = [
                 ("Compare > Compare Two Visible Tabs", "", [.command], false, false),
-                ("File > Quick Open…", "", [.command], true, true),
+                ("File > Quick Open…", "O", [.command], true, true),
                 ("Edit > Lines > Sort Lines Ascending", "", [.command], false, true),
                 ("File > Reload with Encoding > UTF-8…", "", [.command], false, true),
                 ("File > Convert to Encoding > UTF-8", "", [.command], false, true),

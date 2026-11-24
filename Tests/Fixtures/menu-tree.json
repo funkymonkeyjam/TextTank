@@ -136,7 +136,7 @@
   },
   {
     "action" : "quickOpen:",
-    "key" : "",
+    "key" : "O",
     "modifiers" : "1048576",
     "object" : "",
     "position" : "1.2",
