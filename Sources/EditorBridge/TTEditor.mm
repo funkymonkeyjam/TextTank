@@ -818,7 +818,15 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         NSClipView *textArea = _engine.scrollView.contentView;
         textArea.postsFrameChangedNotifications = YES;
         _textAreaObserver = [NSNotificationCenter.defaultCenter addObserverForName:NSViewFrameDidChangeNotification object:textArea
-            queue:nil usingBlock:^(NSNotification *note) { [weakEditor normalizeTextArea]; [weakEditor updateCenteredColumn]; }];
+            queue:nil usingBlock:^(NSNotification *note) {
+                [weakEditor normalizeTextArea];
+                [weakEditor updateCenteredColumn];
+                // A narrower gutter gives its strip to the text area, which AppKit does not
+                // repaint by itself: the old gutter would stay drawn over the first characters.
+                NSClipView *area = note.object;
+                area.needsDisplay = YES;
+                area.documentView.needsDisplay = YES;
+            }];
         [_engine message:SCI_SETAUTOMATICFOLD wParam:SC_AUTOMATICFOLD_SHOW | SC_AUTOMATICFOLD_CLICK | SC_AUTOMATICFOLD_CHANGE];
         // Scintilla creates its scroll view at 100x10. Its initWithFrame does not
         // position the inner content. Start at zero so this real size transition also
