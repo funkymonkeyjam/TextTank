@@ -145,6 +145,7 @@ private final class CompareFailingEngine: ReviewDiffing, @unchecked Sendable {
                 app.isRunning && NSDocumentController.shared === documents,
                 "D1 native checks own the real app event loop and document controller")
             try await SavedVersionChecks.run(in: isolated.url)
+            try await LocalHistoryChecks.run(in: isolated.url)
             let previous = EditorServices.current, delegate = AppDelegate()
             delegate.installEditorServices()
             LanguageController.bundledCatalogURL = TestPaths.resources.appendingPathComponent("LanguageProfiles.json")

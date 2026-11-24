@@ -60,7 +60,7 @@ import AppKit
         case #selector(CompareController.performCompareCommand(_:)):
             return CompareController.key?.validateMenuItem(item) ?? false
         case #selector(actualSize(_:)): return CompareController.key != nil || currentEditor != nil
-        case #selector(newDocument(_:)): return !CompareCommandScope.blocksWorkspace
+        case #selector(newDocument(_:)), #selector(clearLocalHistory(_:)): return !CompareCommandScope.blocksWorkspace
         case #selector(performTabCommand(_:)):
             guard let raw = item.representedObject as? String, let command = TabCommand(rawValue: raw) else {
                 return false
@@ -364,6 +364,8 @@ import AppKit
             return
         }
         startReplacementRetention()
+        // Local history's thirty-day limit also holds for a file that is not saved again.
+        if LocalHistory.isEnabled { LocalHistory.store.prune() }
         TextDocument.recovery.scanForLaunch { [weak self] result in
             self?.launchInventory = result
             self?.deliverLaunchInventory()
@@ -564,6 +566,12 @@ import AppKit
     func noteActive(_ controller: EditorWindowController?) {
         if let controller { knownWorkspace = controller.host }
         lastDocumentController = controller
+    }
+    /// Compare › Clear Local History… (DS-D10): for the current file, or for everything, after a
+    /// confirmation sheet. It deletes private copies only.
+    @objc func clearLocalHistory(_ sender: Any?) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
+        LocalHistory.clear(for: currentDocument, in: workspaceWindow)
     }
     @objc func performCompareCommand(_ sender: Any?) {
         CompareController.key?.performCompareCommand(sender)

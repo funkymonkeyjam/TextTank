@@ -73,6 +73,21 @@ Owner decision, 23 November 2026:
   question. The stored setting "Keep unsaved untitled documents when quitting" (`keepUntitledOnQuit`,
   on unless stored off) turns all of this off and restores the earlier behaviour exactly.
 
+- DS-D10. **Local history on save.** Each successful Save or Save As of a file keeps a private
+  **earlier version**: the bytes just written, and before them the bytes that save replaced when
+  history does not already end with those, so the version before the newest is exactly what the
+  file held before that save. TextTank keeps the last 20 versions of a file, for at most 30 days,
+  and at most 200 MB in all, removing the oldest first; a save larger than 32 MiB is not kept, and
+  identical consecutive versions are kept once. The copies are in TextTank's private support
+  folder, never beside the document, and never leave the Mac. Nothing is kept for an untitled
+  document or for Save Copy. Compare > Compare with Earlier Version… lists a file's versions by
+  date and size and opens the existing comparison on the one chosen against the current text;
+  the earlier side is read-only, and restoring is that comparison's Apply Selected Changes: one
+  Undo step in the document, which is written only when the person saves. Compare > Clear Local
+  History… deletes the versions of the current file or of every file after a confirmation sheet
+  (DS-41, DS-43, DS-44) and changes no file. The stored setting "Keep earlier versions when
+  saving" (`keepLocalHistory`, on unless stored off) stops new versions from being kept.
+
 ## 3. Rules
 
 ### Windows and tabs
@@ -182,7 +197,8 @@ Owner decision, 23 November 2026:
 
 - DS-80. One noun per object, everywhere: **document**, **tab**, **window**, **automation**, **rule** (a
   step of an automation), **favorite** (an automation listed first in the Automations drop-down and editor context menu), **macro**, **Run command**,
-  **workspace**, **session**, **recovery copy**. Do not introduce synonyms (workflow, step, snapshot,
+  **workspace**, **session**, **recovery copy**, **earlier version** (a copy local history kept at a
+  save, DS-D10). Do not introduce synonyms (workflow, step, snapshot,
   draft, batch, root).
 - DS-81. Plain, active sentences. An error says what happened, what was not changed, and what to do next.
 - DS-82. No developer vocabulary in user text: no identifiers, UUIDs, "transaction", "root(s)", "id".

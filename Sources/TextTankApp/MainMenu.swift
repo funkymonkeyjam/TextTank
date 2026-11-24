@@ -281,7 +281,11 @@ extension AppDelegate {
             title: "Compare Two Visible Tabs", action: #selector(CompareService.compareVisibleTabs(_:)),
             target: compare)
         menu.addItem(title: "Compare with Saved Version", action: #selector(TextDocument.compareWithSavedVersion(_:)))
+        // DS-D10: the earlier versions kept at each save, and the one command that deletes them.
+        menu.addItem(
+            title: "Compare with Earlier Version…", action: #selector(TextDocument.compareWithEarlierVersion(_:)))
         compare.addMainItems(to: menu)
+        menu.addItem(title: "Clear Local History…", action: #selector(clearLocalHistory(_:)), target: self)
         for command in CompareCommand.allCases where !command.isMergeCommand {
             // Moving between changes, the view choices, then the comparison itself.
             if [.previous, .sideBySide, .refresh].contains(command) { menu.addItem(.separator()) }

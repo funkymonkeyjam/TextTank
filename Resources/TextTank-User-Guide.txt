@@ -14,6 +14,8 @@ Use Find → Find… (Command-F) for the current document's Find bar. Use the co
 Comparing versions
 Compare → Compare with Saved Version compares the active file on disk with its editor contents. A comparison has its own window. Review its changes there and return to the original tab to continue editing. If a file changes outside TextTank, review the notice in its tab before choosing Reload.
 
+Each time you save a file, TextTank keeps a private copy of what it wrote, and the first time it saves over content it has not seen, a copy of what was there before. These earlier versions stay on this Mac in TextTank’s own support folder, never beside your file. TextTank keeps the last 20 versions of each file for up to 30 days, and at most 200 MB in all; the oldest are removed first, and a save larger than 32 MiB is not kept. Compare → Compare with Earlier Version… lists the versions of the active file by date and size. Choose one to compare it with the current text. The earlier version is read-only. To restore it, or part of it, choose Compare → Merge Changes → Select All Changes or Select Changes…, then Apply Selected Changes: the document changes in one Undo step, and the file changes only when you save. Compare → Clear Local History… deletes the kept versions of the active file, or of every file, after asking; it does not change your files and cannot be undone. Untitled documents and Save Copy keep no earlier versions.
+
 Editor groups
 View → Editor Groups → Editor Group Layout lets you place groups side by side. Move to Group moves a tab. Show Tab in Another Group shows the same document in both groups, with independent views and shared edits. Returning to Single Group brings the tabs together.
 

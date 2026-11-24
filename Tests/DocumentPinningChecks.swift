@@ -1112,7 +1112,19 @@ extension DocumentChecks {
                     "target": "responder",
                 ]
             ]
-            var accounted = identities(formerCommands + deliberatelyAdded + togglePreviewAdded)
+            // Added on 23 November 2026 (DS-D10, local history): Compare > Compare with Earlier
+            // Version… and Compare > Clear Local History…. Nothing was removed for them.
+            let localHistoryAdded: [[String: String]] = [
+                [
+                    "action": "compareWithEarlierVersion:", "object": "", "key": "", "modifiers": "1048576",
+                    "target": "responder",
+                ],
+                [
+                    "action": "clearLocalHistory:", "object": "", "key": "", "modifiers": "1048576",
+                    "target": "explicit",
+                ],
+            ]
+            var accounted = identities(formerCommands + deliberatelyAdded + togglePreviewAdded + localHistoryAdded)
             var removedRowsInFixture = 0
             for removed in identities(deliberatelyRemoved) {
                 if let index = accounted.firstIndex(of: removed) {

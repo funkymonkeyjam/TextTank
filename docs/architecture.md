@@ -306,6 +306,38 @@ Launch enumerates on a utility queue. For v2 it inspects header metadata and the
 
 The Recovery folder may also hold `<UUID>.pending` files: the temporary file of a write in progress. One left by a process that died during a write is deleted by the next launch's scan. A `.json` entry is never deleted except by saving, closing or explicitly discarding the document it belongs to.
 
+## Local history (DS-D10)
+
+`LocalHistoryStore` in `Sources/Documents/PrivateFileStore.swift` keeps earlier versions of saved files under `LocalHistory` in the support folder (`AppStorage.Location.localHistory`), never inside or beside a document's own folder. Nothing in it is sent anywhere.
+
+Layout. One folder per file, named by the lowercase SHA-256 of the file's resolved absolute path (the document's `diskURL`, links resolved). It holds `manifest.json` and one `<version id>.bytes` per version. Folders are created 0700 and files 0600 through `PrivateFileStore.prepareDirectory` and `PrivateFileStore.write`: a temporary file in the same folder, a flush to storage, a rename, then a flush of the folder. A version's bytes are published before the manifest names them, and a manifest is rewritten before bytes it no longer names are deleted, so a manifest never names missing bytes; bytes no manifest names are removed by the next prune.
+
+`manifest.json`, version 1:
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `version` | integer | yes | 1. Any other value is refused and the folder left alone. |
+| `path` | string | yes | The file's resolved absolute path. Must hash to the folder's name. |
+| `versions` | array | yes | Oldest first. |
+| `versions[].id` | UUID string | yes | Names `<id>.bytes`. |
+| `versions[].savedAt` | date | yes | When the save happened. |
+| `versions[].byteCount` | integer | yes | Exact length of the bytes. |
+| `versions[].sha256` | string | yes | Lowercase SHA-256 of the bytes; checked whenever a version is read. |
+| `versions[].kind` | string | yes | `saved`: what TextTank wrote. `replaced`: what the file held just before a save. |
+| `versions[].format` | object | no | Encoding and byte-order mark when TextTank knew them; otherwise detected on reading. |
+
+Which bytes. `TextDocument.writeSafely` records after a successful Save or Save As, never for Save Copy and never for an untitled document. It keeps the bytes it just wrote. Before the write it also reads the bytes about to be replaced, when history does not already end with them (the first save of a file TextTank has not recorded, or a file changed by something else), and keeps those first, as `replaced`. The version listed before the newest is therefore exactly what the file held before that save. The usual save reads nothing extra: the document's own digest of the bytes on disk is compared with the digest of the newest version, cached in memory per path.
+
+Limits (`LocalHistoryLimits`): 20 versions a file, 30 days, 200 MB (200,000,000 bytes) in all, oldest first; a save above 32 MiB (the large-file threshold) is not kept; bytes equal to the newest version are not stored again. The limits are applied on the store's serial utility queue after every save and once at launch. The save itself hands over bytes it already holds and does not wait for the disk; a failure to keep a version never fails the save and is said in the status line.
+
+Identity. When a document's `fileURL` changes and the earlier path no longer exists (a rename or move, in TextTank or noticed through NSDocument), the folder is moved to the new path's name, joining any history already there in date order. After Save As the earlier file still exists and keeps its history; the new file starts its own. A file that is renamed while it is not open in TextTank is a new path with a new history, and the old one expires. A path inside the store is never given a history.
+
+Reading. Compare › Compare with Earlier Version… lists `versions(forPath:)` newest first by date and size in a `ChoicePanel`. The chosen version is decoded with its recorded format and handed to `CompareService.open` as a fixed `.snapshot` on the original side, with the open document on the modified side as the merge destination. A fixed value cannot be a destination, so the earlier side is read-only. Restoring is Merge's own Apply Selected Changes (docs/merge-model.md): one Undo group through the sole application path, with no write to the file or the history. The comparison's 8 MiB source limit applies; a larger version is kept but cannot be compared.
+
+Clearing. Compare › Clear Local History… shows a sheet on the workspace window, never an app-modal alert (DS-44), stating the counts and sizes and that it cannot be undone (DS-43), with Cancel first and both clearing buttons marked destructive (DS-41). `clear(path:)` removes one file's folder; `clear()` removes every folder whose name is 64 hexadecimal digits and nothing else.
+
+Switches. `keepLocalHistory` in Settings.json, on unless stored `false`; off keeps nothing new and leaves kept versions until they expire or are cleared. A process whose support folder is overridden (checks, the bundle smoke run) keeps no history unless a check sets `LocalHistory.allowsIsolatedSupport`.
+
 ## Macro storage hardening
 
 Saved macro libraries and chosen macro imports are regular files bounded to32MiB,

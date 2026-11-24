@@ -376,9 +376,12 @@ import UniformTypeIdentifiers
             let oldValue = super.fileURL
             super.fileURL = newValue
             guard newValue != oldValue else { return }
+            let movedFrom = diskLocation.get()
             diskLocation.set(newValue.map(Self.canonicalDiskURL))
+            let movedTo = diskLocation.get()
             if Thread.isMainThread {
                 MainActor.assumeIsolated {
+                    LocalHistory.fileURLChanged(from: movedFrom, to: movedTo)
                     recoveryBase += 1
                     externalFile.invalidate()
                     // Only the existing main-thread setter route clears the recovered label.
@@ -389,6 +392,7 @@ import UniformTypeIdentifiers
                 }
             } else {
                 DispatchQueue.main.async { [weak self] in
+                    LocalHistory.fileURLChanged(from: movedFrom, to: movedTo)
                     self?.recoveryBase += 1
                     self?.externalFile.invalidate()
                     self?.presentations.forEach { $0.previewKindMayHaveChanged() }
@@ -483,6 +487,11 @@ import UniformTypeIdentifiers
         if item.action == #selector(compareWithSavedVersion(_:)) {
             return EditorServices.current?.compare?.canCompareSaved(self) == true
         }
+        if item.action == #selector(compareWithEarlierVersion(_:)) {
+            let reason = LocalHistory.unavailableReason(for: self)
+            (item as? NSMenuItem)?.toolTip = reason
+            return reason == nil
+        }
         if item.action == #selector(checkExternalChanges(_:)) { return fileURL != nil }
         if item.action == #selector(toggleReadOnly(_:)) {
             (item as? NSMenuItem)?.state = editor.readOnly ? .on : .off
@@ -493,6 +502,12 @@ import UniformTypeIdentifiers
     @objc func compareWithSavedVersion(_ sender: Any?) {
         guard !CompareCommandScope.blocksWorkspace else { return }
         EditorServices.current?.compare?.compareSaved(self)
+    }
+    /// DS-D10: lists the earlier versions kept for this file and opens the existing comparison
+    /// on the one chosen. Nothing is restored here; that is Compare's own Apply Selected Changes.
+    @objc func compareWithEarlierVersion(_ sender: Any?) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
+        EditorServices.current?.compare?.chooseEarlierVersion(of: self)
     }
     @objc func checkExternalChanges(_ sender: Any?) {
         guard !CompareCommandScope.blocksWorkspace else { return }
@@ -1327,12 +1342,22 @@ import UniformTypeIdentifiers
             submittedRevision = editor.revision
         savePayload = submitted
         defer { savePayload = nil }
+        // DS-D10: what this save is about to replace, read before it is gone, when local history
+        // does not already end with it. Save Copy keeps no history: it is not this document's file.
+        let history =
+            saveOperation == .saveToOperation
+            ? nil : LocalHistory.pendingSave(to: destination, byteCount: submitted.count, knownDigest: inPlace ? diskDigest : nil)
+        let replacedFormat = inPlace ? savedFormat : nil
         do {
             inPlaceWriteURL = inPlace && Thread.isMainThread ? destination : nil
             defer { inPlaceWriteURL = nil }
             try super.writeSafely(to: destination, ofType: typeName, for: saveOperation)
         }
         try dependencies.afterWrite?()
+        if let history {
+            LocalHistory.recordSave(
+                history, bytes: submitted, format: submittedFormat, replacedFormat: replacedFormat, in: self)
+        }
         if saveOperation != .saveToOperation {
             // The baseline is what was submitted. The file's metadata is not recorded here:
             // another writer may already have replaced it, and only a hash can tell.
@@ -1465,5 +1490,173 @@ enum EditorCaptureError: LocalizedError, Equatable {
     ) {
         let recovered = attemptRecovery(fromError: error, optionIndex: index)
         ErrorRecoveryReply.send(recovered, to: delegate, selector: didRecoverSelector, contextInfo: contextInfo)
+    }
+}
+
+/// DS-D10, owner decision B of 23 November 2026: local history on save. Each successful Save or
+/// Save As of a file keeps the bytes just written, and before them the bytes that save replaced
+/// when history does not already end with those. So the version listed before the newest is
+/// exactly what the file held before that save. The copies live in `LocalHistoryStore`, never
+/// beside the document; nothing is kept for an untitled document or for Save Copy.
+@MainActor enum LocalHistory {
+    /// Checks point this at a store in a folder of their own.
+    static var store = LocalHistoryStore(directory: AppStorage.url(.localHistory))
+    /// An isolated support directory (a check, the bundle smoke run) keeps no history unless
+    /// the check sets this.
+    static var allowsIsolatedSupport = false
+    static var isEnabled: Bool {
+        EditorServices.current?.settings?.value.keepsLocalHistory != false
+            && (AppStorage.permitsLegacyDefaults || allowsIsolatedSupport)
+    }
+    /// SHA-256 of the newest version this process recorded for a path, so that an ordinary save
+    /// neither reads the file it replaces nor waits for the store's queue.
+    private static var newest: [String: String] = [:]
+    struct PendingSave {
+        let path: String
+        let replaced: Data?
+    }
+    /// Called before the write. Nil when this save keeps no history.
+    static func pendingSave(to destination: URL, byteCount: Int, knownDigest: String?) -> PendingSave? {
+        guard isEnabled, destination.isFileURL else { return nil }
+        let path = TextDocument.canonicalDiskURL(destination).path, limit = store.limits.versionBytes
+        let last = newest[path] ?? store.latestDigest(forPath: path)
+        if let knownDigest, knownDigest == last { return PendingSave(path: path, replaced: nil) }
+        guard let read = try? WorkspaceStore.readRegularFileSample(destination, maximumBytes: limit),
+            read.sample.digest != last
+        else { return PendingSave(path: path, replaced: nil) }
+        return PendingSave(path: path, replaced: read.data)
+    }
+    /// Called after the write succeeded. The store copies and prunes on its own queue; a failure
+    /// there never fails the save and is said in the status line.
+    static func recordSave(
+        _ save: PendingSave, bytes: Data, format: FileFormat, replacedFormat: FileFormat?, in document: TextDocument
+    ) {
+        if bytes.count <= store.limits.versionBytes { newest[save.path] = WorkspaceStore.fingerprint(bytes) }
+        let id = document.runtimeID
+        store.record(
+            path: save.path, bytes: bytes, format: format, replaced: save.replaced, replacedFormat: replacedFormat
+        ) { error in
+            guard let reason = error?.localizedDescription else { return }
+            DispatchQueue.main.async {
+                NSLog("TextTank: an earlier version could not be kept: %@", reason)
+                let open = NSDocumentController.shared.documents.compactMap { $0 as? TextDocument }
+                open.first { $0.runtimeID == id }?.presentation?.showTransientStatus(
+                    "Saved. An earlier version could not be kept: " + reason, seconds: 8)
+            }
+        }
+    }
+    /// A file that was renamed or moved takes its history with it. After Save As the earlier
+    /// file is still there and keeps its own history; the new file starts one.
+    static func fileURLChanged(from old: URL?, to new: URL?) {
+        guard isEnabled, let old, let new, old != new, !FileManager.default.fileExists(atPath: old.path) else {
+            return
+        }
+        if let digest = newest.removeValue(forKey: old.path) { newest[new.path] = digest }
+        store.relocate(from: old.path, to: new.path)
+    }
+    static func forgetNewest(path: String? = nil) {
+        if let path { newest[path] = nil } else { newest = [:] }
+    }
+    /// Nil when Compare with Earlier Version can run for this document; otherwise why not.
+    static func unavailableReason(for document: TextDocument) -> String? {
+        if !isEnabled { return "Local history is turned off." }
+        if document.diskURL == nil { return "Save the document first. Earlier versions are kept each time a file is saved." }
+        if EditorServices.current?.compare?.hasSavedSource(document) != true {
+            return SizePolicy.standard.reviewTextNotice
+        }
+        return nil
+    }
+    nonisolated static func size(_ bytes: Int) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
+    }
+    /// One row of the list: when, what and how large.
+    nonisolated static func title(_ version: LocalHistoryVersion) -> String {
+        let dates = DateFormatter()
+        dates.dateStyle = .medium
+        dates.timeStyle = .medium
+        let when = dates.string(from: version.savedAt)
+        return (version.kind == .saved ? "Saved " + when : "On disk before the save of " + when)
+            + " · " + size(version.byteCount)
+    }
+    /// The earlier version as fixed text for the comparison's read-only side.
+    nonisolated static func snapshot(_ bytes: Data, of version: LocalHistoryVersion, name: String) throws
+        -> TextSnapshot
+    {
+        let decoded =
+            try version.format.map { try FileCodec.decode(bytes, encoding: $0.encoding) } ?? FileCodec.decode(bytes)
+        let label = String((name + " — earlier version, " + title(version)).prefix(240))
+        return try TextSnapshot(
+            bytes: Data(decoded.text.utf8), source: .checkpoint(version.id), label: label, format: decoded.format)
+    }
+    enum ClearChoice: Equatable { case cancel, thisFile, everything }
+    /// The words of the Clear Local History confirmation (DS-41, DS-43): what is deleted, how
+    /// much, that the files themselves stay, and that it cannot be undone.
+    struct ClearPrompt: Equatable {
+        let name: String?
+        let own: LocalHistoryUsage?
+        let all: LocalHistoryUsage
+        var offersThisFile: Bool { (own?.versions ?? 0) > 0 && name != nil }
+        var message: String { "Clear local history?" }
+        static func versions(_ count: Int) -> String { count == 1 ? "1 earlier version" : "\(count) earlier versions" }
+        static func files(_ count: Int) -> String { count == 1 ? "1 file" : "\(count) files" }
+        var detail: String {
+            var text =
+                "TextTank keeps \(Self.versions(all.versions)) of \(Self.files(all.files)), \(LocalHistory.size(all.bytes)) in all, as private copies on this Mac."
+            if offersThisFile, let own, let name {
+                text += " “\(name)” accounts for \(Self.versions(own.versions)), \(LocalHistory.size(own.bytes)) of that."
+            }
+            return text
+                + " Clearing deletes those copies. Your files and open documents are not changed. This cannot be undone."
+        }
+        var buttons: [(title: String, choice: ClearChoice)] {
+            [("Cancel", .cancel)] + (offersThisFile ? [("Clear This File’s History", .thisFile)] : [])
+                + [("Clear All History", .everything)]
+        }
+    }
+    /// A sheet on the workspace window, never an app-modal alert (DS-44). Replaced in checks.
+    static var confirmClear: (ClearPrompt, NSWindow, @escaping (ClearChoice) -> Void) -> Void = { prompt, window, reply in
+        let alert = TTAlert()
+        alert.alertStyle = .warning
+        alert.messageText = prompt.message
+        alert.informativeText = prompt.detail
+        for (index, button) in prompt.buttons.enumerated() {
+            let added = alert.addButton(withTitle: button.title, role: index == 0 ? .cancel : .action)
+            added.hasDestructiveAction = index != 0
+        }
+        alert.beginSheetModal(for: window) { response in
+            guard case .button(let index) = TTAlert.Result(response), prompt.buttons.indices.contains(index) else {
+                reply(.cancel)
+                return
+            }
+            reply(prompt.buttons[index].choice)
+        }
+    }
+    /// Compare › Clear Local History…. Says so when there is nothing to clear.
+    static func clear(for document: TextDocument?, in host: WorkspaceWindowController) {
+        let path = document?.diskURL?.path
+        let all = store.usage(), own = path.map { store.usage(forPath: $0) }
+        guard all.versions > 0 else {
+            host.showTabMessage("No earlier versions are kept, so there is nothing to clear.")
+            return
+        }
+        guard let window = host.window, window.attachedSheet == nil else { return }
+        let prompt = ClearPrompt(name: path == nil ? nil : document?.displayName, own: own, all: all)
+        confirmClear(prompt, window) { [weak host] choice in
+            do {
+                switch choice {
+                case .cancel: return
+                case .thisFile:
+                    guard let path else { return }
+                    let removed = try store.clear(path: path)
+                    forgetNewest(path: path)
+                    host?.showTabMessage("Cleared \(ClearPrompt.versions(removed.versions)) of this file.")
+                case .everything:
+                    let removed = try store.clear()
+                    forgetNewest()
+                    host?.showTabMessage(
+                        "Cleared \(ClearPrompt.versions(removed.versions)) of \(ClearPrompt.files(removed.files)).")
+                }
+            } catch { host?.showTabMessage("Local history could not be cleared. " + error.localizedDescription) }
+        }
     }
 }

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 import Darwin
+import os
 
 @main struct FileChecks {
     private static func pairedRecovery(in directory: URL) throws {
@@ -358,6 +359,194 @@ import Darwin
                 try original.write(to: file)
                 try store.confirm(kept)
                 try store.remove(id: id, throughRevision: 4)
+            }
+            Checks.section("V10 local history store") {
+                final class Clock: @unchecked Sendable {
+                    private let lock = NSLock()
+                    private var value = Date(timeIntervalSince1970: 1_800_000_000)
+                    var now: Date {
+                        lock.lock()
+                        defer { lock.unlock() }
+                        return value
+                    }
+                    func advance(_ seconds: TimeInterval) {
+                        lock.lock()
+                        value += seconds
+                        lock.unlock()
+                    }
+                }
+                func mode(_ url: URL) throws -> Int {
+                    (try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as! NSNumber).intValue
+                }
+                func record(
+                    _ store: LocalHistoryStore, _ path: String, _ text: String, replaced: String? = nil
+                ) throws {
+                    let failure = OSAllocatedUnfairLock<Error?>(initialState: nil)
+                    store.record(
+                        path: path, bytes: Data(text.utf8), format: FileFormat(),
+                        replaced: replaced.map { Data($0.utf8) }
+                    ) { error in failure.withLock { $0 = error } }
+                    store.waitUntilIdle()
+                    if let error = failure.withLock({ $0 }) { throw error }
+                }
+                func texts(_ store: LocalHistoryStore, _ path: String) throws -> [String] {
+                    try store.versions(forPath: path).map {
+                        String(decoding: try store.data(forPath: path, version: $0.id), as: UTF8.self)
+                    }
+                }
+                let base = root.appendingPathComponent("local-history-checks", isDirectory: true)
+                let home = base.appendingPathComponent("LocalHistory", isDirectory: true)
+                let clock = Clock()
+                let store = LocalHistoryStore(directory: home, clock: { clock.now })
+                let a = "/synthetic/project/a.txt", b = "/synthetic/project/b.txt"
+                check(
+                    try store.versions(forPath: a).isEmpty && store.latestDigest(forPath: a) == nil
+                        && !FileManager.default.fileExists(atPath: home.path),
+                    "V10 reading an empty history creates nothing")
+                for text in ["one", "two", "three"] {
+                    try record(store, a, text)
+                    clock.advance(1)
+                }
+                check(try texts(store, a) == ["three", "two", "one"], "V10 three saves list three versions, newest first")
+                let listed = try store.versions(forPath: a)
+                check(
+                    listed.allSatisfy { $0.kind == .saved && $0.format == FileFormat() } && listed.map(\.byteCount) == [5, 3, 3]
+                        && listed[0].sha256 == WorkspaceStore.fingerprint(Data("three".utf8))
+                        && store.latestDigest(forPath: a) == listed[0].sha256,
+                    "V10 each version records its date, size, digest and encoding")
+                try record(store, a, "three")
+                check(try texts(store, a) == ["three", "two", "one"], "V10 identical consecutive versions are stored once")
+                let folders = try FileManager.default.contentsOfDirectory(at: home, includingPropertiesForKeys: nil)
+                let files = try FileManager.default.contentsOfDirectory(at: folders[0], includingPropertiesForKeys: nil)
+                check(
+                    try folders.count == 1 && folders[0].lastPathComponent == WorkspaceStore.fingerprint(Data(a.utf8))
+                        && mode(home) == 0o700 && mode(folders[0]) == 0o700 && files.count == 4
+                        && files.allSatisfy { try mode($0) == 0o600 }
+                        && !FileManager.default.fileExists(atPath: "/synthetic"),
+                    "V10 one private folder per file, named by its path's digest, never beside the document")
+                let manifest =
+                    try JSONSerialization.jsonObject(
+                        with: Data(contentsOf: folders[0].appendingPathComponent("manifest.json"))) as! [String: Any]
+                check(
+                    manifest["version"] as? Int == 1 && manifest["path"] as? String == a
+                        && (manifest["versions"] as? [[String: Any]])?.count == 3,
+                    "V10 the manifest is a versioned record of the file's path and versions")
+                try record(store, b, "new", replaced: "was on disk")
+                check(
+                    try texts(store, b) == ["new", "was on disk"]
+                        && store.versions(forPath: b).map(\.kind) == [.saved, .replaced],
+                    "V10 bytes a save replaced are kept before the bytes it wrote")
+                clock.advance(1)
+                try record(store, b, "newer", replaced: "new")
+                check(
+                    try texts(store, b) == ["newer", "new", "was on disk"],
+                    "V10 replaced bytes that history already ends with are not kept twice")
+                // Twenty a file.
+                let c = "/synthetic/project/c.txt"
+                for index in 0..<21 {
+                    clock.advance(1)
+                    try record(store, c, "version \(index)")
+                }
+                let twenty = try texts(store, c)
+                check(
+                    twenty.count == 20 && twenty.first == "version 20" && twenty.last == "version 1"
+                        && !twenty.contains("version 0"),
+                    "V10 the twenty-first version evicts the oldest")
+                let cFolder = home.appendingPathComponent(WorkspaceStore.fingerprint(Data(c.utf8)))
+                check(
+                    try FileManager.default.contentsOfDirectory(atPath: cFolder.path).filter { $0.hasSuffix(".bytes") }
+                        .count == 20,
+                    "V10 an evicted version's bytes are deleted")
+                check(
+                    store.usage() == LocalHistoryUsage(files: 3, versions: 26, bytes: 11 + 19 + twenty.reduce(0) { $0 + $1.utf8.count })
+                        && store.usage(forPath: a) == LocalHistoryUsage(files: 1, versions: 3, bytes: 11),
+                    "V10 usage counts files, versions and bytes")
+                // Thirty days.
+                clock.advance(30 * 24 * 60 * 60 - 60)
+                try record(store, a, "four")
+                check(
+                    try texts(store, a) == ["four", "three", "two", "one"] && texts(store, c).count == 20,
+                    "V10 a version just inside thirty days is kept")
+                clock.advance(45)
+                let pruned = OSAllocatedUnfairLock<Bool>(initialState: false)
+                store.prune { _ in pruned.withLock { $0 = true } }
+                store.waitUntilIdle()
+                check(
+                    try pruned.withLock { $0 } && texts(store, a) == ["four"] && texts(store, b).isEmpty
+                        && texts(store, c).count == 16 && !texts(store, c).contains("version 4")
+                        && texts(store, c).last == "version 5",
+                    "V10 versions older than thirty days are removed, oldest first, and an emptied file's folder with them")
+                check(
+                    try FileManager.default.contentsOfDirectory(atPath: home.path).count == 2,
+                    "V10 a file with no version left has no folder")
+                // 200 MB in all, here scaled down; and the per-version size limit.
+                var limits = LocalHistoryLimits()
+                check(
+                    limits.versionsPerFile == 20 && limits.maximumAge == 30 * 24 * 60 * 60
+                        && limits.totalBytes == 200_000_000 && limits.versionBytes == 32 * 1024 * 1024,
+                    "V10 the documented limits: 20 versions, 30 days, 200 MB, 32 MiB a version")
+                limits.totalBytes = 1000
+                limits.versionBytes = 600
+                let smallHome = base.appendingPathComponent("Small", isDirectory: true)
+                let small = LocalHistoryStore(directory: smallHome, limits: limits, clock: { clock.now })
+                let x = "/synthetic/x.txt", y = "/synthetic/y.txt"
+                let block = { (letter: String) in String(repeating: letter, count: 400) }
+                try record(small, x, block("a"))
+                clock.advance(1)
+                try record(small, y, block("b"))
+                clock.advance(1)
+                check(small.usage().bytes == 800, "V10 fixture: 800 bytes of history under a 1000 byte limit")
+                try record(small, x, block("c"))
+                check(
+                    try texts(small, x) == [block("c")] && texts(small, y) == [block("b")] && small.usage().bytes == 800,
+                    "V10 over the total limit the oldest version of any file goes first")
+                try record(small, y, String(repeating: "z", count: 601))
+                check(
+                    try texts(small, y) == [block("b")] && small.usage().bytes == 800,
+                    "V10 a save above the per-version size limit is not kept")
+                // A rename takes the history along and joins one already there.
+                let z = "/synthetic/z.txt"
+                clock.advance(1)
+                try record(small, z, "zed")
+                small.relocate(from: x, to: z)
+                small.waitUntilIdle()
+                check(
+                    try texts(small, x).isEmpty && texts(small, z) == ["zed", block("c")]
+                        && !FileManager.default.fileExists(
+                            atPath: smallHome.appendingPathComponent(WorkspaceStore.fingerprint(Data(x.utf8))).path),
+                    "V10 relocating joins the moved history with the destination's, in date order")
+                // Damage and absence are reported, never papered over.
+                let zVersions = try small.versions(forPath: z)
+                let zFolder = smallHome.appendingPathComponent(WorkspaceStore.fingerprint(Data(z.utf8)))
+                let blob = zFolder.appendingPathComponent(zVersions[0].id.uuidString + ".bytes")
+                try Data("zEd".utf8).write(to: blob)
+                rejects("V10 bytes that no longer match their digest are refused", expecting: LocalHistoryError.damaged) {
+                    _ = try small.data(forPath: z, version: zVersions[0].id)
+                }
+                rejects("V10 an unknown version is reported as missing", expecting: LocalHistoryError.missing) {
+                    _ = try small.data(forPath: z, version: UUID())
+                }
+                try record(small, smallHome.appendingPathComponent("inside.txt").path, "never")
+                check(
+                    small.usage().files == 2,
+                    "V10 a file inside the store gets no history of its own")
+                // Clear: this file, then everything, and nothing else.
+                let stranger = smallHome.appendingPathComponent("stranger.txt")
+                let strangerFolder = smallHome.appendingPathComponent("not-a-digest", isDirectory: true)
+                try Data("keep".utf8).write(to: stranger)
+                try FileManager.default.createDirectory(at: strangerFolder, withIntermediateDirectories: false)
+                check(
+                    try small.clear(path: y) == LocalHistoryUsage(files: 1, versions: 1, bytes: 400)
+                        && texts(small, y).isEmpty && small.versions(forPath: z).count == 2,
+                    "V10 clearing one file's history leaves the others")
+                check(
+                    try small.clear().versions == 2 && small.usage() == LocalHistoryUsage(files: 0, versions: 0, bytes: 0)
+                        && Set(FileManager.default.contentsOfDirectory(atPath: smallHome.path))
+                            == ["stranger.txt", "not-a-digest"]
+                        && Data(contentsOf: stranger) == Data("keep".utf8),
+                    "V10 clearing everything removes the store's own folders and nothing else")
+                check(try store.clear().files == 2 && store.usage().versions == 0, "V10 the first store clears too")
+                try FileManager.default.removeItem(at: base)
             }
             Checks.section("F149 byte-exact recovery revision identity") {
                 let exactID = UUID()
