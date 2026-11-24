@@ -881,13 +881,13 @@ import Darwin
             pd.presentationRoot.subviews.compactMap { $0 as? StatusBadgeRow }.first,
             "R2 actual target status row")
         host.activate(pa)
-        _ = status.menuProvider?(.wrap)
+        _ = status.menuProvider?(.encoding)
         check(
             host.active === pd && responderBelongsTo(last) && last.selectionRanges == ranges,
             "R2 V3-04 status popup changes global and native typing target without changing Clone selection")
         window.makeFirstResponder(pd.findField)
         let statusResponder = window.firstResponder
-        _ = status.menuProvider?(.wrap)
+        _ = status.menuProvider?(.encoding)
         check(
             window.firstResponder === statusResponder && pd.findField.currentEditor() === statusResponder,
             "R2 V3-04 status popup preserves its own field editor")
@@ -1009,7 +1009,7 @@ import Darwin
                 "R3 actual status row")
             let savedEditor = presentation.activeEditor
             host.activate(other)
-            _ = status.menuProvider?(.wrap)
+            _ = status.menuProvider?(.encoding)
             check(
                 host.active === presentation
                     && (window.firstResponder as? NSView)?.isDescendant(of: savedEditor) == true,

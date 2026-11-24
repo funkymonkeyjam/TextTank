@@ -253,14 +253,18 @@ extension DocumentChecks {
             if NSApp.mainWindow !== window { window.resignMain() }
             delegate.noteActive(controller)
             let indentTitles = controller.statusOptionsMenu("indent")?.items.map(\.title) ?? []
-            let zoomTitles = controller.statusOptionsMenu("font")?.items.map(\.title) ?? []
             check(
                 indentTitles.first == "Indentation for this document"
                     && !indentTitles.contains { $0.localizedCaseInsensitiveContains("view") },
                 "the status menu says indentation belongs to the document, not to a view")
+            // The text size is no menu of the row: it is one of the statistics of the active
+            // view, in the position field's tooltip.
+            controller.refreshStatusDetails()
             check(
-                zoomTitles.contains("Text size for this view"),
-                "the status menu still says text size belongs to the view")
+                controller.statusOptionsMenu("font") == nil
+                    && controller.statusStatistics.filter { $0.hasPrefix("Text size ") && $0.hasSuffix(" pt") }.count
+                        == 1,
+                "the status row still reports the text size of the active view")
             // Choices made for this document and this view after it opened.
             document.editor.configureTabWidth(2, useTabs: true)
             for _ in 0..<3 { document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "zoomIn")) }

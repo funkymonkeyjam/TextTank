@@ -484,9 +484,14 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
         overflow.menu = more
         let moreName = "More status fields. Shows the fields that do not fit."
         ControlPresentation.label(moreName, control: overflow)
-        overflow.toolTip = "Shows the status fields that do not fit in the window."
-        overflow.isHidden = true
-        stack.addArrangedSubview(overflow)
+        // The same help every status pull-down carries, on the control and on its cell, which is
+        // the element assistive technology reads.
+        let moreHelp = "Shows the status fields that do not fit in the window."
+        overflow.setAccessibilityHelp(moreHelp)
+        overflow.cell?.setAccessibilityHelp(moreHelp)
+        overflow.toolTip = moreHelp
+        // In the row only while a field has collapsed: a hidden control would still be a status
+        // control with no element for assistive technology to reach.
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
@@ -562,9 +567,11 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
         // Keep a stable visual order even when selection controls appear between existing fields.
         // The More menu stays at the trailing edge.
         for control in popups { stack.removeArrangedSubview(control) }
-        stack.removeArrangedSubview(overflow)
         for control in popups { stack.addArrangedSubview(control) }
-        stack.addArrangedSubview(overflow)
+        if overflow.superview != nil {
+            stack.removeArrangedSubview(overflow)
+            stack.addArrangedSubview(overflow)
+        }
         needsLayout = true
     }
     private func makeControl(_ field: StatusField) -> any StatusFieldControl {
@@ -674,7 +681,12 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
             let shouldHide = hidden.contains(popup.field)
             if popup.isHidden != shouldHide { popup.isHidden = shouldHide }
         }
-        if overflow.isHidden != hidden.isEmpty { overflow.isHidden = hidden.isEmpty }
+        if hidden.isEmpty, overflow.superview != nil {
+            stack.removeArrangedSubview(overflow)
+            overflow.removeFromSuperview()
+        } else if !hidden.isEmpty, overflow.superview == nil {
+            stack.addArrangedSubview(overflow)
+        }
         if label.stringValue != text { label.stringValue = text }
         super.layout()
     }

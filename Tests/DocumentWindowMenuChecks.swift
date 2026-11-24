@@ -1004,25 +1004,32 @@ extension DocumentChecks {
         section("audit25 command refusal and menu validation", #line) {
             let (doc, controller, _) = try tab("audit25-commands")
             doc.editor.text = "safe"
-            let font = try requireValue(controller.statusOptionsMenu("font"), "fixture: catalog font menu")
-            let zoom = try requireValue(
-                font.items.first { $0.representedObject as? String == "zoomIn" }, "fixture: Zoom In context action")
+            // The status row lists no catalogue command any more (each field lists only its
+            // own), so these two are read where they now live: the menu bar.
+            @MainActor func barItem(_ command: String) -> NSMenuItem? {
+                func find(_ menu: NSMenu) -> NSMenuItem? {
+                    for item in menu.items where !item.isHidden {
+                        if item.representedObject as? String == command { return item }
+                        if let found = item.submenu.flatMap(find) { return found }
+                    }
+                    return nil
+                }
+                return NSApp.mainMenu.flatMap(find)
+            }
+            let zoom = try requireValue(barItem("zoomIn"), "fixture: View > Zoom In")
             check(
                 zoom.title == EditorCommand.zoomIn.title
-                    && zoom.keyEquivalent == EditorCommand.zoomIn.defaultMenuShortcut,
-                "DS20 status commands share catalog titles and fixed menu shortcuts")
+                    && zoom.keyEquivalent == EditorCommand.zoomIn.defaultMenuShortcut
+                    && controller.statusOptionsMenu("font") == nil && controller.statusOptionsMenu("bookmarks") == nil,
+                "DS20 the commands the status row used to list share catalog titles and fixed menu shortcuts in the menu bar")
             let priorSettings = sessionDelegate.settings.value
             var shortcutSettings = priorSettings
             shortcutSettings.setShortcut("k", for: "bookmarkNext")
             try sessionDelegate.settings.save(shortcutSettings)
-            let bookmarks = try requireValue(
-                controller.statusOptionsMenu("bookmarks"), "fixture: catalog bookmark menu")
-            let next = try requireValue(
-                bookmarks.items.first { $0.representedObject as? String == "bookmarkNext" },
-                "fixture: Next Bookmark context action")
+            let next = try requireValue(barItem("bookmarkNext"), "fixture: Find > Bookmarks > Next Bookmark")
             check(
                 next.title == EditorCommand.bookmarkNext.title && next.keyEquivalent == "k",
-                "DS20 status commands share the user's current main-menu shortcut")
+                "DS20 the menu-bar command shows the user's current shortcut")
             try sessionDelegate.settings.save(priorSettings)
             let before = doc.editor.revision, generation = doc.editor.selectionGeneration
             rejects("F281 the shared dispatcher rejects an unknown command") {

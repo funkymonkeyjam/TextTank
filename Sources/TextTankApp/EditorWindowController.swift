@@ -661,6 +661,10 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     }
     /// The one command of a status field that runs directly (DS-20: the same actions the menu
     /// bar's Find > Go to Line… and View > Syntax Highlighting > Choose Language… send).
+    /// View > Syntax Highlighting > Choose Language…, sent down the responder chain like Go to
+    /// Line, so it acts on the tab that has the keyboard and is disabled when there is none
+    /// (DS-21). The status row's language field runs the same command.
+    @objc func chooseLanguage(_ sender: Any?) { runStatusCommand(.language) }
     func runStatusCommand(_ field: StatusField) {
         guard !statusClosed, focusPresentationChrome(explicit: false) else { return }
         EditorServices.current?.noteActiveController(self)
@@ -696,30 +700,18 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     func statusOptionsMenu(_ key: StatusField) -> NSMenu? {
         guard let doc = document as? TextDocument else { return nil }
         let editor = activeEditor, info = editor.statusInfo
-        let app = EditorServices.current
         let menu = NSMenu()
         menu.autoenablesItems = false
+        // No status menu lists a catalogue command any more: each lists only what belongs to
+        // its own field, and the commands the menu bar has are reached there.
         func add(
             _ title: String, _ action: Selector, _ target: AnyObject, _ value: String? = nil, _ checked: Bool = false,
             _ enabled: Bool = true
         ) {
-            let item = menu.addItem(
+            menu.addItem(
                 title: title, action: action, target: target, representedObject: value,
                 isEnabled: enabled, state: checked ? .on : .off)
-            if let value, let command = EditorCommand(rawValue: value) {
-                // The key the menu bar shows for the command now, whoever assigned it (DS-20).
-                if let shortcut = app?.settings?.menuShortcut(for: command) {
-                    item.keyEquivalent = shortcut.key
-                    item.keyEquivalentModifierMask = shortcut.modifiers
-                } else {
-                    item.keyEquivalent = command.defaultMenuShortcut
-                }
-                item.isEnabled =
-                    enabled && (!TTEditor.commandModifiesText(command.nativeIdentifier) || !editor.readOnly)
-                if command.isToggle { item.state = isChecked(command, in: editor) ? .on : .off }
-            }
         }
-        func command(_ value: EditorCommand) { add(value.title, #selector(statusOption(_:)), self, value.rawValue) }
         func heading(_ title: String) {
             menu.addItem(title: title, action: nil, isEnabled: false)
         }
@@ -753,31 +745,16 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                     cachedEndings.isEmpty ? [0: "CRLF", 1: "CR", 2: "LF"][info.eol.rawValue] : cachedEndings
                 add(name, #selector(convertEOL(_:)), self, code, current == code, !editor.readOnly)
             }
-        case .wrap:
-            add("Wrap Lines", #selector(statusOption(_:)), self, "wrap.on", editor.wrap)
-            add("No Wrap", #selector(statusOption(_:)), self, "wrap.off", !editor.wrap)
-        case .font:
-            heading("Text size for this view")
-            command(.zoomIn)
-            command(.zoomOut)
-            if let languages = app?.languages {
-                menu.addItem(.separator())
-                menu.addItem(languages.styleSettingsMenuItem())
-            }
-        case .bookmarks:
-            for value: EditorCommand in [.bookmarkToggle, .bookmarkNext, .bookmarkPrevious] { command(value) }
         case .position, .language:
             // These fields run one command when clicked and have no menu: Go to Line and the
             // language chooser.
             return nil
-        case .document, .readOnly:
-            add("Save", #selector(NSDocument.save(_:)), doc)
-            add("Save As…", #selector(NSDocument.saveAs(_:)), doc)
-            add("Read Only", #selector(TextDocument.toggleReadOnly(_:)), doc, nil, editor.readOnly)
         case .selectedCharacters, .selections:
             add("Clear Selection", #selector(statusOption(_:)), self, "clearSelection")
-        case .characters, .lines:
-            // Totals are read in the position field's tooltip; they have no commands.
+        case .characters, .lines, .wrap, .font, .bookmarks, .document, .readOnly:
+            // Not fields of the row. Totals, text size, wrapping and access are read in the
+            // position field's tooltip; their commands are in the menu bar (Find > Bookmarks,
+            // View > Zoom In, View > Wrap Lines, File > Save and Read Only).
             return nil
         }
         return menu
@@ -802,15 +779,10 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         let editor = activeEditor, info = editor.statusInfo
         switch id {
         case "tabs", "spaces": editor.configureTabWidth(info.tabWidth, useTabs: id == "tabs")
-        case "wrap.on", "wrap.off": editor.wrap = id == "wrap.on"
         case "clearSelection": Self.clearSelection(in: editor, macros: EditorServices.current?.macros)
         default:
             if id.hasPrefix("width."), let width = Int(id.dropFirst(6)) {
                 editor.configureTabWidth(width, useTabs: info.useTabs)
-            } else {
-                do { try perform(command: id) } catch is EditorCommandFailure {
-                    reportCommandFailure(EditorCommandFailure.unsupported.localizedDescription)
-                } catch { TTAlert.explain(error) }
             }
         }
         refreshStatusDetails()

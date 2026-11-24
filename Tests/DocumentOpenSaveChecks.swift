@@ -971,7 +971,8 @@ extension DocumentChecks {
                 "a recovered document is unsaved and titled after the file it is a draft of")
             check(
                 status.stringValue.contains("Recovered draft of shopping list.txt")
-                    && status.stringValue.contains("saved \(stampText)") && status.textColor == .secondaryLabelColor,
+                    && status.stringValue.contains("saved \(stampText)") && status.textColor == .labelColor
+                    && status.font?.fontDescriptor.symbolicTraits.contains(.bold) == false,
                 "the status line of a recovered document says what it came from and when")
             edit(recovered, "draft text, edited")
             recovered.flushRecovery()

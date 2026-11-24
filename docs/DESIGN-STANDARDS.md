@@ -376,7 +376,7 @@ These are the remaining actions from the review. Each names the work that owns i
 3. Session restore and recovered copies that keep their file (DS-92): tab stage 4 and package 23.
 4. Physical toolbar customization and VoiceOver interaction remain unverified. Standard items, favorites, native accessibility names and isolated configuration round trips have native check coverage (DS-30, DS-70).
 5. Physical keyboard and VoiceOver interaction with Settings and the automation, macro and Run managers remain unverified. Modeless windows, owned Rules/JSON sheets, explicit Save/Cancel working copies, retained invalid input, filtered pickers and scoped native accessibility names have native check coverage (DS-44, DS-45, DS-70).
-6. Physical keyboard and VoiceOver interaction with the status row remain unverified. One-row native pop-ups, actual scoped accessibility names, minimum-width collapse/restoration, truthful save/recovery state and relocated options have native check coverage (DS-50, DS-67, DS-70).
+6. Physical keyboard and VoiceOver interaction with the status row remain unverified. One native row — the position and the language are buttons that run one command (Go to Line, the language chooser), the other fields are pull-down menus of their own commands, and a More menu holds what does not fit — actual scoped accessibility names, minimum-width collapse/restoration, truthful save/recovery state and relocated options have native check coverage (DS-50, DS-67, DS-70).
 7. Glossary, plurals and a string catalogue (DS-80 to DS-84); labels on every dialog field (DS-70):
    package 26.
 8. Measured responsiveness on large files (DS-100, DS-101).

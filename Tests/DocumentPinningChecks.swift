@@ -1168,7 +1168,7 @@ extension DocumentChecks {
             // Added on 23 November 2026: View > Syntax Highlighting > Choose Language…, the
             // filterable chooser the status bar's language field also opens. Nothing was removed.
             let chooseLanguageAdded: [[String: String]] = [
-                ["action": "chooseLanguage:", "object": "", "key": "", "modifiers": "1048576", "target": "explicit"]
+                ["action": "chooseLanguage:", "object": "", "key": "", "modifiers": "1048576", "target": "responder"]
             ]
             var accounted = identities(
                 formerCommands + deliberatelyAdded + togglePreviewAdded + quickOpenWithKey + localHistoryAdded

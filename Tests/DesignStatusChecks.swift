@@ -148,7 +148,8 @@ enum DesignStatusChecks {
             visibleLanguage.map(ObjectIdentifier.init) == languageIdentity,
             "DB-R5 resizing retains the existing native field identity")
         check(
-            row.collapsedFields.isEmpty && more.isHiddenOrHasHiddenAncestor && row.overflowItems().isEmpty,
+            row.collapsedFields.isEmpty && more.superview == nil && field(StatusBadgeRow.overflowIdentifier) == nil
+                && row.overflowItems().isEmpty,
             "SR-1 the More menu leaves the row when every field fits again")
         let visibleFields = fieldIDs.compactMap(field).filter { !$0.isHiddenOrHasHiddenAncestor }
         check(visibleFields.count == 5, "DB-R5 every field is shown again in the wide window")
@@ -398,6 +399,7 @@ enum DesignStatusChecks {
             controller.statusStatistics.contains(selectedLine)
                 && field("status.position.0")?.toolTip?.contains(selectedLine) == true,
             "DB-R3 selection details are in the position tooltip whether or not their field fits")
+        try reachabilityChecks(composition: composition, controller: controller, document: document, row: row, field: field)
         // At the minimum width a long message collapses fields; each stays reachable in More
         // with its own menu, the selection's Clear Selection included.
         controller.showTransientStatus(
@@ -460,6 +462,129 @@ enum DesignStatusChecks {
         try progressAndFollowUpChecks(composition: composition, controller: controller, document: document, row: row)
         try languageChooserChecks(
             composition: composition, controller: controller, document: document, row: row, field: field)
+    }
+
+    /// DB-R3, after the position menu: every command it listed is still reachable, in the menu
+    /// bar or in its own status field, and the two that are in no menu (Clear Selection and the
+    /// document's tabs, spaces and width) are reachable from the keyboard through the row.
+    @MainActor private static func reachabilityChecks(
+        composition: AppDelegate, controller: EditorWindowController, document: TextDocument, row: StatusBadgeRow,
+        field: (String) -> NSButton?
+    ) throws {
+        let window = try requireValue(controller.hostWindow, "fixture: window")
+        // The composition's own menu bar, for this check only: what the application pointed at
+        // before is put back, so no later section sees these menus.
+        let savedBar = NSApp.mainMenu, savedServices = NSApp.servicesMenu, savedWindows = NSApp.windowsMenu
+        let savedHelp = NSApp.helpMenu
+        composition.buildMenus()
+        defer {
+            NSApp.mainMenu = savedBar
+            NSApp.servicesMenu = savedServices
+            NSApp.windowsMenu = savedWindows
+            NSApp.helpMenu = savedHelp
+        }
+        let bar = try requireValue(NSApp.mainMenu, "fixture: the menu bar")
+        func find(_ menu: NSMenu, _ path: String, _ matches: (NSMenuItem) -> Bool) -> (path: String, item: NSMenuItem)? {
+            for item in menu.items where !item.isHidden {
+                let here = path.isEmpty ? item.title : path + " > " + item.title
+                if item.submenu == nil, matches(item) { return (here, item) }
+                if let found = item.submenu.flatMap({ find($0, here, matches) }) { return found }
+            }
+            return nil
+        }
+        let marks = document.editor.bookmarkCount
+        for (command, title) in [
+            ("bookmarkToggle", "Toggle Bookmark"), ("bookmarkNext", "Next Bookmark"),
+            ("bookmarkPrevious", "Previous Bookmark")
+        ] {
+            let found = find(bar, "") { $0.representedObject as? String == command }
+            check(
+                found?.path == "Find > Bookmarks > " + (found?.item.title ?? "") && found?.item.target == nil
+                    && found?.item.action == #selector(EditorWindowController.command(_:))
+                    && found.map { controller.validateMenuItem($0.item) } == true,
+                "DB-R3 \(title) is reachable in the menu bar under Find > Bookmarks: \(found?.path ?? "missing")")
+        }
+        if let toggle = find(bar, "", { $0.representedObject as? String == "bookmarkToggle" })?.item {
+            controller.command(toggle)
+            check(document.editor.bookmarkCount == marks + 1, "DB-R3 the menu bar's bookmark command acts on the document")
+            controller.command(toggle)
+        }
+        let selectAll = find(bar, "") { $0.action == #selector(NSText.selectAll(_:)) }
+        check(
+            selectAll?.path == "Edit > Select All" && selectAll?.item.keyEquivalent == "a",
+            "DB-R3 Select All is reachable in the menu bar: \(selectAll?.path ?? "missing")")
+        check(
+            find(bar, "", { $0.action == #selector(EditorWindowController.goToLine(_:)) })?.path == "Find > Go to Line…"
+                && find(bar, "", { $0.action == #selector(EditorWindowController.toggleWrap(_:)) })?.path
+                    == "View > Wrap Lines"
+                && find(bar, "", { $0.representedObject as? String == "zoomIn" })?.path.hasPrefix("View > ") == true
+                && find(bar, "", { $0.action == #selector(EditorWindowController.chooseLanguage(_:)) })?.path
+                    == "View > Syntax Highlighting > Choose Language…",
+            "DB-R3 Go to Line, wrapping, text size and the language are reachable in the menu bar")
+        check(
+            find(bar, "", { $0.representedObject as? String == "clearSelection" }) == nil
+                && find(bar, "", { $0.title == "Clear Selection" })?.path == "Compare > Merge Changes > Clear Selection"
+                && find(bar, "", { ["tabs", "spaces", "width.4"].contains($0.representedObject as? String ?? "") }) == nil,
+            "fixture: Clear Selection and the document's indentation are in no menu of the menu bar")
+
+        // Window > Move Focus reaches the row; the arrow keys step through its fields.
+        let host = controller.host
+        let surface = try requireValue(
+            host.groupSurfaces.values.first { $0.statusRow === row }, "fixture: the group that shows this row")
+        let ring = host.areaFocus.areas()
+        check(
+            ring.first { $0.kind == .status }?.target === field("status.position.0"),
+            "DS-73 Move Focus enters the status row at its first field")
+        window.makeFirstResponder(controller.activeEditor)
+        var moves = 0
+        while moves < ring.count, (window.firstResponder as? NSView)?.isDescendant(of: row) != true {
+            host.areaFocus.move(1)
+            moves += 1
+        }
+        check(
+            window.firstResponder === field("status.position.0"),
+            "DS-73 Window > Move Focus to Next Area puts the keyboard in the status row")
+        var visited = [(window.firstResponder as? NSView)?.identifier?.rawValue ?? ""]
+        for _ in 1..<max(1, surface.statusControls.count) {
+            let right = try requireValue(
+                NSEvent.keyEvent(
+                    with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                    context: nil, characters: String(UnicodeScalar(UInt32(NSRightArrowFunctionKey))!),
+                    charactersIgnoringModifiers: String(UnicodeScalar(UInt32(NSRightArrowFunctionKey))!),
+                    isARepeat: false, keyCode: 124), "fixture: Right Arrow")
+            surface.keyDown(with: right)
+            visited.append((window.firstResponder as? NSView)?.identifier?.rawValue ?? "")
+        }
+        check(
+            visited == [
+                "status.position.0", "status.selection.0", "status.language.0", "status.indent.0",
+                "status.encoding.0", "status.eol.0"
+            ], "DS-73 Right Arrow steps through every status field in order: \(visited)")
+        // The two commands that are in no menu, from the keyboard: the field that has the
+        // keyboard is a native pull-down, which Space opens, and its menu holds the command.
+        for (identifier, command) in [("status.selection.0", "clearSelection"), ("status.indent.0", "spaces")] {
+            let popup = try requireValue(field(identifier) as? NSPopUpButton, "fixture: \(identifier) is a pull-down")
+            popup.menu?.delegate?.menuNeedsUpdate?(popup.menu!)
+            let item = popup.menu?.items.first { $0.representedObject as? String == command }
+            check(
+                window.makeFirstResponder(popup) && window.firstResponder === popup && popup.pullsDown
+                    && popup.isEnabled && popup.focusRingType != .none && item?.isEnabled == true
+                    && item?.action != nil,
+                "DS-73 \(command) is reachable from the keyboard in the status row's \(identifier) pull-down")
+        }
+        let indent = try requireValue(field("status.indent.0") as? NSPopUpButton, "fixture: indentation field")
+        for command in ["tabs", "width.8"] {
+            indent.menu?.delegate?.menuNeedsUpdate?(indent.menu!)
+            if let item = indent.menu?.items.first(where: { $0.representedObject as? String == command }),
+                let action = item.action
+            {
+                _ = NSApp.sendAction(action, to: item.target, from: item)
+            }
+        }
+        check(
+            controller.activeEditor.statusInfo.useTabs && controller.activeEditor.statusInfo.tabWidth == 8,
+            "DS-73 the indentation field's own menu sets tabs and the width for this document")
+        window.makeFirstResponder(controller.activeEditor)
     }
 
     /// A long operation's progress and Cancel, and a message's follow-up, are controls in the row.
@@ -815,14 +940,18 @@ enum DesignStatusChecks {
         let languageMenu = languages.menu()
         check(
             languageMenu.items.first?.title == "Choose Language…"
-                && languageMenu.items.first?.action == #selector(LanguageController.chooseLanguage(_:))
-                && languageMenu.items.first?.target === languages
+                && languageMenu.items.first?.action == #selector(EditorWindowController.chooseLanguage(_:))
+                && languageMenu.items.first?.target == nil
                 && languageMenu.items.filter { !$0.isSeparatorItem }.count <= 20,
             "SR-2 the Syntax Highlighting menu starts with Choose Language… and stays within DS-23")
         let before = presented.count
+        // The item has no target: the document window that has the keyboard answers it.
         if let item = languageMenu.items.first, let action = item.action {
-            check(languages.validateMenuItem(item), "DS-21 Choose Language… is enabled while a document is active")
-            _ = NSApp.sendAction(action, to: item.target, from: item)
+            check(
+                controller.responds(to: action) && controller.validateMenuItem(item)
+                    && !composition.languages.responds(to: #selector(NSMenuItemValidation.validateMenuItem(_:))),
+                "DS-21 Choose Language… is answered and validated by the document window")
+            controller.chooseLanguage(item)
         }
         check(
             presented.count == before + 1 && presented.last?.parent === controller.hostWindow,

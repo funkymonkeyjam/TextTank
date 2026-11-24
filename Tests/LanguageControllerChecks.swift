@@ -525,9 +525,10 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
         }
         controller.detectedLanguage = { "python" }
         let item = try requireValue(controller.menu().items.first, "fixture: Choose Language… item")
-        check(controller.validateMenuItem(item), "DS-21 Choose Language… is enabled with a document")
+        check(
+            item.action == #selector(EditorWindowController.chooseLanguage(_:)) && item.target == nil,
+            "DS-21 Choose Language… is sent to the document window that has the keyboard, so it is disabled without one")
         hasEditor = false
-        check(!controller.validateMenuItem(item), "DS-21 Choose Language… is disabled without a document")
         controller.chooseLanguage(nil)
         check(presented.isEmpty && controller.chooser == nil, "SR-2 no chooser opens without a document")
         hasEditor = true
