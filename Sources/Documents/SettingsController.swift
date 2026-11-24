@@ -628,10 +628,15 @@ private final class SettingsKeyEquivalents: NSView {
             default: standard.showLineEndingsEnabled)
         // SETTINGS-ROW-EXTENSION (Appearance): View › Show › Change Bars and View › Centered Text
         // Column, each one stored choice for every editor view (DS-D13).
-        toggleRow(
+        let changeBarsRow = toggleRow(
             "settings.changeBars", .appearance, "Show change bars",
             keywords: ["modified lines", "changed lines", "change history", "edited", "unsaved"],
             \.changeBars, default: standard.changeBarsEnabled)
+        // What the bars mean, and why a document edited before the toggle has none yet (DS-85).
+        if let box = changeBarsRow.view.arrangedSubviews.first as? NSButton {
+            box.toolTip = EditorSettingsApplication.changeBarsHelp
+            box.setAccessibilityHelp(EditorSettingsApplication.changeBarsHelp)
+        }
         toggleRow(
             "settings.centeredColumn", .appearance, "Center the text in a column",
             keywords: ["centered text column", "centred", "margins", "focus", "reading width", "line length"],

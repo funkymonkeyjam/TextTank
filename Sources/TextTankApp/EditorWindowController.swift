@@ -418,6 +418,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     /// hostWindow leaves, so a hidden tab has no timer at all.
     func visibilityChanged() {
         previewVisibilityChanged()
+        EditorSettingsApplication.tabWasShown(self)
         if !isActiveTab && findPreview != nil { endFindPreview() }
         // An entry that was only being typed is not a jump: leaving the tab puts the caret back.
         if !isActiveTab && goToLineBarVisible { closeGoToLineBar(restoring: true, returningKeyboard: false) }

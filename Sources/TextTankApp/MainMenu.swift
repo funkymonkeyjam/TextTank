@@ -258,6 +258,7 @@ extension AppDelegate {
             target: settings)
         show.addItem(.separator())
         show.addItem(title: "Change Bars", action: #selector(SettingsController.toggleChangeBars(_:)), target: settings)
+            .toolTip = EditorSettingsApplication.changeBarsHelp
         view.addItem(
             title: "Centered Text Column", action: #selector(SettingsController.toggleCenteredColumn(_:)),
             target: settings)
