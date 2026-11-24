@@ -275,6 +275,166 @@ extension NSView {
     }
 }
 
+/// What was typed into Go to Line, read against the document's own line count.
+enum GoToLineEntry: Equatable {
+    /// Nothing typed yet.
+    case empty
+    /// A line the document has, and the column typed after a colon, if any. Both count from 1.
+    case target(line: Int, column: Int?)
+    /// The words to show under the field.
+    case rejected(String)
+
+    /// "Lines are 1–120." The same sentence ends every message, so the range is always in view.
+    static func range(_ lines: Int) -> String {
+        lines == 1 ? "This document has 1 line." : "Lines are 1–\(Strings.number(lines))."
+    }
+    static func hint(_ lines: Int) -> String { "\(range(lines)) Add a colon for a column, such as 12:4." }
+    /// `line` or `line:column` in ASCII digits. A colon with nothing after it yet is the line alone.
+    static func parse(_ text: String, lines: Int) -> GoToLineEntry {
+        let typed = text.trimmingCharacters(in: .whitespaces)
+        if typed.isEmpty { return .empty }
+        let parts = typed.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false).map {
+            $0.trimmingCharacters(in: .whitespaces)
+        }
+        func digits(_ part: String) -> Bool { !part.isEmpty && part.utf8.allSatisfy { (48...57).contains($0) } }
+        guard digits(parts[0]), parts.count == 1 || parts[1].isEmpty || digits(parts[1]) else {
+            return .rejected("Enter a line number, such as 12 or 12:4. \(range(lines))")
+        }
+        guard let line = Int(parts[0]), line >= 1, line <= lines else {
+            let shown = parts[0].count > 12 ? "that number" : "line \(parts[0])"
+            return .rejected("There is no \(shown). \(range(lines))")
+        }
+        guard parts.count == 2, !parts[1].isEmpty else { return .target(line: line, column: nil) }
+        // A column past the end of the line goes to the end of the line.
+        guard let column = Int(parts[1]) else { return .target(line: line, column: Int(Int32.max)) }
+        guard column >= 1 else { return .rejected("Columns start at 1. Enter a line and a column, such as 12:4.") }
+        return .target(line: line, column: column)
+    }
+}
+
+/// Go to Line as one field in the find bar's place (DS-10, DS-44): a label, the field, the valid
+/// range or what is wrong with the entry in words (DS-45), and the two ways out.
+final class EditorGoToLineBar: NSView {
+    private static let rowHeight: CGFloat = 24, rowPitch: CGFloat = 26, gap: CGFloat = 4, fieldWidth: CGFloat = 96
+    let label = NSTextField(labelWithString: "Go to line:")
+    let field = NSTextField()
+    /// Announced when it changes: the range, or why the entry cannot be used (DS-72).
+    let message = AnnouncingLabel(labelWithString: "")
+    let goButton = NSButton(title: "Go", target: nil, action: nil)
+    let cancelButton = NSButton(title: "Cancel", target: nil, action: nil)
+    /// Escape while a button of the bar has the keyboard (DS-73).
+    var onCancel: (() -> Void)?
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        identifier = .init("editor.goToLine")
+        field.identifier = .init("goToLine.line")
+        field.setAccessibilityLabel("Line number in Go to Line")
+        message.identifier = .init("goToLine.message")
+        message.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        message.textColor = .secondaryLabelColor
+        message.lineBreakMode = .byTruncatingTail
+        message.setAccessibilityLabel("Lines in document")
+        goButton.identifier = .init("goToLine.go")
+        goButton.setAccessibilityLabel("Go to the line entered")
+        cancelButton.identifier = .init("goToLine.cancel")
+        cancelButton.setAccessibilityLabel("Close Go to Line and return to where the caret was")
+        [label, field, message, goButton, cancelButton].forEach { addSubview($0) }
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
+    /// Shows the range, or the reason an entry is rejected. A rejected entry also marks the field
+    /// with the same words as its help and tooltip; the label is never the only carrier (DS-45, DS-62).
+    func show(_ text: String, rejected: Bool) {
+        message.textColor = rejected ? .labelColor : .secondaryLabelColor
+        message.toolTip = text
+        field.toolTip = rejected ? text : nil
+        field.setAccessibilityHelp(rejected ? text : nil)
+        message.setAccessibilityLabel(rejected ? "Input needs correction in Go to Line" : "Lines in document")
+        message.stringValue = text
+    }
+    var entryIsMarked: Bool { field.toolTip != nil }
+    override func cancelOperation(_ sender: Any?) { onCancel?() }
+    /// One row while the message fits beside the field; below that it has a row of its own, so
+    /// the range is not cut short in a narrow group (DS-67).
+    private var compact: Bool { bounds.width < 700 }
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: NSView.noIntrinsicMetric, height: compact ? Self.rowPitch + Self.rowHeight : Self.rowHeight)
+    }
+    override func setFrameSize(_ newSize: NSSize) {
+        let wasCompact = compact
+        super.setFrameSize(newSize)
+        if wasCompact != compact { invalidateIntrinsicContentSize() }
+        needsLayout = true
+    }
+    override func layout() {
+        super.layout()
+        func fitting(_ view: NSView) -> CGFloat { ceil(view.fittingSize.width) }
+        let top = bounds.height - Self.rowHeight
+        var x: CGFloat = 0
+        for (view, width) in [(label as NSView, fitting(label)), (field, Self.fieldWidth)] {
+            view.frame = NSRect(x: x, y: top, width: width, height: Self.rowHeight)
+            x += width + Self.gap
+        }
+        var trailing = bounds.width
+        for button in [cancelButton, goButton] {
+            let width = fitting(button)
+            trailing -= width
+            button.frame = NSRect(x: trailing, y: top, width: width, height: Self.rowHeight)
+            trailing -= Self.gap
+        }
+        message.frame =
+            compact
+            ? NSRect(x: 0, y: 0, width: bounds.width, height: Self.rowHeight)
+            : NSRect(x: x, y: top, width: max(0, trailing - x), height: Self.rowHeight)
+        label.centreTextVertically()
+        message.centreTextVertically()
+    }
+}
+
+/// What Go to Line found when it opened, so that typing can show a line and Escape can put the
+/// caret, every selection and the scroll position back exactly.
+@MainActor final class LineJumpPreview {
+    weak var editor: TTEditor?
+    let revision: UInt
+    private let selections: [TTSelectionRange]
+    private let mayMoveSelection: Bool
+    private let topLine: Int, topSubline: Int, horizontalOffset: Int
+    private var moved = false
+    init(_ editor: TTEditor) {
+        self.editor = editor
+        revision = editor.revision
+        selections = editor.selectionRanges
+        mayMoveSelection = !editor.selectionIsRectangular
+        topLine = editor.firstVisibleDocumentLine
+        topSubline = editor.firstVisibleSubline
+        horizontalOffset = editor.horizontalScrollOffset
+    }
+    /// The saved positions are byte offsets into the text as it was.
+    private var current: TTEditor? {
+        guard let editor, EditorLifetime.isOpen(editor), editor.revision == revision else { return nil }
+        return editor
+    }
+    /// Shows the line without it counting as a jump: nothing is recorded, and a macro recording
+    /// in this view is left alone because the caret is not moved while one runs (F277).
+    func show(line: Int, column: Int?, recording: Bool) {
+        guard mayMoveSelection, !recording, let editor = current else { return }
+        if let column { editor.show(line: line, column: column) } else { _ = editor.goToLine(line) }
+        moved = true
+    }
+    func restoreSelection() {
+        guard moved, let editor = current else { return }
+        _ = editor.setSelectionRanges(selections)
+    }
+    /// After the bar has left and the editor has its height back.
+    func restoreScroll() {
+        guard let editor = current else { return }
+        if editor.firstVisibleDocumentLine != topLine || editor.firstVisibleSubline != topSubline {
+            editor.scrollTo(documentLine: topLine, subline: topSubline)
+        }
+        if editor.horizontalScrollOffset != horizontalOffset { editor.horizontalScrollOffset = horizontalOffset }
+        moved = false
+    }
+}
+
 /// What a live preview shows in the bar's count label: a count, or why there is none.
 struct InlineFindPublication {
     var count = ""

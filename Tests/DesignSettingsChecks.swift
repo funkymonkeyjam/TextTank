@@ -655,7 +655,12 @@ extension DesignSettingsChecks {
         document.editor.text = "one\ntwo"
         document.editor.setSavePoint()
         controller.goToLine(nil)
-        try checkInputs("TextTank.GoToLine", [("Line number in Go to Line", "AXTextField")], focus: true).close()
+        let lineField = controller.goToLineBar.field
+        check(
+            controller.goToLineBarVisible && lineField.accessibilityLabel() == "Line number in Go to Line"
+                && lineField.accessibilityRole() == .textField && lineField.currentEditor() != nil,
+            "DG AX Go to Line is one named inline text field that takes the keyboard")
+        controller.cancelGoToLine(nil)
         composition.showDocumentTabs(nil)
         try checkInputs(
             "TextTank.OpenDocuments", [("Filter open documents by name or path", "AXTextField")], focus: true

@@ -4,8 +4,8 @@ import EditorBridge
 @testable import TextTankCore
 @testable import TextTankRuntime
 
-/// The compact find bar, driven through the tab adapter the application uses, its workspace
-/// window and the shared Find state. Nothing here needs the
+/// The compact find bar and Go to Line as one inline field, driven through the tab adapter the
+/// application uses, its workspace window and the shared Find state. Nothing here needs the
 /// window to be key, and no panel, sheet, alert or menu is presented.
 @MainActor enum FindBarNativeChecks {
     private static func open(_ name: String, _ text: String, in folder: URL) throws -> (
@@ -33,6 +33,8 @@ import EditorBridge
     private static func press(_ selector: Selector, in field: NSTextField, of tab: EditorWindowController) -> Bool {
         tab.control(field, textView: NSTextView(), doCommandBy: selector)
     }
+    private static let returnKey = #selector(NSResponder.insertNewline(_:))
+    private static let escapeKey = #selector(NSResponder.cancelOperation(_:))
     /// Everything shown is inside the bar and nothing overlaps; every control (a label is not
     /// one) is at least 20 by 20 points (DS-67, DS-74).
     private static func sound(_ bar: NSView) -> Bool {
@@ -67,8 +69,18 @@ import EditorBridge
         try? bitmap.representation(using: .png, properties: [:])?.write(
             to: TestPaths.artifacts.appendingPathComponent("find-bar-\(name).png"))
     }
+    private struct Place: Equatable {
+        var anchors: [Int], carets: [Int], topLine: Int, topSubline: Int, across: Int
+    }
+    private static func place(_ editor: TTEditor) -> Place {
+        Place(
+            anchors: editor.selectionRanges.map(\.anchor), carets: editor.selectionRanges.map(\.caret),
+            topLine: editor.firstVisibleDocumentLine, topSubline: editor.firstVisibleSubline,
+            across: editor.horizontalScrollOffset)
+    }
 
     static func run(root: URL, app: AppDelegate, host: WorkspaceWindowController) throws {
+        entryRules()
         let window = try requireValue(host.window, "fixture: workspace window")
         let originalSize = window.contentView?.bounds.size ?? NSSize(width: 1080, height: 720)
         let search = app.searchController
@@ -92,6 +104,49 @@ import EditorBridge
         let (document, tab) = try open("lines.txt", lines, in: folder)
         defer { document.close() }
         try compactFind(tab: tab, app: app, host: host, window: window)
+        try goToLine(tab: tab, document: document, app: app, host: host, window: window, folder: folder)
+    }
+
+    // MARK: What may be typed into Go to Line
+
+    private static func entryRules() {
+        typealias E = GoToLineEntry
+        check(
+            E.parse("12", lines: 40) == .target(line: 12, column: nil)
+                && E.parse(" 12:4 ", lines: 40) == .target(line: 12, column: 4)
+                && E.parse("40", lines: 40) == .target(line: 40, column: nil)
+                && E.parse("1", lines: 1) == .target(line: 1, column: nil),
+            "Go to Line reads a line, and a line and column, both counted from 1")
+        check(
+            E.parse("12:", lines: 40) == .target(line: 12, column: nil) && E.parse("", lines: 40) == .empty
+                && E.parse("   ", lines: 40) == .empty,
+            "a colon with no column yet is the line alone, and an empty field is not an error")
+        for entry in ["0", "41", "999999999999999999999999"] {
+            if case .rejected(let reason) = E.parse(entry, lines: 40) {
+                check(
+                    reason.hasPrefix("There is no ") && reason.hasSuffix("Lines are 1–40."),
+                    "Go to Line \(entry) says in words that the line does not exist and names the range")
+            } else {
+                check(false, "Go to Line \(entry) is rejected")
+            }
+        }
+        for entry in ["two", "-1", "12:x", "1.5", ":4", "12:4:1", "１２"] {
+            if case .rejected(let reason) = E.parse(entry, lines: 40) {
+                check(
+                    reason.hasPrefix("Enter a line number, such as 12 or 12:4.") && reason.hasSuffix("Lines are 1–40."),
+                    "Go to Line “\(entry)” says what to enter and names the range")
+            } else {
+                check(false, "Go to Line “\(entry)” is rejected")
+            }
+        }
+        if case .rejected(let reason) = E.parse("12:0", lines: 40) {
+            check(reason.hasPrefix("Columns start at 1."), "column 0 is rejected in words")
+        } else {
+            check(false, "column 0 is rejected")
+        }
+        check(
+            E.hint(1_234).hasPrefix("Lines are 1–1,234.") && E.hint(1).hasPrefix("This document has 1 line."),
+            "the hint names the valid range, with the number written for reading (DS-83)")
     }
 
     // MARK: Compact Find
@@ -321,5 +376,247 @@ import EditorBridge
         check(options.showsWords && bar.frame.height == 24, "widening the window brings back one row and the words")
         tab.hideFind(nil)
         check(keyboard(in: editor, of: host) && !tab.findBarVisible, "Escape or Done still closes the bar and returns to the text")
+    }
+
+    // MARK: Go to Line
+
+    private static func goToLine(
+        tab: EditorWindowController, document: TextDocument, app: AppDelegate, host: WorkspaceWindowController,
+        window: NSWindow, folder: URL
+    ) throws {
+        let search = app.searchController, editor = tab.primaryEditor
+        let bar = tab.goToLineBar, field = bar.field
+        window.makeFirstResponder(editor)
+
+        // Find is open with text and a live selection; Go to Line takes its place.
+        _ = editor.setSelectionAnchor(0, caret: 0)
+        tab.showFind(nil)
+        typed("line 39", into: tab.findField, of: tab)
+        spinUntil("fixture: the live count") { !tab.findCount.stringValue.isEmpty }
+        tab.hideFind(nil)
+        try require(editor.setSelectionAnchor(10, caret: 25), "fixture: a selection on line 1")
+        editor.scrollTo(documentLine: 50, subline: 0)
+        window.contentView?.layoutSubtreeIfNeeded()
+        tab.showFind(nil)
+        window.contentView?.layoutSubtreeIfNeeded()
+        let before = place(editor)
+        try require(before.topLine == 50 && before.anchors == [10], "fixture: line 51 at the top, a selection kept")
+        NativeFixtureEnvironment.announcements = []
+        tab.goToLine(nil)
+        window.contentView?.layoutSubtreeIfNeeded()
+        check(
+            tab.goToLineBarVisible && !tab.findBarVisible && bar.superview === tab.findBar?.superview
+                && bar.frame.minX == tab.findBar?.frame.minX && bar.frame.maxY == tab.findBar?.frame.maxY,
+            "Go to Line is one inline field above the text, in the find bar's place, and the find bar is closed")
+        check(
+            presentedFormWindow == nil && !FormPanel.visible.contains { $0.window.identifier?.rawValue == "TextTank.GoToLine" },
+            "no Go to Line panel opens: there is one presentation")
+        check(
+            search.sharedQuery == "line 39" && tab.findField.stringValue == "line 39",
+            "the shared Find text is untouched by Go to Line taking the bar's place")
+        check(
+            bar.frame.height == 24 && sound(bar) && field.currentEditor() != nil && field.stringValue == "1"
+                && bar.label.stringValue == "Go to line:" && field.accessibilityLabel() == "Line number in Go to Line",
+            "the bar is one row: a labelled field that has the keyboard and holds the caret's line")
+        check(
+            bar.message.stringValue == "Lines are 1–400. Add a colon for a column, such as 12:4."
+                && field.placeholderString == "1–400" && !bar.entryIsMarked
+                && NativeFixtureEnvironment.announcements.contains(bar.message.stringValue),
+            "the hint shows the valid range, 1–400, and how to give a column")
+        check(place(editor) == before, "opening Go to Line moves neither the caret, the selection nor the text")
+
+        // Typing a line the document has shows it, and nothing is recorded as a jump.
+        let revision = editor.revision
+        typed("300", into: field, of: tab)
+        check(
+            editor.statusInfo.line == 300 && tab.goToLineBarVisible && editor.revision == revision && !editor.modified
+                && editor.firstVisibleDocumentLine != before.topLine,
+            "typing a valid line shows that line while the field stays open, with nothing added to Undo")
+        // Out of range, and not a number: words beside the field, and the text is where it was.
+        NativeFixtureEnvironment.announcements = []
+        typed("500", into: field, of: tab)
+        check(
+            bar.message.stringValue == "There is no line 500. Lines are 1–400." && bar.entryIsMarked
+                && field.accessibilityHelp() == bar.message.stringValue
+                && NativeFixtureEnvironment.announcements.contains(bar.message.stringValue),
+            "a line past the end says so in words beside the field, marks the field and is announced")
+        picture(tab, "go-to-line-rejected")
+        check(place(editor) == before, "and the caret, the selection and the scroll position are back where they were")
+        check(
+            press(returnKey, in: field, of: tab) && tab.goToLineBarVisible && field.stringValue == "500"
+                && place(editor) == before && presentedFormWindow == nil && window.attachedSheet == nil,
+            "Return on an out-of-range line keeps the entry and moves nothing: no alert")
+        typed("12:4", into: field, of: tab)
+        check(
+            editor.statusInfo.line == 12 && editor.statusInfo.column == 4 && !bar.entryIsMarked
+                && bar.message.stringValue.hasPrefix("Lines are 1–400."),
+            "a valid entry clears the message, and 12:4 shows line 12 column 4")
+        typed("abc", into: field, of: tab)
+        check(
+            bar.message.stringValue == "Enter a line number, such as 12 or 12:4. Lines are 1–400." && bar.entryIsMarked
+                && place(editor) == before, "text that is not a number says what to enter, and moves nothing")
+        typed("", into: field, of: tab)
+        check(!bar.entryIsMarked && bar.message.stringValue.hasPrefix("Lines are 1–400."), "an emptied field is not an error")
+        check(
+            press(returnKey, in: field, of: tab) && tab.goToLineBarVisible && bar.entryIsMarked && place(editor) == before,
+            "Return on an empty field asks for a line number")
+
+        // Escape after a preview.
+        typed("350", into: field, of: tab)
+        try require(editor.statusInfo.line == 350, "fixture: line 350 is shown")
+        check(
+            press(escapeKey, in: field, of: tab) && !tab.goToLineBarVisible && !tab.findBarVisible
+                && keyboard(in: editor, of: host),
+            "Escape closes Go to Line and returns the keyboard to the text")
+        window.contentView?.layoutSubtreeIfNeeded()
+        check(
+            place(editor) == before, "Escape after a preview restores the caret, the selection and the scroll position exactly")
+
+        // Return goes there and closes.
+        tab.goToLine(nil)
+        typed("12:4", into: field, of: tab)
+        check(
+            press(returnKey, in: field, of: tab) && !tab.goToLineBarVisible && editor.statusInfo.line == 12
+                && editor.statusInfo.column == 4 && editor.selectionAnchor == editor.selectionCaret
+                && keyboard(in: editor, of: host),
+            "“12:4” and Return go to line 12, column 4, close the field and return to the text")
+        check(editor.revision == revision && !editor.modified, "Go to Line never edits the document")
+        tab.goToLine(nil)
+        typed("200:999", into: field, of: tab)
+        _ = press(returnKey, in: field, of: tab)
+        let endOfLine200 = (1...200).map { "line \($0) of the find bar fixture\n".utf8.count }.reduce(0, +) - 1
+        check(
+            editor.statusInfo.line == 200 && editor.selectionCaret == endOfLine200,
+            "a column past the end of the line is the end of the line")
+
+        // The buttons, for the pointer; and the status row's entry.
+        let item = NSMenuItem(title: "Go to Line…", action: nil, keyEquivalent: "")
+        item.representedObject = "goToLine"
+        tab.perform(NSSelectorFromString("statusOption:"), with: item)
+        check(tab.goToLineBarVisible && field.stringValue == "200", "the status row's Go to Line… opens the same field")
+        typed("7", into: field, of: tab)
+        bar.goButton.performClick(nil)
+        check(!tab.goToLineBarVisible && editor.statusInfo.line == 7, "Go does what Return does")
+        let atSeven = place(editor)
+        tab.goToLine(nil)
+        typed("90", into: field, of: tab)
+        bar.cancelButton.performClick(nil)
+        window.contentView?.layoutSubtreeIfNeeded()
+        check(!tab.goToLineBarVisible && place(editor) == atSeven, "Cancel does what Escape does")
+        tab.goToLine(nil)
+        tab.goToLine(nil)
+        check(tab.goToLineBarVisible && field.currentEditor() != nil, "Command-L again keeps the one field and its keyboard")
+        typed("90", into: field, of: tab)
+        tab.showFind(nil)
+        window.contentView?.layoutSubtreeIfNeeded()
+        check(
+            tab.findBarVisible && !tab.goToLineBarVisible && place(editor).anchors == atSeven.anchors
+                && place(editor).carets == atSeven.carets && tab.findField.stringValue == "line 39",
+            "Find takes Go to Line's place: an entry that was only typed is not a jump, and the Find text is still there")
+        tab.hideFind(nil)
+
+        // The Go to Line bar at a narrow width.
+        check(host.setEditorLayout(.twoColumns), "fixture: two editor groups")
+        window.setContentSize(window.contentMinSize)
+        tab.goToLine(nil)
+        window.contentView?.layoutSubtreeIfNeeded()
+        check(
+            bar.frame.width < 520 && bar.frame.height == 50 && sound(bar) && bar.message.frame.width == bar.bounds.width,
+            "in a narrow group the range has a row of its own, so it is not cut short (DS-67)")
+        picture(tab, "go-to-line-narrow")
+        _ = press(escapeKey, in: field, of: tab)
+        _ = host.setEditorLayout(.single)
+        window.setContentSize(NSSize(width: 1400, height: 700))
+
+        // A macro recording: showing a line is not a jump; Return is, exactly as before (F277).
+        let macros = app.macros
+        let priorInvalidated = macros.onInvalidated
+        var discarded: [String] = []
+        macros.onInvalidated = { discarded.append($0) }
+        defer { macros.onInvalidated = priorInvalidated }
+        window.makeFirstResponder(editor)
+        EditorServices.current?.noteActiveController(tab)
+        _ = editor.setSelectionAnchor(0, caret: 0)
+        macros.startRecording()
+        try require(macros.isRecording(in: editor), "fixture: recording in this view")
+        editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
+        tab.goToLine(nil)
+        typed("300", into: field, of: tab)
+        check(
+            editor.selectionCaret == 1 && discarded.isEmpty && !bar.entryIsMarked,
+            "while a macro is recording, typing a line does not move the caret or touch the recording")
+        _ = press(escapeKey, in: field, of: tab)
+        check(
+            try macros.finishRecording()?.steps.count == 1 && discarded.isEmpty,
+            "a Go to Line that was cancelled leaves the recording saveable")
+        window.makeFirstResponder(editor)
+        macros.startRecording()
+        editor.executeCommand(TTEditorCommandIdentifier(rawValue: "charRight"))
+        tab.goToLine(nil)
+        typed("3", into: field, of: tab)
+        check(
+            press(returnKey, in: field, of: tab) && editor.statusInfo.line == 3 && discarded.count == 1
+                && discarded.last?.contains("Go to Line") == true,
+            "Return in Go to Line during a recording moves the caret and discards the recording, with the reason")
+        rejects("Go to Line cannot silently save a partial recording", message: "Go to Line") {
+            _ = try macros.finishRecording()
+        }
+        macros.onInvalidated = priorInvalidated
+
+        // Another tab: an entry that was only typed does not survive leaving the tab.
+        _ = editor.setSelectionAnchor(10, caret: 25)
+        let held = place(editor)
+        tab.goToLine(nil)
+        typed("380", into: field, of: tab)
+        let (other, otherTab) = try open("other.txt", "one\ntwo\nthree\n", in: folder)
+        window.contentView?.layoutSubtreeIfNeeded()
+        check(
+            host.active === otherTab && !tab.goToLineBarVisible && place(editor).anchors == held.anchors
+                && place(editor).carets == held.carets,
+            "switching to another tab closes Go to Line and puts the caret and selection back")
+
+        // A one-line document, and a document with many lines.
+        otherTab.primaryEditor.text = "only"
+        otherTab.goToLine(nil)
+        check(
+            otherTab.goToLineBar.message.stringValue.hasPrefix("This document has 1 line.")
+                && otherTab.goToLineBar.field.placeholderString == "1", "a one-line document says so (DS-83)")
+        typed("2", into: otherTab.goToLineBar.field, of: otherTab)
+        check(
+            otherTab.goToLineBar.message.stringValue == "There is no line 2. This document has 1 line.",
+            "and rejects line 2 in words")
+        // The text changes under the open field: the range follows.
+        otherTab.primaryEditor.text = (1...250_000).map { "row \($0)" }.joined(separator: "\n")
+        spinUntil("the range follows the document") {
+            otherTab.goToLineBar.message.stringValue.hasPrefix("Lines are 1–250,000.")
+        }
+        check(
+            otherTab.goToLineBar.field.placeholderString == "1–250,000" && !otherTab.goToLineBar.entryIsMarked,
+            "when the document changes under the open field, the range and the entry are read against the new text")
+        typed("249999:5", into: otherTab.goToLineBar.field, of: otherTab)
+        let started = Date()
+        check(
+            press(returnKey, in: otherTab.goToLineBar.field, of: otherTab) && otherTab.primaryEditor.statusInfo.line == 249_999
+                && otherTab.primaryEditor.statusInfo.column == 5 && Date().timeIntervalSince(started) < 1,
+            "Go to Line works in a document of 250,000 lines")
+        // Closing the document with the field open.
+        otherTab.goToLine(nil)
+        typed("5", into: otherTab.goToLineBar.field, of: otherTab)
+        other.updateChangeCount(.changeCleared)
+        other.close()
+        check(!otherTab.goToLineBarVisible, "closing the document closes its Go to Line")
+
+        // A Preview-alone tab shows its source first, and going back to Preview closes the field.
+        let (notes, notesTab) = try open("notes.md", "# Notes\n\none\ntwo\nthree\n", in: folder)
+        defer { notes.close() }
+        try require(notesTab.setViewMode(.preview) && notesTab.split.isHidden, "fixture: notes.md shows Preview alone")
+        notesTab.goToLine(nil)
+        check(
+            notesTab.viewMode == .both && !notesTab.split.isHidden && notesTab.goToLineBarVisible,
+            "Go to Line in a tab that shows Preview alone shows the source beside the preview first")
+        typed("4", into: notesTab.goToLineBar.field, of: notesTab)
+        check(
+            notesTab.setViewMode(.preview) && !notesTab.goToLineBarVisible && notesTab.primaryEditor.statusInfo.line == 1,
+            "choosing Preview closes Go to Line, which acts on the hidden source, and no jump was made")
     }
 }

@@ -28,6 +28,10 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     let replaceMatchButton = NSButton(title: "Replace", target: nil, action: nil)
     let replaceAllButton = NSButton(title: "Replace All", target: nil, action: nil)
     private(set) var findBar: EditorFindBar?
+    /// Go to Line, in the find bar's place: one of the two is shown, or neither.
+    let goToLineBar = EditorGoToLineBar()
+    private var lineJump: LineJumpPreview?
+    var goToLineBarVisible: Bool { !goToLineBar.isHidden }
     /// DS-35, one Find: what this bar last sent to or took from the shared Find text. A field
     /// that no longer matches was changed here and is shared; otherwise the shared text is shown.
     private var sharedQuerySeen = "", sharedReplacementSeen = ""
@@ -38,6 +42,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         menu.popUp(positioning: nil, at: NSPoint(x: 0, y: view.bounds.height + 4), in: view)
     }
     private var splitBelowFindBar: NSLayoutConstraint?
+    private var splitBelowGoToLineBar: NSLayoutConstraint?
     private var splitBelowTabs: NSLayoutConstraint?
     var findBarVisible: Bool { findBar?.isHidden == false }
     private let statusLabel = NSTextField(labelWithString: "Ready")
@@ -170,7 +175,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     }
     /// Reading currentEditor never creates the window's shared field editor.
     private func ownsFindFieldEditor(_ responder: NSResponder) -> Bool {
-        let fields: [NSTextField] = [findField, replaceField]
+        let fields: [NSTextField] = [findField, replaceField, goToLineBar.field]
         return fields.contains { field in
             guard let current = field.currentEditor() else { return false }
             return current === responder
@@ -289,9 +294,17 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         // The bar is out of the way until Find is chosen, so the text is the hostWindow's main surface.
         search.isHidden = true
         findBar = search
+        let lineBar = goToLineBar
+        lineBar.isHidden = true
+        lineBar.field.delegate = self
+        lineBar.goButton.target = self
+        lineBar.goButton.action = #selector(commitGoToLine(_:))
+        lineBar.cancelButton.target = self
+        lineBar.cancelButton.action = #selector(cancelGoToLine(_:))
+        lineBar.onCancel = { [weak self] in self?.cancelGoToLine(nil) }
         // The source split sits inside the container that can place a preview beside it.
         let content = viewContainer
-        [search, content, statusDetails].forEach {
+        [search, lineBar, content, statusDetails].forEach {
             $0.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview($0)
         }
@@ -300,6 +313,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             search.topAnchor.constraint(equalTo: root.topAnchor, constant: 4),
             search.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 8),
             search.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -8),
+            lineBar.topAnchor.constraint(equalTo: root.topAnchor, constant: 4),
+            lineBar.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 8),
+            lineBar.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -8),
             content.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             content.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             content.bottomAnchor.constraint(equalTo: statusDetails.topAnchor, constant: -2),
@@ -308,6 +324,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             statusDetails.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -2)
         ])
         splitBelowFindBar = content.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 4)
+        splitBelowGoToLineBar = content.topAnchor.constraint(equalTo: lineBar.bottomAnchor, constant: 4)
         splitBelowTabs = content.topAnchor.constraint(equalTo: root.topAnchor)
         splitBelowTabs?.isActive = true
         statusLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
@@ -339,6 +356,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 guard let self, !self.statusClosed, let editor = changed else { return }
                 if editor === self.primaryEditor || editor === self.secondary {
                     self.updateInlineFindValidation()
+                    if let jump = self.lineJump, jump.editor === editor, jump.revision != editor.revision {
+                        self.lineJumpDocumentChanged()
+                    }
                     if let preview = self.findPreview, preview.editor === editor, preview.revision != editor.revision {
                         self.scheduleFindPreview()
                     }
@@ -383,6 +403,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     func visibilityChanged() {
         previewVisibilityChanged()
         if !isActiveTab && findPreview != nil { endFindPreview() }
+        // An entry that was only being typed is not a jump: leaving the tab puts the caret back.
+        if !isActiveTab && goToLineBarVisible { closeGoToLineBar(restoring: true, returningKeyboard: false) }
         let visible = isPresented && !statusClosed && statusTimerInterval != nil
         if !visible {
             statusTimer?.invalidate()
@@ -718,48 +740,133 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         }
         refreshStatusDetails()
     }
-    /// Search > Go to Line… and the position field of the status bar.
-    private var linePanel: FormPanel?
+    /// A line and a column, both counted from 1, the column with tab stops as the status row
+    /// counts them. A column past the end of the line is the end of the line. The same macro
+    /// rule as `goToLine(_:in:macros:)`.
+    static func goTo(line: Int, column: Int?, in editor: TTEditor, macros: MacroController?) -> Bool {
+        guard let column else { return goToLine(line, in: editor, macros: macros) }
+        let jump = { () -> Bool in
+            guard line >= 1, line <= editor.statusInfo.lines, column >= 1 else { return false }
+            editor.show(line: line, column: column)
+            return true
+        }
+        guard let macros else { return jump() }
+        return macros.unrecordedJump(in: editor, reason: "Go to Line is not recorded in macros yet.", jump)
+    }
+    /// Find > Go to Line… (Command-L) and the position field of the status row: one field in the
+    /// find bar's place (DS-10, DS-44). Typing a line the document has shows it; Return goes
+    /// there; Escape puts the caret, the selection and the scroll position back.
     @objc func goToLine(_ sender: Any?) {
-        guard !statusClosed else { return }
+        guard !statusClosed, (document as? TextDocument)?.isOpen == true else { return }
         revealSource()
-        if let linePanel {
-            linePanel.window.makeKeyAndOrderFront(nil)
+        host.activate(self, focus: false)
+        let field = goToLineBar.field
+        if !goToLineBarVisible {
+            // An unaccepted Find selection goes back first, so it is not what Escape restores.
+            if findBarVisible {
+                endFindPreview()
+                cancelInlineSearch()
+            }
+            let editor = activeEditor
+            lastEditor = editor
+            lineJump = LineJumpPreview(editor)
+            field.stringValue = String(editor.statusInfo.line)
+            showLineRange(for: editor)
+            keepingScroll { showBar(.goToLine) }
+        }
+        hostWindow?.makeFirstResponder(field)
+        field.selectText(nil)
+    }
+    private func showLineRange(for editor: TTEditor) {
+        let lines = editor.statusInfo.lines
+        goToLineBar.field.placeholderString = lines == 1 ? "1" : "1–\(Strings.number(lines))"
+        goToLineBar.show(GoToLineEntry.hint(lines), rejected: false)
+    }
+    /// Reads the field against the document as it is now and shows the range or the reason.
+    /// `accepting` is Return: an empty field is then an entry that needs correcting.
+    @discardableResult private func readLineEntry(accepting: Bool) -> (line: Int, column: Int?)? {
+        guard let jump = lineJump, let editor = jump.editor, EditorLifetime.isOpen(editor) else { return nil }
+        let lines = editor.statusInfo.lines
+        var entry = GoToLineEntry.parse(goToLineBar.field.stringValue, lines: lines)
+        if accepting, entry == .empty { entry = GoToLineEntry.parse(":", lines: lines) }
+        switch entry {
+        case .target(let line, let column):
+            showLineRange(for: editor)
+            return (line, column)
+        case .empty:
+            showLineRange(for: editor)
+        case .rejected(let reason):
+            goToLineBar.show(reason, rejected: true)
+        }
+        return nil
+    }
+    private func lineEntryChanged() {
+        guard let jump = lineJump, let editor = jump.editor else { return }
+        if let target = readLineEntry(accepting: false) {
+            jump.show(
+                line: target.line, column: target.column,
+                recording: EditorServices.current?.macros?.isRecording(in: editor) == true)
+        } else {
+            // Nothing to show: the text is where it was when Go to Line opened.
+            jump.restoreSelection()
+            jump.restoreScroll()
+        }
+    }
+    /// The text changed under an open Go to Line (another view, an automation). The saved caret
+    /// and scroll position belong to the old text, so Escape now leaves the view as it is; the
+    /// range and the entry are read against the new text.
+    private func lineJumpDocumentChanged() {
+        guard let editor = lineJump?.editor, EditorLifetime.isOpen(editor) else { return }
+        lineJump = LineJumpPreview(editor)
+        readLineEntry(accepting: false)
+    }
+    /// Return, or Go. A rejected entry stays in the field with the reason beside it (DS-45):
+    /// no alert, no sound, and the caret does not move.
+    @objc func commitGoToLine(_ sender: Any?) {
+        guard goToLineBarVisible, !statusClosed, let jump = lineJump, let editor = jump.editor,
+            EditorLifetime.isOpen(editor)
+        else {
+            closeGoToLineBar(restoring: false, returningKeyboard: true)
             return
         }
-        let editor = activeEditor
-        let revision = editor.revision
-        let macros = EditorServices.current?.macros
-        let form = FormPanel(
-            title: "Go to Line", identifier: "TextTank.GoToLine", size: NSSize(width: 480, height: 300))
-        linePanel = form
-        form.onClose = { [weak self] in self?.linePanel = nil }
-        let input = form.field(
-            "Line number", value: String(editor.statusInfo.line), identifier: "goToLine.line")
-        NumericInput.configure(input)
-        form.button("Go", identifier: "goToLine.go") { [weak self, weak editor] in
-            guard let self, form.commitEditing() else { return }
-            do {
-                guard !self.statusClosed, let editor, EditorLifetime.isOpen(editor), editor.revision == revision else {
-                    throw FormFailure.documentChanged
-                }
-                guard let line = NumericInput.integer(input, signed: true),
-                    Self.goToLine(line, in: editor, macros: macros)
-                else {
-                    throw GoToLineFailure(last: editor.statusInfo.lines)
-                }
-                form.close()
-                EditorLifetime.activate(editor)
-                self.refreshStatusDetails()
-            } catch { form.showValidation(error, field: input) }
-        }.keyEquivalent = "\r"
-        form.button("Cancel", identifier: "goToLine.cancel", cancel: true) { form.close() }
-        form.window.initialFirstResponder = input
-        form.show()
+        guard let target = readLineEntry(accepting: true) else {
+            jump.restoreSelection()
+            jump.restoreScroll()
+            return
+        }
+        // This is the jump: the one a macro recording has to know about (F277).
+        guard
+            Self.goTo(line: target.line, column: target.column, in: editor, macros: EditorServices.current?.macros)
+        else {
+            goToLineBar.show(
+                "There is no line \(target.line). \(GoToLineEntry.range(editor.statusInfo.lines))", rejected: true)
+            return
+        }
+        closeGoToLineBar(restoring: false, returningKeyboard: true)
+        refreshStatusDetails()
+    }
+    /// Escape, or Cancel.
+    @objc func cancelGoToLine(_ sender: Any?) { closeGoToLineBar(restoring: true, returningKeyboard: true) }
+    /// `restoring` puts back what a typed entry was only showing. `returningKeyboard` is false
+    /// when the tab does not hold the keyboard, or is closing.
+    func closeGoToLineBar(restoring: Bool, returningKeyboard: Bool) {
+        guard goToLineBarVisible else { return }
+        let jump = lineJump
+        lineJump = nil
+        let editor = jump?.editor ?? activeEditor
+        if restoring { jump?.restoreSelection() }
+        showBar(.none)
+        if restoring, !statusClosed {
+            // The editor has its height back before the top line is put back.
+            presentationRoot.layoutSubtreeIfNeeded()
+            jump?.restoreScroll()
+        }
+        goToLineBar.show("", rejected: false)
+        if returningKeyboard { hostWindow?.makeFirstResponder(editor) }
     }
     /// Puts the caret at the start of a line, counted from 1, on the engine's own line model.
     /// False, with nothing changed, for a line the document does not have or a view that has
-    /// left its hostWindow. Does not touch a macro recording; the dialog passes the recorder.
+    /// left its hostWindow. Does not touch a macro recording; the Go to Line bar passes the recorder.
     static func goToLine(_ line: Int, in editor: TTEditor) -> Bool {
         guard EditorLifetime.isOpen(editor) else { return false }
         return goToLine(line, in: editor, macros: nil)
@@ -850,7 +957,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     }
     func prepareForClose() {
         tearDownPreview()
-        linePanel?.close()
+        closeGoToLineBar(restoring: false, returningKeyboard: false)
         saveToolbarArrangement()
         endFindPreview(restore: false)
         cancelInlineSearch()
@@ -959,11 +1066,20 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
 
         }
     }
+    private enum TopBar { case none, find, goToLine }
+    /// The find bar and Go to Line share one place above the text; showing one hides the other.
+    private func showBar(_ bar: TopBar) {
+        guard let findBar else { return }
+        let rules = [(TopBar.none, splitBelowTabs), (.find, splitBelowFindBar), (.goToLine, splitBelowGoToLineBar)]
+        rules.filter { $0.0 != bar }.forEach { $0.1?.isActive = false }
+        findBar.isHidden = bar != .find
+        goToLineBar.isHidden = bar != .goToLine
+        rules.first { $0.0 == bar }?.1?.isActive = true
+    }
     private func setFindBar(visible: Bool) {
         guard let findBar, findBar.isHidden == visible else { return }
-        splitBelowTabs?.isActive = !visible
-        findBar.isHidden = !visible
-        splitBelowFindBar?.isActive = visible
+        if visible, goToLineBarVisible { closeGoToLineBar(restoring: true, returningKeyboard: false) }
+        showBar(visible ? .find : .none)
     }
     /// A bar that appears or grows takes its height from the editor. The line at the top of each
     /// view of the text is the same line afterwards.
@@ -1236,6 +1352,11 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     /// does not hold the keyboard (its mode was changed from its tab while another tab is in
     /// use): the first responder must then stay where it is.
     func closeFindBar(returningKeyboard: Bool) {
+        // Go to Line is in the same place and also acts on the source.
+        if goToLineBarVisible {
+            closeGoToLineBar(restoring: true, returningKeyboard: returningKeyboard)
+            return
+        }
         endFindPreview()
         cancelInlineSearch()
         let editor = activeEditor
@@ -1279,11 +1400,31 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         performFind(backwards: NSApp.currentEvent?.modifierFlags.contains(.shift) == true, focusEditor: false)
     }
     func controlTextDidBeginEditing(_ notification: Notification) {
-        if let field = notification.object as? NSTextField, field === findField || field === replaceField {
+        if let field = notification.object as? NSTextField,
+            field === findField || field === replaceField || field === goToLineBar.field
+        {
             _ = focusPresentationChrome()
         }
     }
+    /// The keyboard left Go to Line for the text or another part of the window without Return or
+    /// Escape (a click in the text). The bar closes and what the person did there stands.
+    func controlTextDidEndEditing(_ notification: Notification) {
+        guard notification.object as? NSTextField === goToLineBar.field, lineJump != nil else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.lineJump != nil, self.goToLineBarVisible else { return }
+            let responder = self.hostWindow?.firstResponder
+            let inBar =
+                (responder as? NSView)?.isDescendant(of: self.goToLineBar) == true
+                || responder.map { self.goToLineBar.field.currentEditor() === $0 } == true
+            if !inBar { self.closeGoToLineBar(restoring: false, returningKeyboard: false) }
+        }
+    }
     func controlTextDidChange(_ notification: Notification) {
+        if notification.object as? NSTextField === goToLineBar.field {
+            _ = focusPresentationChrome()
+            lineEntryChanged()
+            return
+        }
         if let field = notification.object as? NSTextField, field === findField || field === replaceField {
             _ = focusPresentationChrome()
             cancelInlineSearch()
@@ -1327,6 +1468,17 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         search.showFromInline(query: findField.stringValue, replacement: replaceField.stringValue, sender: sender)
     }
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        if control === goToLineBar.field {
+            if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+                cancelGoToLine(nil)
+                return true
+            }
+            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                commitGoToLine(nil)
+                return true
+            }
+            return false
+        }
         // Down Arrow in either field opens that field's history (DS-73).
         if commandSelector == #selector(NSResponder.moveDown(_:)), control === findField || control === replaceField {
             presentFindHistory(findHistoryMenu(replacements: control === replaceField), control)
@@ -1815,12 +1967,5 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         guard editor.convertLineEndings(mode) else {
             throw DocumentActionError.lineEndingsRejected
         }
-    }
-}
-
-private struct GoToLineFailure: LocalizedError {
-    let last: Int
-    var errorDescription: String? {
-        "Enter a whole line number from 1 to \(Strings.number(last)). The document has not been changed."
     }
 }
