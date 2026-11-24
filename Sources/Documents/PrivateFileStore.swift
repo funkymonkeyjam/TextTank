@@ -680,7 +680,8 @@ package struct LocalHistoryChange: Sendable {
 /// A folder is never a dead end. If its manifest is missing or unreadable (a crash between the
 /// first version's bytes and its manifest, or damage), its versions are the `.bytes` files that
 /// are there: they count toward the limits, expire, can be cleared, and the next save of that
-/// file writes a fresh manifest naming them. Sendable boundary: the stored properties are
+/// file writes a fresh manifest naming them. A manifest of a version this build does not know is
+/// the opposite case: that folder is left entirely alone. Sendable boundary: the stored properties are
 /// immutable and all file access is confined to `queue`.
 final package class LocalHistoryStore: @unchecked Sendable {
     package let directory: URL
@@ -700,6 +701,9 @@ final package class LocalHistoryStore: @unchecked Sendable {
         var versions: [LocalHistoryVersion]
         var manifestPath: String?
         var matches: Bool
+        /// The manifest is of a version this build does not know. Such a folder is left
+        /// entirely alone: not listed, not counted, not pruned, not cleared, not written to.
+        var foreign = false
     }
     package init(
         directory: URL, limits: LocalHistoryLimits = .init(), clock: @escaping @Sendable () -> Date = { Date() }
@@ -801,7 +805,7 @@ final package class LocalHistoryStore: @unchecked Sendable {
         }.sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
     private func usageNow(_ homes: [URL]) -> LocalHistoryUsage {
-        let kept = homes.compactMap { load($0, path: nil) }.filter { !$0.versions.isEmpty }
+        let kept = homes.compactMap { load($0, path: nil) }.filter { !$0.foreign && !$0.versions.isEmpty }
         return LocalHistoryUsage(
             files: kept.count, versions: kept.reduce(0) { $0 + $1.versions.count },
             bytes: kept.reduce(0) { $0 + $1.versions.reduce(0) { $0 + $1.byteCount } })
@@ -810,6 +814,7 @@ final package class LocalHistoryStore: @unchecked Sendable {
         let homes = path.map { [folder($0)] } ?? folders()
         let removed = usageNow(homes)
         for home in homes where FileManager.default.fileExists(atPath: home.path) {
+            if load(home, path: nil)?.foreign == true { continue }
             try FileManager.default.removeItem(at: home)
         }
         return removed
@@ -822,20 +827,36 @@ final package class LocalHistoryStore: @unchecked Sendable {
         } catch let error as FileOperationFailure where error.errorNumber == ENOENT || error.errorNumber == ENOTDIR {
             return nil
         }
+        // A manifest that says it is of another version, or needs a newer reader, was written
+        // by a newer TextTank. That is not damage, and the folder is not this build's to touch.
+        struct Probe: Decodable {
+            let version: Int
+            let minimumReaderVersion: Int?
+        }
+        if let probe = try? JSONDecoder().decode(Probe.self, from: data),
+            probe.version != 1 || (probe.minimumReaderVersion ?? 1) > PersistedFormat.readerVersion
+        {
+            throw ForeignManifest()
+        }
         try PersistedFormat.check(data, context: "Local history")
         let value = try JSONDecoder().decode(Manifest.self, from: data)
-        guard value.version == 1, value.path.hasPrefix("/") else { throw LocalHistoryError.damaged }
+        guard value.path.hasPrefix("/") else { throw LocalHistoryError.damaged }
         return value
     }
+    private struct ForeignManifest: Error {}
     /// The folder's versions, oldest first, or nil when there is no folder. With a readable
     /// manifest they are the ones it names. Without one they are the `.bytes` files present,
     /// dated by when each was written; their digests are computed only when `path` is given,
     /// which is when a fresh manifest is about to name them.
     private func load(_ home: URL, path: String?) -> Loaded? {
-        if let value = try? readManifest(home) {
-            let matches = home.lastPathComponent == WorkspaceStore.fingerprint(Data(value.path.utf8))
-            return Loaded(versions: value.versions, manifestPath: value.path, matches: matches)
-        }
+        do {
+            if let value = try readManifest(home) {
+                let matches = home.lastPathComponent == WorkspaceStore.fingerprint(Data(value.path.utf8))
+                return Loaded(versions: value.versions, manifestPath: value.path, matches: matches)
+            }
+        } catch is ForeignManifest {
+            return Loaded(versions: [], manifestPath: nil, matches: false, foreign: true)
+        } catch {}
         guard let names = try? FileManager.default.contentsOfDirectory(atPath: home.path) else { return nil }
         var found: [LocalHistoryVersion] = []
         for name in names where name.hasSuffix(".bytes") {
@@ -876,6 +897,8 @@ final package class LocalHistoryStore: @unchecked Sendable {
         guard path.hasPrefix("/"), !isInsideStore(path) else { return LocalHistoryChange(newest: [:]) }
         let home = folder(path)
         let found = load(home, path: path)
+        // Kept by a newer TextTank: this save adds nothing there and says nothing about it.
+        if found?.foreign == true { return LocalHistoryChange(newest: [:]) }
         var value = Manifest(version: 1, path: path, versions: found?.versions ?? [])
         // A folder without a manifest that names this path gets one now, naming what is there:
         // the first version's manifest was never written, it was damaged, or a move was interrupted.
@@ -913,7 +936,9 @@ final package class LocalHistoryStore: @unchecked Sendable {
             return LocalHistoryChange(newest: [:])
         }
         var joined = moving.versions
-        if let existing = load(target, path: new) {
+        let existing = load(target, path: new)
+        if existing?.foreign == true { return LocalHistoryChange(newest: [:]) }
+        if let existing {
             for version in moving.versions {
                 let from = blob(source, version.id), to = blob(target, version.id)
                 if link(from.path, to.path) != 0, errno != EEXIST { try FileManager.default.copyItem(at: from, to: to) }
@@ -941,7 +966,7 @@ final package class LocalHistoryStore: @unchecked Sendable {
         let now = clock()
         var kept: [(home: URL, state: Loaded, before: [UUID])] = []
         for home in folders() {
-            guard var state = load(home, path: nil) else { continue }
+            guard var state = load(home, path: nil), !state.foreign else { continue }
             let before = state.versions.map(\.id)
             state.versions.removeAll { now.timeIntervalSince($0.savedAt) > limits.maximumAge }
             state.versions = Array(state.versions.suffix(max(0, limits.versionsPerFile)))

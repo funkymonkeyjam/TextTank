@@ -656,6 +656,35 @@ import os
                         && answers.withLock { $0?.1 } == LocalHistoryUsage(files: 1, versions: 1, bytes: 8)
                         && cleared.withLock { $0 } == 1 && replying.usage().versions == 0,
                     "F6 summary and clear answer through their completion")
+                // Fix round 2: a manifest written by a newer TextTank is not damage. Its folder is
+                // left entirely alone, whatever this build is asked to do with that file.
+                let newerHome = base.appendingPathComponent("Newer", isDirectory: true)
+                let newer = LocalHistoryStore(directory: newerHome, clock: { clock.now })
+                let n = "/synthetic/newer.txt", m = "/synthetic/moving.txt"
+                try record(newer, n, "kept by a newer build")
+                let newerFolder = folder(newer, n), newerManifest = newerFolder.appendingPathComponent("manifest.json")
+                let fixture = Data(
+                    #"{"entries":[{"blob":"x"}],"minimumReaderVersion":2,"path":"/synthetic/newer.txt","version":2}"#.utf8)
+                try fixture.write(to: newerManifest)
+                let untouched = try FileManager.default.contentsOfDirectory(atPath: newerFolder.path).sorted()
+                check(
+                    try newer.versions(forPath: n).isEmpty && newer.latestDigest(forPath: n) == nil
+                        && newer.usage() == LocalHistoryUsage(files: 0, versions: 0, bytes: 0),
+                    "R2 a version-2 manifest is not read as version 1, and its folder is not counted")
+                clock.advance(40 * 24 * 60 * 60)
+                try record(newer, n, "a save by this build")
+                try record(newer, m, "moving in")
+                newer.relocate(from: m, to: n)
+                newer.prune()
+                newer.waitUntilIdle()
+                check(
+                    try newer.clear(path: n).versions == 0 && newer.clear().versions == 1,
+                    "R2 clearing does not count or remove a newer build's folder")
+                check(
+                    try Data(contentsOf: newerManifest) == fixture
+                        && FileManager.default.contentsOfDirectory(atPath: newerFolder.path).sorted() == untouched
+                        && untouched.count == 2,
+                    "R2 a save, a move into it, expiry and Clear leave a version-2 folder exactly as it was")
                 try FileManager.default.removeItem(at: base)
             }
             Checks.section("F149 byte-exact recovery revision identity") {
