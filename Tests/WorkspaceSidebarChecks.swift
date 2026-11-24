@@ -9,10 +9,12 @@ import EditorBridge
 /// through the application's own menu, workspace window and browser. Nothing here needs the
 /// window to be key, and no panel, sheet or alert is presented.
 @MainActor enum WorkspaceSidebarChecks {
-    private static func key(_ code: UInt16, _ characters: String, in window: NSWindow) throws -> NSEvent {
+    private static func key(
+        _ code: UInt16, _ characters: String, in window: NSWindow, flags: NSEvent.ModifierFlags = []
+    ) throws -> NSEvent {
         try requireValue(
             NSEvent.keyEvent(
-                with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: window.windowNumber,
                 context: nil, characters: characters, charactersIgnoringModifiers: characters, isARepeat: false,
                 keyCode: code), "fixture: key event")
     }
@@ -215,11 +217,67 @@ import EditorBridge
                 && abs(frame(sidebar).width - CGFloat(WorkspaceSidebarGeometry.defaultWidth)) < 0.5
                 && abs(frame(groups).maxX - window.contentView!.bounds.maxX) < 0.5,
             "it sits at the left edge at its default width and the editor groups take the rest")
+        /// Presses Tab or Shift-Tab from the sidebar's list until the keyboard leaves the sidebar.
+        func tabOut(forward: Bool) throws -> Bool {
+            window.makeFirstResponder(browser.outline)
+            for _ in 0..<8 where host.sidebarHasKeyboard {
+                let responder = try requireValue(window.firstResponder as? NSView, "fixture: key view in the sidebar")
+                responder.keyDown(
+                    with: try key(48, forward ? "\t" : "\u{19}", in: window, flags: forward ? [] : .shift))
+            }
+            return !host.sidebarHasKeyboard
+        }
         check(
             sequence(first: browser.firstKeyView, next: { $0.nextKeyView }).prefix(8).contains {
                 $0 === browser.outline
-            } && browser.lastKeyView.nextKeyView === plainTab.keyboardFocusView,
-            "the sidebar's controls are in key-view order and Tab from the last one reaches the text")
+            } && browser.lastKeyView.nextKeyView === browser.firstKeyView,
+            "the sidebar's controls are in key-view order, in a loop that stores no view outside the sidebar")
+        check(
+            try tabOut(forward: true) && keyboard(in: plainTab.keyboardFocusView, of: host),
+            "Tab past the sidebar's last control reaches the text")
+        check(
+            try tabOut(forward: false) && keyboard(in: plainTab.keyboardFocusView, of: host),
+            "Shift-Tab before its first control reaches the text")
+        // The target is found at the key press, so it follows the tab, its mode and its closing.
+        host.activate(notesTab)
+        for forward in [true, false] {
+            check(
+                try tabOut(forward: forward) && keyboard(in: notesTab.keyboardFocusView, of: host)
+                    && !keyboard(in: plainTab.presentationRoot, of: host),
+                "after a tab switch \(forward ? "Tab" : "Shift-Tab") reaches the tab now showing, not the one before")
+        }
+        check(notesTab.setViewMode(.preview, movingFocus: false), "fixture: the active tab shows Preview")
+        let previewFocus = notesTab.keyboardFocusView
+        for forward in [true, false] {
+            check(
+                try tabOut(forward: forward) && keyboard(in: previewFocus, of: host) && previewFocus.window === window
+                    && !notesTab.primaryEditor.isDescendant(of: previewFocus),
+                "after a change to Preview \(forward ? "Tab" : "Shift-Tab") reaches the preview, not the hidden source")
+        }
+        check(notesTab.setViewMode(.source, movingFocus: false), "fixture: back to Source")
+        for forward in [true, false] {
+            check(
+                try tabOut(forward: forward) && keyboard(in: notesTab.primaryEditor, of: host),
+                "and back in Source \(forward ? "Tab" : "Shift-Tab") reaches the editor, not the removed preview")
+        }
+        let (closing, closingTab) = try open(
+            "closing.txt", "closing\n", in: root.appendingPathComponent("sidebar-closing"))
+        host.activate(closingTab)
+        check(
+            try tabOut(forward: true) && keyboard(in: closingTab.keyboardFocusView, of: host),
+            "fixture: Tab reaches a third tab")
+        window.makeFirstResponder(browser.outline)
+        closing.close()
+        let survivor = try requireValue(host.active, "fixture: a tab is active after the close")
+        for forward in [true, false] {
+            check(
+                try tabOut(forward: forward) && survivor !== closingTab
+                    && keyboard(in: survivor.keyboardFocusView, of: host)
+                    && (window.firstResponder as? NSView)?.window === window,
+                "after the active tab closes \(forward ? "Tab" : "Shift-Tab") reaches the tab that replaced it")
+        }
+        host.activate(plainTab)
+        window.makeFirstResponder(browser.outline)
         check(
             window.contentMinSize.width == 800 + 1 + CGFloat(WorkspaceSidebarGeometry.minimumWidth)
                 && window.contentMinSize.height == 500,
@@ -371,6 +429,80 @@ import EditorBridge
                 && !host.isSidebarShown && host.lastTabMessage.contains("cannot fit the Workspace Browser"),
             "a screen that cannot fit the sidebar beside the editors refuses it with a message")
         check(snapshot() == before, "and the editor is as it was")
+        host.setSidebarShown(false)
+
+        // A restored sidebar that does not fit is kept, and shown when it next fits.
+        defer { host.sidebarAvailableContent = nil }
+        host.sidebarAvailableContent = { TabGroupExtent(width: 1000, height: 700) }
+        host.applySidebar(from: saved)
+        check(
+            !host.isSidebarShown && host.sidebarAwaitsRoom && !browser.isShown,
+            "a saved sidebar is not shown on a display too small for it")
+        let waiting = try WorkspaceLayoutState.decoded(host.captureSessionLayout().encoded())
+        check(
+            waiting.sidebarShown == true && waiting.sidebarWidth == 340,
+            "but the layout still records it as shown, so one launch on a small display does not lose it")
+        check(
+            browser.validateMenuItem(toggle) && toggle.state == .off && choose(toggle) && !host.isSidebarShown
+                && host.sidebarAwaitsRoom,
+            "the command is refused while there is no room, and the preference stays")
+        host.reconcileSidebarWithRoom()
+        check(!host.isSidebarShown, "nothing changes while the room is the same")
+        window.makeFirstResponder(plainTab.keyboardFocusView)
+        host.sidebarAvailableContent = { TabGroupExtent(width: 1400, height: 700) }
+        host.reconcileSidebarWithRoom()
+        window.contentView?.layoutSubtreeIfNeeded()
+        check(
+            host.isSidebarShown && !host.sidebarAwaitsRoom
+                && abs((host.sidebarSplit.sidebar?.frame.width ?? 0) - 340) < 0.5
+                && keyboard(in: plainTab.activeEditor, of: host),
+            "when it fits again the sidebar returns at its saved width, without taking the keyboard")
+
+        // A launch-style restore: the sidebar is applied before any document is active.
+        check(try tabOut(forward: true) && keyboard(in: plainTab.keyboardFocusView, of: host), "fixture: Tab works")
+        browser.hide()
+        host.applySidebar(from: saved)
+        host.activate(notesTab)
+        for forward in [true, false] {
+            check(
+                try tabOut(forward: forward) && host.isSidebarShown
+                    && keyboard(in: notesTab.keyboardFocusView, of: host),
+                "after a restored layout showed the sidebar \(forward ? "Tab" : "Shift-Tab") reaches the tab opened since"
+            )
+        }
+        host.activate(plainTab)
+
+        // A window that cannot grow (a full-screen tile) and is too narrow: hidden, kept, returned.
+        window.makeFirstResponder(browser.outline)
+        host.sidebarAvailableContent = { TabGroupExtent(width: 1060, height: 700) }
+        host.reconcileSidebarWithRoom()
+        check(
+            !host.isSidebarShown && host.sidebarAwaitsRoom && host.sidebarSplit.sidebar == nil
+                && host.lastTabMessage.contains("hidden because this window cannot fit it"),
+            "a shown sidebar is hidden, with a message, when the window can no longer hold its minimum")
+        check(
+            keyboard(in: plainTab.activeEditor, of: host) && snapshot() == before
+                && window.contentMinSize == NSSize(width: 800, height: 500),
+            "the keyboard returns to the text, the editor is as it was and the window minimum is the editors' own")
+        check(
+            host.captureSessionLayout().sidebarShown == true,
+            "and it is still recorded as shown")
+        host.sidebarAvailableContent = { TabGroupExtent(width: 1061, height: 500) }
+        host.reconcileSidebarWithRoom()
+        check(
+            host.isSidebarShown && !host.sidebarAwaitsRoom && keyboard(in: plainTab.activeEditor, of: host),
+            "at exactly the minimum it is shown again")
+        host.sidebarAvailableContent = { TabGroupExtent(width: 1400, height: 700) }
+        check(host.setEditorLayout(.grid2x2), "fixture: four groups fit beside the sidebar")
+        check(host.isSidebarShown && host.setEditorLayout(.single), "fixture: back to one group, sidebar kept")
+        check(
+            choose(toggle) && !host.isSidebarShown && !host.sidebarAwaitsRoom,
+            "hiding by command is not kept as waiting")
+        host.sidebarAvailableContent = { TabGroupExtent(width: 1000, height: 700) }
+        host.reconcileSidebarWithRoom()
+        host.sidebarAvailableContent = nil
+        host.reconcileSidebarWithRoom()
+        check(!host.isSidebarShown, "a sidebar the person hid does not come back by itself")
 
         // The smallest window: sidebar, two editor groups, source and preview (DS-67).
         check(host.setEditorLayout(.twoColumns), "fixture: two editor groups")
@@ -425,6 +557,70 @@ import EditorBridge
         check(moved.setViewMode(.source), "fixture: back to Source")
         host.moveTabs([try requireValue(moved.tabID, "fixture: moved tab")], target: moved.tabID!, to: .first)
         check(host.setEditorLayout(.single), "fixture: back to one group")
+
+        // The same at the minimum with one, two and four groups, every group showing Both.
+        var marked = [notesTab]
+        for index in 2...4 {
+            marked.append(try open("notes\(index).md", "# Notes \(index)\n\nText.\n", in: folder).1)
+        }
+        for layout in [LayoutKind.single, .twoColumns, .grid2x2] {
+            check(host.setEditorLayout(layout), "fixture: \(layout)")
+            for (slot, tab) in zip(host.model.groups.map(\.slot), marked) where slot != .first {
+                let id = try requireValue(tab.tabID, "fixture: tab to move")
+                host.moveTabs([id], target: id, to: slot)
+            }
+            host.activate(marked[0])
+            let shown = try host.model.groups.map { group in
+                try requireValue(
+                    group.activeTab.flatMap { host.presentation(for: $0) }, "fixture: active tab of \(group.slot)")
+            }
+            check(shown.allSatisfy { $0.setViewMode(.both, movingFocus: false) }, "fixture: every group shows Both")
+            check(host.setSidebarShown(true), "fixture: sidebar shown with \(layout)")
+            let least = window.contentMinSize
+            check(
+                least == NSSize(width: 1061, height: 500),
+                "\(layout): the window minimum with the sidebar is 1061 by 500")
+            window.setContentSize(least)
+            split.preferredWidth = CGFloat(WorkspaceSidebarGeometry.maximumWidth)
+            window.contentView?.layoutSubtreeIfNeeded()
+            let bounds = window.contentView!.bounds
+            let side = try requireValue(split.sidebar, "fixture: docked sidebar")
+            let surfaces = try host.model.groups.map {
+                try requireValue(host.groupSurfaces[$0.slot], "fixture: surface")
+            }
+            var leaves: [(String, NSView)] = [("sidebar", side)]
+            var inside = true
+            for (index, tab) in shown.enumerated() {
+                let pane = try requireValue(tab.viewContainer.preview, "fixture: preview pane \(index + 1)")
+                leaves += [("source \(index + 1)", tab.viewContainer.source), ("preview \(index + 1)", pane)]
+                inside =
+                    inside && frame(surfaces[index]).contains(frame(tab.viewContainer.source))
+                    && frame(surfaces[index]).contains(frame(pane))
+                    && frame(pane).width >= DocumentViewContainer.minimumPaneWidth - 0.5
+                    && frame(tab.viewContainer.source).width >= DocumentViewContainer.minimumPaneWidth - 0.5
+            }
+            check(
+                bounds.size == least && abs(frame(side).width - 260) < 0.5
+                    && surfaces.allSatisfy {
+                        frame($0).width >= CGFloat(TabGroupGeometry.minimumPane.width) - 0.5
+                            && frame($0).height >= CGFloat(TabGroupGeometry.minimumPane.height) - 0.5
+                    } && inside,
+                "\(layout) at 1061 by 500: the sidebar is 260, every group at least 320 by 200, every source and preview at least 120 and inside its group: "
+                    + surfaces.map { "\(Int(frame($0).width))x\(Int(frame($0).height))" }.joined(separator: " "))
+            check(
+                leaves.allSatisfy { bounds.contains(frame($0.1)) }
+                    && !leaves.indices.contains { a in
+                        leaves.indices.contains { b in
+                            a < b && frame(leaves[a].1).insetBy(dx: 0.5, dy: 0.5).intersects(frame(leaves[b].1))
+                        }
+                    },
+                "\(layout): sidebar, sources and previews never overlap")
+            browser.hide()
+            check(shown.allSatisfy { $0.setViewMode(.source, movingFocus: false) }, "fixture: back to Source")
+            window.setContentSize(NSSize(width: 1400, height: 700))
+        }
+        check(host.setEditorLayout(.single), "fixture: one group again")
+        host.activate(plainTab)
         try browser.store.removeFolder(folder)
         check(
             snapshot().revision == before.revision

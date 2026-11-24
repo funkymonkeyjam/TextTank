@@ -13,7 +13,18 @@ import AppKit
 /// The docked sidebar's root: a group named "Workspace Browser" (DS-70).
 final class WorkspaceSidebarView: NSView {
     var onEscape: (() -> Void)?
+    /// Tab (true) or Shift-Tab (false) pressed in `view`. Returns false to let AppKit handle it.
+    var onTab: ((NSView, Bool) -> Bool)?
     override func cancelOperation(_ sender: Any?) { onEscape?() }
+    /// Tab pressed in one of the sidebar's buttons arrives here on its way to the window.
+    override func keyDown(with event: NSEvent) {
+        if let forward = WorkspaceBrowserOutline.tabDirection(event), let view = window?.firstResponder as? NSView,
+            view.isDescendant(of: self), onTab?(view, forward) == true
+        {
+            return
+        }
+        super.keyDown(with: event)
+    }
 }
 
 /// Return opens the selected row and Escape gives the keyboard back to the text (DS-73).
@@ -21,9 +32,19 @@ final class WorkspaceSidebarView: NSView {
 final class WorkspaceBrowserOutline: NSOutlineView {
     var onReturn: (() -> Void)?
     var onEscape: (() -> Void)?
+    var onTab: ((NSView, Bool) -> Bool)?
+    /// True for Tab, false for Shift-Tab, nil for any other key.
+    static func tabDirection(_ event: NSEvent) -> Bool? {
+        guard event.keyCode == 48, event.modifierFlags.intersection([.command, .option, .control]).isEmpty else {
+            return nil
+        }
+        return !event.modifierFlags.contains(.shift)
+    }
     override func keyDown(with event: NSEvent) {
         let plain = event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty
-        if plain, [36, 76].contains(event.keyCode), let onReturn {
+        if let forward = Self.tabDirection(event), onTab?(self, forward) == true {
+            return
+        } else if plain, [36, 76].contains(event.keyCode), let onReturn {
             onReturn()
         } else if plain, event.keyCode == 53, let onEscape {
             onEscape()
@@ -68,6 +89,22 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
     private var keyControls: [NSView] = []
     var firstKeyView: NSView { keyControls.first ?? outline }
     var lastKeyView: NSView { keyControls.last ?? outline }
+    /// Tab or Shift-Tab in the sidebar. The next control inside the sidebar takes the keyboard;
+    /// past the last one, or before the first, it goes to the text of the tab that is active at
+    /// this moment. The target is never stored, so a tab switch, a change between Source,
+    /// Preview and Both, a closed tab or a restored layout cannot leave it pointing at a view
+    /// that is no longer on screen (DS-73). With no document open the sidebar's controls wrap.
+    func moveKeyboard(from view: NSView, forward: Bool) -> Bool {
+        let valid = keyControls.filter { $0.canBecomeKeyView && !$0.isHiddenOrHasHiddenAncestor }
+        guard let window = view.window, !valid.isEmpty else { return false }
+        let index = valid.firstIndex { view === $0 || view.isDescendant(of: $0) }
+        let next = index.map { forward ? $0 + 1 : $0 - 1 } ?? (forward ? 0 : valid.count - 1)
+        if valid.indices.contains(next) { return window.makeFirstResponder(valid[next]) }
+        if let text = host().active?.keyboardFocusView, text.window === window {
+            return window.makeFirstResponder(text)
+        }
+        return window.makeFirstResponder(valid[forward ? 0 : valid.count - 1])
+    }
     let fileChooser = WorkspaceQuickOpen()
     /// Shift-Command-O: free in the menu bar, in Scintilla's key map and in the reserved set.
     /// It is a default that gives way to a shortcut the person assigned to the same key in
@@ -383,7 +420,14 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         scroll.setContentHuggingPriority(.init(1), for: .vertical)
         scroll.setContentCompressionResistancePriority(.init(1), for: .vertical)
         keyControls = [mode, outline, open, refresh, add, remove]
-        for (view, next) in zip(keyControls, keyControls.dropFirst()) { view.nextKeyView = next }
+        // A closed loop: AppKit's own key-view walk can never leave the sidebar for a stale view.
+        // Leaving is `moveKeyboard`, which resolves the text at the key press.
+        for (view, next) in zip(keyControls, Array(keyControls.dropFirst()) + [mode as NSView]) { view.nextKeyView = next }
+        let tab: (NSView, Bool) -> Bool = { [weak self] view, forward in
+            self?.moveKeyboard(from: view, forward: forward) ?? false
+        }
+        sidebar.onTab = tab
+        outline.onTab = tab
         return sidebar
     }
     @objc func refresh(_ sender: Any?) {
