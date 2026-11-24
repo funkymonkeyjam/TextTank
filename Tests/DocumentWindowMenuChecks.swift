@@ -1802,6 +1802,76 @@ extension DocumentChecks {
             // Passive typing may select a result. Escape restores the exact opening direction.
             let priorQuery = controller.findField.stringValue
             controller.showFind(nil)
+            // Fix round 1, item 7: each option once through the control itself: a real mouse
+            // click tracked by the native segmented control (or, failing that, its own keyboard
+            // click on the key segment), never a call into our code. AppKit publishes no segment
+            // rectangles, so the click moves along the control until the wanted segment answers;
+            // a click that lands on another segment is clicked again to undo it.
+            var pressedBy = ""
+            @MainActor func press(_ option: FindOptionsControl.Option) -> Bool {
+                let control = controller.findOptions
+                controller.findBar?.layoutSubtreeIfNeeded()
+                func states() -> [Bool] { FindOptionsControl.Option.allCases.map { control.isOn($0) } }
+                func changed(_ before: [Bool]) -> [Int] {
+                    zip(before, states()).enumerated().filter { $0.1.0 != $0.1.1 }.map(\.offset)
+                }
+                if let window = control.window, !control.isHiddenOrHasHiddenAncestor {
+                    func click(_ x: CGFloat) {
+                        let point = control.convert(NSPoint(x: x, y: control.bounds.midY), to: nil)
+                        func event(_ type: NSEvent.EventType, _ number: Int) -> NSEvent? {
+                            NSEvent.mouseEvent(
+                                with: type, location: point, modifierFlags: [],
+                                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                                context: nil, eventNumber: number, clickCount: 1,
+                                pressure: type == .leftMouseDown ? 1 : 0)
+                        }
+                        guard let down = event(.leftMouseDown, 71), let up = event(.leftMouseUp, 72) else { return }
+                        // The control tracks the mouse until the button comes up: the release is queued first.
+                        NSApp.postEvent(up, atStart: false)
+                        control.mouseDown(with: down)
+                    }
+                    for x in stride(from: CGFloat(4), to: control.bounds.width, by: 8) {
+                        let before = states()
+                        click(x)
+                        let moved = changed(before)
+                        if moved == [option.rawValue] {
+                            pressedBy = "mouse"
+                            return true
+                        }
+                        if !moved.isEmpty { click(x) }
+                    }
+                }
+                for _ in 0..<control.segmentCount {
+                    let before = states()
+                    control.performClick(nil)
+                    let moved = changed(before)
+                    if moved == [option.rawValue] {
+                        pressedBy = "keyboard"
+                        return true
+                    }
+                    if !moved.isEmpty { control.performClick(nil) }
+                    (control.cell as? NSSegmentedCell)?.makeNextSegmentKey()
+                }
+                return false
+            }
+            let windowFlags = sessionDelegate.searchController
+            for option in FindOptionsControl.Option.allCases {
+                @MainActor func shared() -> Bool {
+                    switch option {
+                    case .matchCase: return windowFlags.caseButton.state == .on
+                    case .wholeWord: return windowFlags.wordButton.state == .on
+                    case .regex: return windowFlags.sharedOptions(query: "", replacement: "").mode == .regularExpression
+                    }
+                }
+                let before = controller.findOptions.isOn(option)
+                check(
+                    shared() == before && press(option) && controller.findOptions.isOn(option) != before
+                        && shared() == !before,
+                    "pressing the \(option.name) segment of the real control changes the shared option")
+                check(
+                    press(option) && controller.findOptions.isOn(option) == before && shared() == before,
+                    "pressing the \(option.name) segment again changes it back (\(pressedBy))")
+            }
             let previousWord = controller.findOptions.isOn(.wholeWord)
             controller.findOptions.toggle(.wholeWord)
             check((sessionDelegate.searchController.wordButton.state == .on) == controller.findOptions.isOn(.wholeWord)
@@ -1823,6 +1893,12 @@ extension DocumentChecks {
                     && malformed.count > 20 && controller.findField.accessibilityHelp() == malformed
                     && controller.statusText == malformed && controller.findField.stringValue == "[",
                 "an invalid pattern marks the Find field and shows the full message in the status line")
+            // Fix round 1, item 5: a search that fails is not remembered.
+            controller.findFromMenu(backwards: false)
+            spinUntil("the invalid bar Find to fail") { !controller.inlineSearchPending }
+            check(
+                !sessionDelegate.searchController.findHistory.queries.contains("["),
+                "a bar search whose expression did not compile is not put in the history")
             controller.findField.stringValue = "[a]"
             controller.controlTextDidChange(
                 Notification(name: NSControl.textDidChangeNotification, object: controller.findField))
@@ -1945,6 +2021,25 @@ extension DocumentChecks {
             _ = document.editor.setSelectionAnchor(3, caret: 1)
             controller.findField.stringValue = priorQuery
             controller.showFind(nil)
+            // Fix round 1, item 1: a recorded search could not be replayed in a large document
+            // (playback is synchronous and refuses), so the bar does not record one there.
+            let usualLargeLimit = sessionDelegate.searchController.largeDocumentUnits
+            sessionDelegate.searchController.largeDocumentUnits = 4
+            controller.findField.stringValue = "alpha"
+            _ = document.editor.setSelectionAnchor(0, caret: 0)
+            sessionDelegate.macros.startRecording()
+            controller.findFromMenu(backwards: false)
+            spinUntil("a bar Find in a large document to finish") { !controller.inlineSearchPending }
+            check(
+                document.editor.selectedText.lowercased() == "alpha",
+                "fixture: the bar search in the large document selected a match")
+            rejects(
+                "a bar search in a large document discards the recording and says why",
+                message: "document this large"
+            ) { _ = try sessionDelegate.macros.finishRecording() }
+            sessionDelegate.searchController.largeDocumentUnits = usualLargeLimit
+            _ = document.editor.setSelectionAnchor(3, caret: 1)
+            controller.findField.stringValue = priorQuery
             let beforeBarRecording = document.editor.text
             let recordingAnchor = document.editor.selectionAnchor, recordingCaret = document.editor.selectionCaret
             sessionDelegate.macros.startRecording()
