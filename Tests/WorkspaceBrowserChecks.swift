@@ -163,8 +163,15 @@ import Darwin
                 explicit.editor.text == "\0hi" && explicit.format == FileFormat(encoding: .utf16LE, bom: true),
                 "accepting the offer opens the same bytes as UTF-16 LE")
             explicit.close()
+            // Later fixtures install other workspace hosts; this browser stays with the one it has.
+            let sidebarHost = WorkspaceWindowController.current
+            controller.host = { sidebarHost }
             controller.show(nil)
-            check(controller.window != nil && controller.window?.contentView != nil, "native browser built")
+            check(
+                controller.isShown && sidebarHost.sidebarSplit.sidebar === controller.sidebarView
+                    && controller.sidebarView.window === sidebarHost.window
+                    && !NSApp.windows.contains { $0 is NSPanel && $0.title == "Workspace" },
+                "the browser is docked in the workspace window; there is no browser panel")
             // F91: the Open Documents list follows the documents without Refresh and without the status line.
             @MainActor func listed() -> Int { controller.outlineView(controller.outline, numberOfChildrenOfItem: nil) }
             func pump() { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
@@ -647,9 +654,10 @@ import Darwin
             check(
                 cancelState.pressed && !cancelState.timedOut && cancelledInspection == nil && NSApp.modalWindow == nil,
                 "F316 actual Check Originals Cancel returns no partial result and closes its modal")
-            check(listed() > 0, "fixture: the panel lists documents before it closes")
-            controller.window?.close()
-            check(listed() == 0, "a closed panel holds no documents")
+            check(listed() > 0, "fixture: the sidebar lists documents before it is hidden")
+            controller.show(nil)
+            check(!controller.isShown && sidebarHost.sidebarSplit.sidebar == nil, "the same command hides the sidebar")
+            check(listed() == 0, "a hidden sidebar holds no documents")
             try ExternalFileObservationChecks.run(in: root)
             try ExternalFilePolicyChecks.run(in: root)
             try ExternalFileWatchChecks.run(in: root)

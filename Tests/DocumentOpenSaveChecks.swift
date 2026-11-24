@@ -651,7 +651,6 @@ extension DocumentChecks {
             check(
                 browserAsked == 0 && NSDocumentController.shared.documents.count == before,
                 "the refused symlink asked nothing and opened nothing")
-            browser.window?.close()
         }
 
         // F192
@@ -1064,7 +1063,6 @@ extension DocumentChecks {
                 try browser.openOfferingEncoding(sessionURL) == nil && routed == [sessionURL]
                     && NSDocumentController.shared.documents.isEmpty,
                 "a session snapshot activated in the workspace browser is routed to the restore prompt")
-            browser.window?.close()
             // Reading never depends on the extension.
             let renamed = area.appendingPathComponent("older-snapshot.json")
             try WorkspaceStore.save(session, to: renamed)

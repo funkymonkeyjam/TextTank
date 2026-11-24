@@ -406,10 +406,16 @@ import AppKit
         automaticSession = session
         var originals = [URL: TextDocument]()
         do {
-            if let state = try session.read(), settings.value.reopensLastSession {
-                let result = session.reopen(state, in: workspaceWindow)
-                originals = result.files
-                if !result.notices.isEmpty { report(result.notices) }
+            if let state = try session.read() {
+                // The sidebar is part of the window, like its frame: it comes back whether or
+                // not last session's documents do. An older file has no sidebar keys and
+                // leaves it hidden.
+                workspaceWindow.applySidebar(from: state.layout)
+                if settings.value.reopensLastSession {
+                    let result = session.reopen(state, in: workspaceWindow)
+                    originals = result.files
+                    if !result.notices.isEmpty { report(result.notices) }
+                }
             }
         } catch {
             if settings.value.reopensLastSession { report([error.localizedDescription]) }
@@ -495,6 +501,7 @@ import AppKit
         var services = EditorServices()
         services.activePresentationProvider = { [weak self] in self?.currentDocumentController }
         services.workspaceHostProvider = { [weak self] in self?.workspaceWindow }
+        services.workspaceBrowserProvider = { [weak self] in self?.workspaceBrowser }
         services.isAvailable = { [weak self] in self != nil }
         services.settingsProvider = { [weak self] in self?.settings }
         services.languagesProvider = { [weak self] in self?.languages }

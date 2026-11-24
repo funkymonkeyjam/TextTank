@@ -380,6 +380,7 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         Checks.section("settings routes for the preview") { try previewSettingsRoutes(root: root, app: app, host: host) }
         Checks.section("Shift-Command-V from the preview") { try toggleKeyFromPreview(root: root, host: host) }
         Checks.section("fail closed") { try failClosed(root: root) }
+        Checks.section("docked Workspace Browser") { try WorkspaceSidebarChecks.run(root: root, app: app, host: host) }
         settle(0.5)
         check(
             listener.connections == allowedConnections,
