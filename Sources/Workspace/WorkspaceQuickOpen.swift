@@ -90,9 +90,16 @@ struct WorkspaceFileIndex: Sendable {
 /// `stat` on a volume that has stopped answering does not return and cannot be interrupted. A
 /// question is therefore put on a thread that may be abandoned: the caller waits for the
 /// deadline at most, takes the answers that arrived and reads the rest as not known. A thread
-/// left behind ends when its call returns. Threads are counted across every caller: no more
-/// than `ceiling` exist at once, so paths that never answer cannot multiply them; while the
-/// ceiling is reached, further questions are answered "not known" at once.
+/// left behind ends when its call returns.
+///
+/// One volume that has stopped answering must not use up the threads, so they are shared out
+/// by volume. A path's volume is the longest mount point its text starts with, read from the
+/// system's mount table without touching the path. No volume has more than `perVolume`
+/// questions out at once. A volume that left a question unanswered for `patience` seconds or
+/// more when its deadline came is not asked again for `cooldown` seconds: its paths are "not known" at once. After that one question is tried; an answer in
+/// time restores the volume, and silence starts the wait again. Such a volume is never given
+/// one of the last `reserve` threads, and no more than `ceiling` threads exist at once, so
+/// paths on volumes that answer are always asked.
 final class FileProbePool: @unchecked Sendable {
     enum Outcome: Equatable, Sendable {
         /// A regular file, with the name of its volume and file number.
@@ -106,58 +113,164 @@ final class FileProbePool: @unchecked Sendable {
         }
     }
     typealias Probe = @Sendable (URL) -> String?
+    typealias VolumeNames = @Sendable ([URL]) -> [String]
     static let shared = FileProbePool(width: 4, ceiling: 8)
-    let width: Int, ceiling: Int
-    private let lock = NSLock()
+    let width: Int, ceiling: Int, perVolume: Int, reserve: Int
+    let cooldown: TimeInterval, patience: TimeInterval
+    private let volumeNames: VolumeNames
+    private let state = NSCondition()
     private var running = 0
+    private struct Volume {
+        var asking = 0
+        var quietUntil: TimeInterval = 0
+        /// It let a deadline pass and has not answered in time since.
+        var suspect = false
+    }
+    private var volumes: [String: Volume] = [:]
     /// Threads that are asking, or stuck asking, now.
-    var busy: Int { lock.withLock { running } }
-    init(width: Int, ceiling: Int) {
+    var busy: Int { state.withLock { running } }
+    init(
+        width: Int, ceiling: Int, perVolume: Int = 2, reserve: Int = 2, cooldown: TimeInterval = 30, patience: TimeInterval = 0.5,
+        volumes: @escaping VolumeNames = FileProbePool.mountPoints
+    ) {
         self.width = max(1, width)
         self.ceiling = max(1, ceiling)
+        self.perVolume = max(1, perVolume)
+        self.reserve = max(0, min(reserve, self.ceiling - 1))
+        self.cooldown = cooldown
+        self.patience = patience
+        volumeNames = volumes
     }
-    private final class Batch: @unchecked Sendable {
-        let condition = NSCondition()
-        var outcomes: [Outcome]
-        var next = 0, answered = 0, abandoned = false
-        init(count: Int) { outcomes = Array(repeating: .unknown, count: count) }
-    }
-    /// One outcome a path, in order. Returns when every path has answered or at the deadline
-    /// (in `ProcessInfo.systemUptime` seconds), whichever is first.
-    func outcomes(for urls: [URL], until deadline: TimeInterval, probe: @escaping Probe) -> [Outcome] {
-        guard !urls.isEmpty else { return [] }
-        let threads = lock.withLock { () -> Int in
-            let granted = max(0, min(width, urls.count, ceiling - running))
-            running += granted
-            return granted
-        }
-        let batch = Batch(count: urls.count)
-        for _ in 0..<threads {
-            Thread.detachNewThread { [self] in
-                while true {
-                    batch.condition.lock()
-                    let index = batch.next
-                    let stop = batch.abandoned || index >= urls.count
-                    if !stop { batch.next += 1 }
-                    batch.condition.unlock()
-                    if stop { break }
-                    let file = probe(urls[index])
-                    batch.condition.lock()
-                    batch.outcomes[index] = file.map(Outcome.found) ?? .missing
-                    batch.answered += 1
-                    batch.condition.broadcast()
-                    batch.condition.unlock()
+    /// The mount point each path is under, by its text alone. The mount table is read without
+    /// waiting for any file system (`MNT_NOWAIT`), and the paths themselves are not touched.
+    static let mountPoints: VolumeNames = { urls in
+        var mounts: [String] = []
+        let count = getfsstat(nil, 0, MNT_NOWAIT)
+        if count > 0 {
+            var table = Array(repeating: statfs(), count: Int(count))
+            let filled = getfsstat(&table, count * Int32(MemoryLayout.stride(ofValue: table[0])), MNT_NOWAIT)
+            for var entry in table.prefix(Int(max(0, filled))) {
+                let name = withUnsafePointer(to: &entry.f_mntonname) {
+                    $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
                 }
-                lock.withLock { running -= 1 }
+                mounts.append(name)
             }
         }
-        batch.condition.lock()
-        defer { batch.condition.unlock() }
-        if threads > 0 {
-            let limit = Date(timeIntervalSinceNow: deadline - ProcessInfo.processInfo.systemUptime)
-            while batch.answered < urls.count, batch.condition.wait(until: limit) {}
+        mounts.sort { $0.utf8.count > $1.utf8.count }
+        return urls.map { url in
+            let path = url.path
+            return mounts.first { $0 == "/" || path == $0 || path.hasPrefix($0 + "/") } ?? "/"
+        }
+    }
+    private final class Batch: @unchecked Sendable {
+        let urls: [URL], names: [String]
+        var outcomes: [Outcome]
+        var claimed: [Bool]
+        var askedAt: [TimeInterval]
+        var answered = 0, workers = 0, abandoned = false
+        init(urls: [URL], names: [String]) {
+            self.urls = urls
+            self.names = names
+            outcomes = Array(repeating: .unknown, count: urls.count)
+            claimed = Array(repeating: false, count: urls.count)
+            askedAt = Array(repeating: 0, count: urls.count)
+        }
+    }
+    // The four helpers below are called with `state` held.
+
+    /// Whether one more question may go to this volume now. `threadInHand` is true for a
+    /// thread that has just finished a question and can ask another.
+    private func mayAsk(_ name: String, now: TimeInterval, threadInHand: Bool) -> Bool {
+        let volume = volumes[name] ?? Volume()
+        guard volume.quietUntil <= now else { return false }
+        let threads = threadInHand ? running - 1 : running
+        if volume.suspect { return volume.asking < 1 && threads < ceiling - reserve }
+        return volume.asking < perVolume && threads < ceiling
+    }
+    /// True when a path cannot be asked now for a reason that waiting will not change soon.
+    private func isHeldBack(_ name: String, now: TimeInterval) -> Bool {
+        guard let volume = volumes[name] else { return false }
+        return volume.quietUntil > now || volume.suspect
+    }
+    /// The next path not yet taken that may be asked now.
+    private func next(in batch: Batch, threadInHand: Bool) -> Int? {
+        let now = ProcessInfo.processInfo.systemUptime
+        var refused = Set<String>()
+        for index in batch.urls.indices where !batch.claimed[index] && !refused.contains(batch.names[index]) {
+            if mayAsk(batch.names[index], now: now, threadInHand: threadInHand) { return index }
+            refused.insert(batch.names[index])
+        }
+        return nil
+    }
+    private func take(_ index: Int, in batch: Batch) {
+        batch.claimed[index] = true
+        batch.askedAt[index] = ProcessInfo.processInfo.systemUptime
+        volumes[batch.names[index], default: Volume()].asking += 1
+    }
+    /// One thread: asks, records the answer if anyone still waits for it, and asks again while
+    /// there is a path it may ask.
+    private func work(on batch: Batch, from first: Int, probe: Probe) {
+        var index = first
+        while true {
+            let file = probe(batch.urls[index])
+            state.lock()
+            let name = batch.names[index]
+            volumes[name, default: Volume()].asking -= 1
+            if !batch.abandoned {
+                // An answer in time: the volume is answering.
+                volumes[name]?.suspect = false
+                batch.outcomes[index] = file.map(Outcome.found) ?? .missing
+                batch.answered += 1
+            }
+            if !batch.abandoned, let following = next(in: batch, threadInHand: true) {
+                take(following, in: batch)
+                index = following
+                state.broadcast()
+                state.unlock()
+                continue
+            }
+            running -= 1
+            batch.workers -= 1
+            state.broadcast()
+            state.unlock()
+            return
+        }
+    }
+    /// One outcome a path, in order. Returns when every path has answered or cannot be asked,
+    /// or at the deadline (in `ProcessInfo.systemUptime` seconds), whichever is first.
+    func outcomes(for urls: [URL], until deadline: TimeInterval, probe: @escaping Probe) -> [Outcome] {
+        guard !urls.isEmpty else { return [] }
+        // A deadline that has already passed asks nothing, and so blames no volume.
+        guard ProcessInfo.processInfo.systemUptime < deadline else {
+            return Array(repeating: .unknown, count: urls.count)
+        }
+        let batch = Batch(urls: urls, names: volumeNames(urls))
+        let limit = Date(timeIntervalSinceNow: deadline - ProcessInfo.processInfo.systemUptime)
+        state.lock()
+        defer { state.unlock() }
+        while true {
+            while batch.workers < width, let index = next(in: batch, threadInHand: false) {
+                take(index, in: batch)
+                running += 1
+                batch.workers += 1
+                Thread.detachNewThread { [self] in work(on: batch, from: index, probe: probe) }
+            }
+            if batch.answered == urls.count { break }
+            let now = ProcessInfo.processInfo.systemUptime
+            // Nothing of this batch is out, and what is left is on volumes that are not being asked.
+            let waiting = urls.indices.contains { !batch.claimed[$0] && !isHeldBack(batch.names[$0], now: now) }
+            if batch.workers == 0 && !waiting { break }
+            if now >= deadline || !state.wait(until: limit) { break }
         }
         batch.abandoned = true
+        // A volume with a question out this long has stopped answering: leave it alone for a
+        // while. One asked only a moment before the deadline says nothing about its volume.
+        let now = ProcessInfo.processInfo.systemUptime
+        for index in urls.indices
+        where batch.claimed[index] && batch.outcomes[index] == .unknown && now - batch.askedAt[index] >= patience {
+            volumes[batch.names[index], default: Volume()].suspect = true
+            volumes[batch.names[index]]?.quietUntil = now + cooldown
+        }
         return batch.outcomes
     }
 }

@@ -5,6 +5,7 @@ import AppKit
 import EditorBridge
 import NativeSearch
 import Darwin
+import os
 @MainActor private final class SessionCancelState { var pressed = false, timedOut = false }
 
 @main struct WorkspaceBrowserChecks {
@@ -231,7 +232,11 @@ import Darwin
             }
             return QuickOpenList.inspect(url)
         }
-        let small = FileProbePool(width: 2, ceiling: 2)
+        // The name that never answers is on a volume of its own, as a dead network volume is.
+        let byName: FileProbePool.VolumeNames = { urls in
+            urls.map { $0.path.contains("/dead/") || $0.lastPathComponent == "never-answers.txt" ? "dead" : "local" }
+        }
+        let small = FileProbePool(width: 2, ceiling: 2, reserve: 1, cooldown: 600, patience: 0.2, volumes: byName)
         let betaFile = try requireValue(QuickOpenList.inspect(betaURL), "fixture: beta-recent.txt is a file")
         var began = ProcessInfo.processInfo.systemUptime
         let answers = QuickOpenList.outcomes(
@@ -247,14 +252,86 @@ import Darwin
             "a recent file whose existence is not known is left out and the list says so")
         _ = small.outcomes(for: [silentURL], until: ProcessInfo.processInfo.systemUptime + 0.2, probe: silent)
         began = ProcessInfo.processInfo.systemUptime
-        let refused = small.outcomes(for: [betaURL, silentURL], until: began + 3, probe: silent)
+        let refused = small.outcomes(for: [silentURL, betaURL, silentURL], until: began + 3, probe: silent)
         check(
-            refused == [.unknown, .unknown] && ProcessInfo.processInfo.systemUptime - began < 2 && small.busy == 2,
-            "questions that never answer cannot add threads beyond the ceiling; further ones are not known at once")
+            refused == [.unknown, .found(betaFile), .unknown] && ProcessInfo.processInfo.systemUptime - began < 2
+                && small.busy == 1,
+            "a volume that let a deadline pass is not known at once and gets no more threads; other paths are answered: \(refused)")
+
+        // Five paths on a volume that has stopped answering, with local ones, over repeated uses.
+        let alive = OSAllocatedUnfairLock(initialState: false)
+        let asked = OSAllocatedUnfairLock(initialState: 0)
+        let deadGate = DispatchSemaphore(value: 0)
+        let deadURLs = (1...5).map { URL(fileURLWithPath: "/dead/recent-\($0).txt") }
+        let flaky: FileProbePool.Probe = { url in
+            guard url.path.hasPrefix("/dead/") else { return QuickOpenList.inspect(url) }
+            asked.withLock { $0 += 1 }
+            if !alive.withLock({ $0 }) { deadGate.wait() }
+            return alive.withLock { $0 } ? "dead:" + url.lastPathComponent : nil
+        }
+        let shared = FileProbePool(width: 4, ceiling: 6, cooldown: 2.5, patience: 0.2, volumes: byName)
+        let mixed = [deadURLs[0], deadURLs[1], betaURL, deadURLs[2], deadURLs[3], alphaURL, deadURLs[4]]
+        let alphaFile = try requireValue(QuickOpenList.inspect(alphaURL), "fixture: alpha-open.txt is a file")
+        let localOnly: [FileProbePool.Outcome] = [
+            .unknown, .unknown, .found(betaFile), .unknown, .unknown, .found(alphaFile), .unknown
+        ]
+        var uses: [String] = []
+        for use in 1...6 {
+            began = ProcessInfo.processInfo.systemUptime
+            let outcomes = QuickOpenList.outcomes(recent: mixed, deadline: began + (use == 1 ? 0.4 : 5), pool: shared, probe: flaky)
+            var list = QuickOpenList()
+            list.add(recent: mixed, outcomes: outcomes)
+            let took = ProcessInfo.processInfo.systemUptime - began
+            if outcomes != localOnly || list.entries.map(\.title) != ["beta-recent.txt", "alpha-open.txt"]
+                || shared.busy != 2 || took > 2 || asked.withLock({ $0 }) != 2
+            {
+                uses.append("use \(use): \(outcomes) busy \(shared.busy) asked \(asked.withLock { $0 }) in \(took) s")
+            }
+        }
+        check(
+            uses.isEmpty,
+            "with a volume that never answers, local recent files are listed on every use and two threads at most are left with it: \(uses)")
+        // After the wait the volume would be tried again, but its questions are still out: no more threads.
+        spinUntil("the volume's wait to pass") { ProcessInfo.processInfo.systemUptime - began > 2.6 }
+        _ = shared.outcomes(for: mixed, until: ProcessInfo.processInfo.systemUptime + 0.3, probe: flaky)
+        check(
+            shared.busy == 2 && asked.withLock { $0 } == 2,
+            "while its first questions are still out the volume is not asked again, whatever time has passed")
+        // The volume answers again: the try after the wait finds it, and then all its paths.
+        let everything: [FileProbePool.Outcome] = [
+            .found("dead:recent-1.txt"), .found("dead:recent-2.txt"), .found(betaFile), .found("dead:recent-3.txt"),
+            .found("dead:recent-4.txt"), .found(alphaFile), .found("dead:recent-5.txt")
+        ]
+        alive.withLock { $0 = true }
+        for _ in 0..<2 { deadGate.signal() }
+        spinUntil("the threads left with the volume to end") { shared.busy == 0 }
+        let recovered = shared.outcomes(for: mixed, until: ProcessInfo.processInfo.systemUptime + 5, probe: flaky)
+        check(
+            recovered == everything && asked.withLock { $0 } == 7,
+            "after the wait the volume is tried again and, once it answers, all its paths are: \(recovered)")
+        // It stops answering once more, then answers late: it is left alone for the whole wait.
+        spinUntil("the pool to be idle before the volume stops again") { shared.busy == 0 }
+        alive.withLock { $0 = false }
+        began = ProcessInfo.processInfo.systemUptime
+        let stoppedAgain = shared.outcomes(for: mixed, until: began + 0.3, probe: flaky)
+        alive.withLock { $0 = true }
+        for _ in 0..<2 { deadGate.signal() }
+        spinUntil("its late answers to arrive") { shared.busy == 0 }
+        let duringWait = shared.outcomes(for: mixed, until: ProcessInfo.processInfo.systemUptime + 5, probe: flaky)
+        check(
+            stoppedAgain == localOnly && duringWait == localOnly && asked.withLock { $0 } == 9
+                && ProcessInfo.processInfo.systemUptime - began < 2.5,
+            "a late answer does not end the wait: until it passes the volume is not asked at all: \(duringWait)")
+        spinUntil("the volume's second wait to pass") { ProcessInfo.processInfo.systemUptime - began > 2.9 }
+        let again = shared.outcomes(for: mixed, until: ProcessInfo.processInfo.systemUptime + 5, probe: flaky)
+        check(
+            again == everything && asked.withLock { $0 } == 14,
+            "after that wait it is asked again and answers: \(again)")
+        spinUntil("the pool to be idle") { shared.busy == 0 }
 
         let stuck = WorkspaceQuickOpen()
         stuck.probe = silent
-        stuck.pool = FileProbePool(width: 4, ceiling: 8)
+        stuck.pool = FileProbePool(width: 4, ceiling: 8, cooldown: 0, volumes: byName)
         stuck.recentBound = 600
         stuck.show(
             roots: [folder], documents: [openAlpha], recent: [silentURL, betaURL], select: { _ in true },
