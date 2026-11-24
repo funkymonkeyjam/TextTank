@@ -70,6 +70,11 @@ package struct EditorSettings: Codable, Equatable {
     package var toggledPreviewMode: DocumentViewMode {
         lastRenderedPreviewMode == DocumentViewMode.preview.rawValue ? .preview : .both
     }
+    /// "Sync scrolling in Both": while a tab shows Both, scrolling the source scrolls its
+    /// preview to the matching place and the reverse. On unless the member is `false`; a
+    /// missing or null member reads as on. A value that is not a Boolean fails the file.
+    package var syncPreviewScrolling: Bool?
+    package var syncsPreviewScrolling: Bool { syncPreviewScrolling ?? true }
     // Key equivalents use AppKit's uppercase convention for Shift.
     package var shortcuts: [String: String]
     static package let commands = EditorCommand.shortcutIdentifiers
@@ -284,6 +289,8 @@ package struct SettingsShortcutDraft {
 }
 package enum EditorViewPreference: String {
     case autoIndent, autoPair, braceHighlight, currentLineHighlight, indentGuides
+    /// Not a View command yet: the stored switch for scroll sync in Both (docs/preview-model.md).
+    case syncPreviewScrolling
     fileprivate func enabled(in settings: EditorSettings) -> Bool {
         switch self {
         case .autoIndent: return settings.autoIndentEnabled
@@ -291,6 +298,7 @@ package enum EditorViewPreference: String {
         case .braceHighlight: return settings.braceHighlightEnabled
         case .currentLineHighlight: return settings.currentLineHighlightEnabled
         case .indentGuides: return settings.indentGuidesEnabled
+        case .syncPreviewScrolling: return settings.syncsPreviewScrolling
         }
     }
 }
