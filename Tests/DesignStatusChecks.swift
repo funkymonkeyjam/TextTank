@@ -464,69 +464,15 @@ enum DesignStatusChecks {
             composition: composition, controller: controller, document: document, row: row, field: field)
     }
 
-    /// DB-R3, after the position menu: every command it listed is still reachable, in the menu
-    /// bar or in its own status field, and the two that are in no menu (Clear Selection and the
-    /// document's tabs, spaces and width) are reachable from the keyboard through the row.
+    /// DB-R3, after the position menu: the two commands that are in no menu of the menu bar
+    /// (Clear Selection and the document's tabs, spaces and width) are reachable from the
+    /// keyboard through the row. The commands the menu bar has are checked against the real
+    /// menu bar in DocumentPinningChecks ("DB-R3 … is reachable in the menu bar").
     @MainActor private static func reachabilityChecks(
         composition: AppDelegate, controller: EditorWindowController, document: TextDocument, row: StatusBadgeRow,
         field: (String) -> NSButton?
     ) throws {
         let window = try requireValue(controller.hostWindow, "fixture: window")
-        // The composition's own menu bar, for this check only: what the application pointed at
-        // before is put back, so no later section sees these menus.
-        let savedBar = NSApp.mainMenu, savedServices = NSApp.servicesMenu, savedWindows = NSApp.windowsMenu
-        let savedHelp = NSApp.helpMenu
-        composition.buildMenus()
-        defer {
-            NSApp.mainMenu = savedBar
-            NSApp.servicesMenu = savedServices
-            NSApp.windowsMenu = savedWindows
-            NSApp.helpMenu = savedHelp
-        }
-        let bar = try requireValue(NSApp.mainMenu, "fixture: the menu bar")
-        func find(_ menu: NSMenu, _ path: String, _ matches: (NSMenuItem) -> Bool) -> (path: String, item: NSMenuItem)? {
-            for item in menu.items where !item.isHidden {
-                let here = path.isEmpty ? item.title : path + " > " + item.title
-                if item.submenu == nil, matches(item) { return (here, item) }
-                if let found = item.submenu.flatMap({ find($0, here, matches) }) { return found }
-            }
-            return nil
-        }
-        let marks = document.editor.bookmarkCount
-        for (command, title) in [
-            ("bookmarkToggle", "Toggle Bookmark"), ("bookmarkNext", "Next Bookmark"),
-            ("bookmarkPrevious", "Previous Bookmark")
-        ] {
-            let found = find(bar, "") { $0.representedObject as? String == command }
-            check(
-                found?.path == "Find > Bookmarks > " + (found?.item.title ?? "") && found?.item.target == nil
-                    && found?.item.action == #selector(EditorWindowController.command(_:))
-                    && found.map { controller.validateMenuItem($0.item) } == true,
-                "DB-R3 \(title) is reachable in the menu bar under Find > Bookmarks: \(found?.path ?? "missing")")
-        }
-        if let toggle = find(bar, "", { $0.representedObject as? String == "bookmarkToggle" })?.item {
-            controller.command(toggle)
-            check(document.editor.bookmarkCount == marks + 1, "DB-R3 the menu bar's bookmark command acts on the document")
-            controller.command(toggle)
-        }
-        let selectAll = find(bar, "") { $0.action == #selector(NSText.selectAll(_:)) }
-        check(
-            selectAll?.path == "Edit > Select All" && selectAll?.item.keyEquivalent == "a",
-            "DB-R3 Select All is reachable in the menu bar: \(selectAll?.path ?? "missing")")
-        check(
-            find(bar, "", { $0.action == #selector(EditorWindowController.goToLine(_:)) })?.path == "Find > Go to Line…"
-                && find(bar, "", { $0.action == #selector(EditorWindowController.toggleWrap(_:)) })?.path
-                    == "View > Wrap Lines"
-                && find(bar, "", { $0.representedObject as? String == "zoomIn" })?.path.hasPrefix("View > ") == true
-                && find(bar, "", { $0.action == #selector(EditorWindowController.chooseLanguage(_:)) })?.path
-                    == "View > Syntax Highlighting > Choose Language…",
-            "DB-R3 Go to Line, wrapping, text size and the language are reachable in the menu bar")
-        check(
-            find(bar, "", { $0.representedObject as? String == "clearSelection" }) == nil
-                && find(bar, "", { $0.title == "Clear Selection" })?.path == "Compare > Merge Changes > Clear Selection"
-                && find(bar, "", { ["tabs", "spaces", "width.4"].contains($0.representedObject as? String ?? "") }) == nil,
-            "fixture: Clear Selection and the document's indentation are in no menu of the menu bar")
-
         // Window > Move Focus reaches the row; the arrow keys step through its fields.
         let host = controller.host
         let surface = try requireValue(
