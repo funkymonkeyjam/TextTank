@@ -132,7 +132,9 @@ import EditorBridge
         var docs = [TextDocument](), urls = [URL](), expectedBytes = [Data]()
         for i in 0..<8 {
             let url = root.appendingPathComponent("original-\(i).txt")
-            let text = "original content SALMON-\(i) 🦊\n" + String(repeating: "second line\n", count: 400)
+            // Wider than a pane, so the horizontal offsets recorded below are real scroll positions.
+            let wideLine = "second line " + String(repeating: "wide ", count: 120) + "\n"
+            let text = "original content SALMON-\(i) 🦊\n" + String(repeating: wideLine, count: 400)
             let bytes = i == 5 ? try required(text.data(using: .utf16LittleEndian)) : Data(text.utf8)
             try bytes.write(to: url)
             let read = try WorkspaceStore.captureRegularFile(url)

@@ -759,6 +759,11 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         [_engine message:SCI_SETMARGINTYPEN wParam:1 lParam:SC_MARGIN_SYMBOL];
         [_engine message:SCI_SETMARGINMASKN wParam:1 lParam:TTBookmarkMask];
         [_engine message:SCI_SETMARGINWIDTHN wParam:1 lParam:14];
+        // Scintilla starts with a fixed 2000 px horizontal range whatever the text. Start with
+        // none and let it grow to the widest line it has laid out, so an empty or narrow
+        // document reports nothing to scroll sideways.
+        [_engine message:SCI_SETSCROLLWIDTH wParam:1];
+        [_engine message:SCI_SETSCROLLWIDTHTRACKING wParam:1];
         [_engine message:SCI_SETMULTIPLESELECTION wParam:1];
         [_engine message:SCI_SETADDITIONALSELECTIONTYPING wParam:1];
         [_engine message:SCI_SETMULTIPASTE wParam:SC_MULTIPASTE_EACH];
@@ -1432,8 +1437,24 @@ static constexpr int TTNamedHistoryBase = 0x54540000;
 - (NSInteger)horizontalScrollOffset { [self assertThread]; return [_engine message:SCI_GETXOFFSET]; }
 - (void)setHorizontalScrollOffset:(NSInteger)offset {
     [self assertThread];
-    const NSInteger width = self.wrap ? 0 : [_engine message:SCI_GETSCROLLWIDTH];
-    [_engine message:SCI_SETXOFFSET wParam:(uptr_t)MAX(0, MIN(width, offset))];
+    if (self.wrap || offset <= 0) { [_engine message:SCI_SETXOFFSET wParam:0]; return; }
+    // The range tracks lines as they are painted, and a restored offset can arrive before the
+    // first paint. Measure the lines on screen so the range already covers them; the engine
+    // then limits the offset to what those lines can scroll.
+    sptr_t widest = [_engine message:SCI_GETSCROLLWIDTH];
+    if (!_comparisonPresentation && offset > widest - (sptr_t)_engine.scrollView.contentView.bounds.size.width) {
+        const sptr_t count = [_engine message:SCI_GETLINECOUNT];
+        const sptr_t top = [_engine message:SCI_DOCLINEFROMVISIBLE wParam:[_engine message:SCI_GETFIRSTVISIBLELINE]];
+        const sptr_t last = MIN(count - 1, top + [_engine message:SCI_LINESONSCREEN]);
+        for (sptr_t line = top; line <= last; ++line) {
+            if (![_engine message:SCI_GETLINEVISIBLE wParam:line]) continue;
+            const sptr_t start = [_engine message:SCI_POSITIONFROMLINE wParam:line];
+            const sptr_t end = [_engine message:SCI_GETLINEENDPOSITION wParam:line];
+            widest = MAX(widest, [_engine message:SCI_POINTXFROMPOSITION wParam:0 lParam:end] - [_engine message:SCI_POINTXFROMPOSITION wParam:0 lParam:start]);
+        }
+        if (widest > [_engine message:SCI_GETSCROLLWIDTH]) [_engine message:SCI_SETSCROLLWIDTH wParam:(uptr_t)widest];
+    }
+    [_engine message:SCI_SETXOFFSET wParam:(uptr_t)MIN(offset, (NSInteger)INT_MAX)];
 }
 - (void)restoreClosedTabViewWithAnchor:(NSInteger)anchor caret:(NSInteger)caret firstVisibleLine:(NSInteger)line {
     [self assertThread];
@@ -2409,6 +2430,9 @@ static sptr_t TTMacWordDestination(ScintillaView *engine, sptr_t caret, bool rig
     [self applyCurrentLineFrameWithHighContrast:NSWorkspace.sharedWorkspace.accessibilityDisplayShouldIncreaseContrast];
     [self applyIndentGuides];
     _emptyLineNumbers.hidden=value;
+    // The two comparison panes scroll sideways together, so they keep one fixed range.
+    [_engine message:SCI_SETSCROLLWIDTHTRACKING wParam:!value];
+    [_engine message:SCI_SETSCROLLWIDTH wParam:value ? 2000 : 1];
     [_engine message:SCI_SETVSCROLLBAR wParam:!value];
     [_engine message:SCI_SETENDATLASTLINE wParam:!value];
     if(value) [self applyComparisonStyle];

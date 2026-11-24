@@ -106,6 +106,7 @@ __attribute__((objc_subclassing_restricted))
 ///   bookmarks, search highlights, the undo history and the save point (modified).
 /// - View: automatic indentation on Return, live brace feedback, current-line framing, indentation guides, wrap, zoom, selection and scroll position, syntax styles and fonts (setSyntaxStyle:,
 ///   setSyntaxFont:), margins, whitespace and line-ending visibility, and overtype.
+///   The horizontal scroll range is view state too: it tracks the widest line laid out.
 /// revision is counted per view, but views of one document always report the same value.
 @interface TTEditor : NSView
 /// Reading makes one copy, decoded straight from the engine's buffer. Do not read it only for
