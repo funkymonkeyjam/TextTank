@@ -19,7 +19,7 @@ enum SettingsShortcutValidationChecks {
         commands: [
             "saveDocument:": .init(title: "File › Save", standard: MenuShortcut("s")),
             "saveCopy:": .init(title: "File › Save Copy…"),
-            "toggleDocumentPreview:": .init(title: "View › Toggle Preview", standard: MenuShortcut("V"), yields: true)
+            "toggleDocumentPreview:": .init(title: "View › Toggle Preview", standard: MenuShortcut("v", [.control, .command]), yields: true)
         ], fixed: [MenuShortcut("\u{f70c}", []).identity: "Tools › Macros › Start Recording"], isComplete: true,
         transientPrefixes: ["RunController.run:/"])
 
@@ -283,18 +283,19 @@ enum SettingsShortcutValidationChecks {
 
     static func conflicts() {
         var settings = EditorSettings()
-        // Shift-Command-V is Toggle Preview's default, and that default gives way.
-        settings.setShortcut("V", for: "upper")
+        // Control-Command-V is Toggle Preview's default, and that default gives way.
+        let toggleKey = MenuShortcut("v", [.control, .command])
+        settings.assignShortcut(toggleKey, to: "upper", in: context)
         check(
-            settings.version == 1 && settings.shortcutValidationFailure(context: context) == nil
+            settings.version == 2 && settings.shortcutValidationFailure(context: context) == nil
                 && settings.effectiveShortcut(for: "toggleDocumentPreview:", in: context) == nil
-                && settings.effectiveShortcut(for: "upper", in: context)?.displayText == "⇧⌘V"
-                && settings.holders(of: MenuShortcut("V"), in: context, except: "lower") == ["upper"]
-                && settings.holders(of: MenuShortcut("V"), in: context, except: "upper").isEmpty,
+                && settings.effectiveShortcut(for: "upper", in: context)?.displayText == "⌃⌘V"
+                && settings.holders(of: toggleKey, in: context, except: "lower") == ["upper"]
+                && settings.holders(of: toggleKey, in: context, except: "upper").isEmpty,
             "V8 a yielding default gives way to an assignment without a conflict, and returns when it goes")
         settings.setShortcut("", for: "upper")
         check(
-            settings.effectiveShortcut(for: "toggleDocumentPreview:", in: context)?.displayText == "⇧⌘V",
+            settings.effectiveShortcut(for: "toggleDocumentPreview:", in: context)?.displayText == "⌃⌘V",
             "V8 the yielding default has its key again")
 
         // Command-S is Save's default, and Save does not give way.

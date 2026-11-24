@@ -125,7 +125,10 @@ Owner decision, 23 November 2026:
   it shows (DS-24); the Command Palette and Settings name the command in full ("Show Line
   Numbers"). Guides and Highlights is no longer a submenu. Every moved command keeps its identity,
   shortcut, validation and macro behaviour, and the Command Palette finds it by its former path
-  and name as well as its new one.
+  and name as well as its new one. Owner decision, 24 November 2026: Toggle Preview's default key
+  is Control-Command-V, not Shift-Command-V, which another application can hold system-wide so
+  that it never reaches TextTank. It stays a default that gives way to a shortcut the person
+  assigned (DS-25 is not involved), and Shift-Command-V has no default command.
   **Change Bars** (stored `changeBars`, off unless stored on, for every editor view): a narrow
   margin beside the text marks the lines changed since the document was opened, from Scintilla's
   change history. A change that is not saved is a wide amber bar; a saved one is a narrow green

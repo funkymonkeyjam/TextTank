@@ -1111,11 +1111,12 @@ extension DocumentChecks {
                     "target": "responder",
                 ]
             }
-            // Added on 23 November 2026: View > Toggle Preview, Shift-Command-V, one command
+            // Added on 23 November 2026: View > Toggle Preview, Control-Command-V since the owner's
+            // decision of 24 November 2026 (it was Shift-Command-V for a day), one command
             // for the same per-tab mode. Nothing was removed for it.
             let togglePreviewAdded: [[String: String]] = [
                 [
-                    "action": "toggleDocumentPreview:", "object": "", "key": "V", "modifiers": "1048576",
+                    "action": "toggleDocumentPreview:", "object": "", "key": "v", "modifiers": "1310720",
                     "target": "responder",
                 ]
             ]

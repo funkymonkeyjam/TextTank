@@ -355,7 +355,7 @@ the preview of a tab that shows Preview alone.
 Besides the three View commands there are four routes. None of them changes what a preview may
 load or run.
 
-**Toggle Preview** (View > Preview, directly under Both; Shift-Command-V). From Source it shows the
+**Toggle Preview** (View > Preview, directly under Both; Control-Command-V since 24 November 2026, when the owner moved it from Shift-Command-V, which another application can hold system-wide). From Source it shows the
 rendered mode the person chose last, Preview or Both, and from either of those it returns to
 Source. Until one has been chosen it shows Both. It is disabled for a document with no preview
 (DS-21) and carries no checkmark: the three items above it show the mode (DS-22). The shortcut is
@@ -681,13 +681,13 @@ the others are left closed.
   application makes such a load.
 - The mark on the tab under a real pointer: the tracking area's enter, move and exit events, a
   physical click, and how the eye looks beside a truncated title. The checks tell the strip
-  where the pointer is and press the button through `performClick`. Pressing Shift-Command-V on
+  where the pointer is and press the button through `performClick`. Pressing Control-Command-V on
   a keyboard is not exercised either; the checks send the menu item's action.
 - The tab menu's Source, Preview and Both while a sheet or a comparison window blocks them. They
   share one test (`blockedReason`) with the tab commands, and a check observes it for a tab
   operation in progress; no check opens a sheet or a comparison window for it, because a check
   must not put a dialog on the desktop and this check process never holds the key window.
-- Shift-Command-V pressed with the keyboard in a preview. From the table, the tree and the find
+- Control-Command-V pressed with the keyboard in a preview. From the table, the tree and the find
   field no view takes the key equivalent and the action's responder chain reaches the tab. The
   web view (Markdown, HTML, SVG) answers every key equivalent itself and passes on what the
   page does not use, as it does for Command-F; that hand-back needs a key window and was not

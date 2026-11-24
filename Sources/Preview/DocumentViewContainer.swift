@@ -108,10 +108,12 @@ import TextTankCore
     }
 
     static let toggleTitle = Strings.text("view.mode.toggle", "Toggle Preview")
-    /// Shift-Command-V. It is a default that gives way to a shortcut the person assigned to the
+    /// Control-Command-V (owner decision, 24 November 2026: Shift-Command-V, the first default,
+    /// can be held system-wide by another application and then never reaches TextTank). It is
+    /// a default that gives way to a shortcut the person assigned to the
     /// same key in Settings, as Save All and Actual Size do, so a settings file that already
-    /// uses Shift-Command-V keeps working (DS-25 is not involved: no system shortcut has this key).
-    static let toggleShortcut = MenuShortcut("V")
+    /// uses Control-Command-V keeps working (DS-25 is not involved: no system shortcut has this key).
+    static let toggleShortcut = MenuShortcut("v", [.control, .command])
 
     /// The submenu is named as the Preview mode is, and its last item as the Settings row is.
     static var menuTitle: String { title(.preview) }

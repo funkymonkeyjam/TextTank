@@ -118,7 +118,7 @@ import EditorBridge
         }
         let before = [
             "setDocumentViewMode:/source/responder/", "setDocumentViewMode:/preview/responder/",
-            "setDocumentViewMode:/both/responder/", "toggleDocumentPreview://responder/V", "clone://responder/",
+            "setDocumentViewMode:/both/responder/", "toggleDocumentPreview://responder/v", "clone://responder/",
             "toggleWrap://responder/", "command:/showWhitespace/responder/", "command:/toggleEOL/responder/",
             "command:/toggleLineNumbers/responder/", "toggleIndentGuides://explicit/",
             "toggleCurrentLineHighlight://explicit/", "toggleBraceHighlight://explicit/", "command:/zoomIn/responder/+",
