@@ -821,11 +821,12 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
             queue:nil usingBlock:^(NSNotification *note) {
                 [weakEditor normalizeTextArea];
                 [weakEditor updateCenteredColumn];
-                // A narrower gutter gives its strip to the text area, which AppKit does not
-                // repaint by itself: the old gutter would stay drawn over the first characters.
+                // The gutter changed width: both sides of the boundary are drawn again. (What kept
+                // the old gutter over the first characters was its unclipped drawing; see init.)
                 NSClipView *area = note.object;
                 area.needsDisplay = YES;
                 area.documentView.needsDisplay = YES;
+                [weakEditor redrawGutter];
             }];
         [_engine message:SCI_SETAUTOMATICFOLD wParam:SC_AUTOMATICFOLD_SHOW | SC_AUTOMATICFOLD_CLICK | SC_AUTOMATICFOLD_CHANGE];
         // Scintilla creates its scroll view at 100x10. Its initWithFrame does not
@@ -833,7 +834,11 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         // invokes backend Resize, which initializes the document viewport.
         _engine.frame = self.bounds;
         NSRulerView *ruler = _engine.scrollView.verticalRulerView;
+        // Views no longer clip their drawing by default. What the gutter drew while it was wider
+        // would stay over the text beside it after it narrows, through any later redraw.
+        ruler.clipsToBounds = YES;
         _emptyLineNumbers = [[TTEmptyLineNumbersView alloc] initWithFrame:ruler.bounds];
+        _emptyLineNumbers.clipsToBounds = YES;
         _emptyLineNumbers.engine = _engine;
         _emptyLineNumbers.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         [ruler addSubview:_emptyLineNumbers];
@@ -1045,6 +1050,10 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 }
 - (NSInteger)textMarginLeft { [self assertThread]; return [_engine message:SCI_GETMARGINLEFT]; }
 - (NSInteger)textMarginRight { [self assertThread]; return [_engine message:SCI_GETMARGINRIGHT]; }
+- (void)redrawGutter {
+    _engine.scrollView.verticalRulerView.needsDisplay = YES;
+    _emptyLineNumbers.needsDisplay = YES;
+}
 /// The engine's scroll view lays its text area out by taking the gutter's width off whatever
 /// AppKit gave it. AppKit has sometimes already allowed for the gutter, and the text area is
 /// then a gutter's width short at the right; at other times it has not allowed for a scroll bar
