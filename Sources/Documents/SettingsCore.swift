@@ -40,8 +40,26 @@ package struct EditorSettings: Codable, Equatable {
     package var autoPairEnabled: Bool { autoPair ?? false }
     package var autoIndent: Bool?
     package var autoIndentEnabled: Bool { autoIndent ?? true }
+    /// View > Show Line Numbers, Show Whitespace and Show Line Endings, for every editor view.
+    /// A file without these members shows line numbers and hides both kinds of mark.
+    package var lineNumbers: Bool?
+    package var lineNumbersEnabled: Bool { lineNumbers ?? true }
+    package var showWhitespace: Bool?
+    package var showWhitespaceEnabled: Bool { showWhitespace ?? false }
+    package var showLineEndings: Bool?
+    package var showLineEndingsEnabled: Bool { showLineEndings ?? false }
     package var reopenLastSession: Bool?
     package var reopensLastSession: Bool { reopenLastSession ?? true }
+    /// DS-D9. Quitting keeps each edited untitled document as a verified recovery copy and
+    /// reopens it at the next launch, without asking. Off gives the earlier Save / Delete /
+    /// Cancel review at quit. A missing member reads as on.
+    package var keepUntitledOnQuit: Bool?
+    package var keepsUntitledOnQuit: Bool { keepUntitledOnQuit ?? true }
+    /// DS-D10. Each save of a file keeps a private earlier version (twenty a file, thirty days,
+    /// 200 MB in all). Off keeps nothing new; versions already kept stay until they are cleared
+    /// or expire. A missing member reads as on.
+    package var keepLocalHistory: Bool?
+    package var keepsLocalHistory: Bool { keepLocalHistory ?? true }
     package var wrap: Bool
     package var appearance: String
     package var externalChangePolicy: ExternalChangePolicy?
@@ -72,6 +90,11 @@ package struct EditorSettings: Codable, Equatable {
     package var toggledPreviewMode: DocumentViewMode {
         lastRenderedPreviewMode == DocumentViewMode.preview.rawValue ? .preview : .both
     }
+    /// "Sync scrolling in Both": while a tab shows Both, scrolling the source scrolls its
+    /// preview to the matching place and the reverse. On unless the member is `false`; a
+    /// missing or null member reads as on. A value that is not a Boolean fails the file.
+    package var syncPreviewScrolling: Bool?
+    package var syncsPreviewScrolling: Bool { syncPreviewScrolling ?? true }
     /// A command identifier to its shortcut. Version 1: one of the twelve editor commands to one
     /// printable character, meaning Command, with AppKit's uppercase convention for Shift.
     /// Version 2 also allows any command of the menu bar, text such as `ctrl+opt+k` (see
@@ -224,13 +247,32 @@ package struct ShortcutValidationFailure: LocalizedError {
 
 package enum EditorViewPreference: String {
     case autoIndent, autoPair, braceHighlight, currentLineHighlight, indentGuides
-    fileprivate func enabled(in settings: EditorSettings) -> Bool {
+    /// Not a View command yet: the stored switch for scroll sync in Both (docs/preview-model.md).
+    case syncPreviewScrolling
+    case lineNumbers, showWhitespace, showLineEndings
+    package func enabled(in settings: EditorSettings) -> Bool {
         switch self {
         case .autoIndent: return settings.autoIndentEnabled
         case .autoPair: return settings.autoPairEnabled
         case .braceHighlight: return settings.braceHighlightEnabled
         case .currentLineHighlight: return settings.currentLineHighlightEnabled
         case .indentGuides: return settings.indentGuidesEnabled
+        case .syncPreviewScrolling: return settings.syncsPreviewScrolling
+        case .lineNumbers: return settings.lineNumbersEnabled
+        case .showWhitespace: return settings.showWhitespaceEnabled
+        case .showLineEndings: return settings.showLineEndingsEnabled
+        }
+    }
+}
+extension EditorCommand {
+    /// The stored choice behind a View command that applies to every editor view, not just the
+    /// focused one. Nil for every other command, zoom and folding included.
+    package var viewPreference: EditorViewPreference? {
+        switch self {
+        case .toggleLineNumbers: return .lineNumbers
+        case .showWhitespace: return .showWhitespace
+        case .toggleEOL: return .showLineEndings
+        default: return nil
         }
     }
 }

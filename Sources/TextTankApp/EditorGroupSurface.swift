@@ -150,3 +150,79 @@ final class EditorGroupContainer: NSView, NSSplitViewDelegate {
     }
     func splitView(_ splitView: NSSplitView, canCollapseSubview subview: NSView) -> Bool { false }
 }
+
+/// The workspace window's root split: the docked Workspace Browser, when it is shown, and the
+/// editor groups (owner decision DS-D11). The editor area is always the last pane and is never
+/// removed or rebuilt, so showing and hiding the sidebar leaves every editor as it was.
+///
+/// Widths follow `WorkspaceSidebarGeometry`: the sidebar keeps the width the person dragged it
+/// to while the window is resized, gives up width before the editor groups do, and never goes
+/// below its minimum, so the panes never overlap (DS-67). No material or translucency is added:
+/// the sidebar draws on the window's own background (DS-11).
+final class WorkspaceSidebarSplit: NSSplitView, NSSplitViewDelegate {
+    let editorArea: NSView
+    private(set) var sidebar: NSView?
+    /// The width the person chose. It changes only when they drag the divider.
+    var preferredWidth = CGFloat(WorkspaceSidebarGeometry.defaultWidth) {
+        didSet { layoutPanes() }
+    }
+    /// The width the editor groups need for their layout.
+    var editorMinimumWidth = CGFloat(TabGroupGeometry.minimumContent(.single).width) {
+        didSet { layoutPanes() }
+    }
+    /// The person dragged the divider.
+    var onUserResize: (() -> Void)?
+    init(editorArea: NSView) {
+        self.editorArea = editorArea
+        super.init(frame: .zero)
+        isVertical = true
+        dividerStyle = .thin
+        delegate = self
+        addArrangedSubview(editorArea)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
+    func setSidebar(_ view: NSView?) {
+        guard sidebar !== view else { return }
+        sidebar?.removeFromSuperview()
+        sidebar = view
+        if let view { insertArrangedSubview(view, at: 0) }
+        layoutPanes()
+    }
+    private func layoutPanes() {
+        guard let sidebar else {
+            editorArea.frame = bounds
+            return
+        }
+        let width = CGFloat(
+            WorkspaceSidebarGeometry.width(
+                preferred: Double(preferredWidth), total: Double(bounds.width),
+                editorMinimum: Double(editorMinimumWidth)))
+        sidebar.frame = NSRect(x: 0, y: 0, width: width, height: bounds.height)
+        editorArea.frame = NSRect(
+            x: width + dividerThickness, y: 0, width: max(0, bounds.width - width - dividerThickness),
+            height: bounds.height)
+    }
+    func splitView(_ splitView: NSSplitView, resizeSubviewsWithOldSize oldSize: NSSize) { layoutPanes() }
+    func splitView(
+        _ splitView: NSSplitView, constrainMinCoordinate proposedMinimumPosition: CGFloat, ofSubviewAt dividerIndex: Int
+    ) -> CGFloat { max(proposedMinimumPosition, CGFloat(WorkspaceSidebarGeometry.minimumWidth)) }
+    func splitView(
+        _ splitView: NSSplitView, constrainMaxCoordinate proposedMaximumPosition: CGFloat, ofSubviewAt dividerIndex: Int
+    ) -> CGFloat {
+        max(
+            CGFloat(WorkspaceSidebarGeometry.minimumWidth),
+            min(
+                proposedMaximumPosition, CGFloat(WorkspaceSidebarGeometry.maximumWidth),
+                bounds.width - dividerThickness - editorMinimumWidth))
+    }
+    func splitView(_ splitView: NSSplitView, canCollapseSubview subview: NSView) -> Bool { false }
+    /// Remembers the width only when the person moved the divider.
+    func splitViewDidResizeSubviews(_ notification: Notification) {
+        guard let sidebar, notification.userInfo?["NSSplitViewDividerIndex"] != nil else { return }
+        let width = sidebar.frame.width
+        if abs(width - preferredWidth) > 0.5 {
+            preferredWidth = width
+            onUserResize?()
+        }
+    }
+}

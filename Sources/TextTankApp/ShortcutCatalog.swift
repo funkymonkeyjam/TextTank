@@ -232,6 +232,4 @@ extension MenuShortcut {
             set(settings.isAssigned(alias.standard) ? nil : alias.standard, on: alias.item)
         }
     }
-    /// What the menu bar shows beside the command now, in the one display form (DS-20).
-    static func displayText(for item: NSMenuItem) -> String { MenuShortcut(item)?.displayText ?? "" }
 }

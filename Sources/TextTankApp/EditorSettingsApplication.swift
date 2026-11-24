@@ -24,6 +24,9 @@ import AppKit
                 editor.braceHighlightEnabled = value.braceHighlightEnabled
                 editor.currentLineHighlightEnabled = value.currentLineHighlightEnabled
                 editor.indentGuidesEnabled = value.indentGuidesEnabled
+                editor.lineNumbersVisible = value.lineNumbersEnabled
+                editor.whitespaceVisible = value.showWhitespaceEnabled
+                editor.lineEndingsVisible = value.showLineEndingsEnabled
                 if let previous {
                     let info = editor.statusInfo
                     if previous.tabWidth != value.tabWidth || previous.useTabs != value.useTabs,

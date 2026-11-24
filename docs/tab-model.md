@@ -35,7 +35,7 @@ Only the mounted active tab in a visible, non-minimized host runs recurring stat
 
 Closing the final tab keeps the host open and TextTank running, without creating an untitled document. The empty host offers New/Open in the toolbar and menu; document commands are disabled. Its red close button still invokes Quit. Stage 1 adds the context commands, bulk close and reopen history described below. Stage 2 adds pin/reorder/multiselection UI below; additional visible groups and a layout picker remain excluded.
 
-WorkspaceLayoutState requires version 1, layout, focused slot and ordered group states. Each group has its slot, active-tab index and ordered tab records containing DocumentID, pinned flag, UTF-8 anchor/caret and first visible line. Validation rejects unknown or missing version, wrong counts/order/slots, duplicate documents per group, broken pin prefix, invalid active/focused references and negative offsets. No text or bytes are stored. A tab record may also carry `viewMode` (`preview` or `both`) and `previewSourceFraction` (the source's share of the width in Both, 0 to 1). Both are optional and are left out for a tab that shows Source, so records written before the fields existed read as Source and a Source tab is written exactly as before. An unknown mode or a fraction outside 0 to 1 is rejected. The mode is applied on restore only if the document still has a preview (see [preview-model](preview-model.md#presentation)). All four layout shapes round-trip in codec tests. Nothing writes this value to disk, and existing session/recovery schema and golden fixture bytes stay unchanged.
+WorkspaceLayoutState requires version 1, layout, focused slot and ordered group states. Each group has its slot, active-tab index and ordered tab records containing DocumentID, pinned flag, UTF-8 anchor/caret and first visible line. Validation rejects unknown or missing version, wrong counts/order/slots, duplicate documents per group, broken pin prefix, invalid active/focused references and negative offsets. No text or bytes are stored. A tab record may also carry `viewMode` (`preview` or `both`) and `previewSourceFraction` (the source's share of the width in Both, 0 to 1). Both are optional and are left out for a tab that shows Source, so records written before the fields existed read as Source and a Source tab is written exactly as before. An unknown mode or a fraction outside 0 to 1 is rejected. A tab record may carry `zoom`, the active pane's zoom level, and its split record `otherZoom` for the other pane, each −10 through 60. Both are optional and written only for a pane zoomed away from the Editor Settings default; a pane without one is restored at that default and follows it, so earlier records and unzoomed tabs are unchanged. A level outside the range is rejected. The mode is applied on restore only if the document still has a preview (see [preview-model](preview-model.md#presentation)). All four layout shapes round-trip in codec tests. Nothing writes this value to disk, and existing session/recovery schema and golden fixture bytes stay unchanged.
 
 ## Evidence boundary
 
@@ -243,3 +243,60 @@ new independent unsaved documents, intentionally not content-deduplicated with r
 Closed-tab history stays transient and is never serialized. No automatic last-session
 reopen, second workspace window, collections, comparison engine or AI provider is added.
 DS-14/20-23/35/40-43/62/70-73/84/90-92/100-101 govern these additions.
+
+## Docked Workspace Browser
+
+Owner decision DS-D11 (23 November 2026); DS-10/11/13/15/20-23/60/62/63/67/70-74 apply. The Workspace
+Browser is a sidebar inside the one workspace window. There is no browser panel: View > Workspace
+Browser, the Command Palette, Add Folder to Workspace and Monitor Current File all reach the same
+docked view. The browser's store, lists, open route and encoding offer are unchanged; only the view moved.
+
+The window's content is one root split, `WorkspaceSidebarSplit`. Its last pane is the editor area (the
+layout picker and the editor group container), which is never removed or rebuilt. The sidebar is
+inserted before it when shown and removed when hidden, so 1, 2 or 4 groups, their dividers, Clone
+panes and each tab's Source, Preview or Both share whatever width remains, exactly as they shared the
+whole window before. The sidebar draws on the window's background: no `NSVisualEffectView`, no
+source-list material, no change to the custom-materials budget.
+
+Widths come from `WorkspaceSidebarGeometry` in the Foundation-only core. The sidebar is at least 260
+points, at most 480 and 280 by default; its divider is 1 point and can be dragged between those
+bounds, never past the point where the editor area would lose the minimum of its layout
+(`TabGroupGeometry.minimumContent`). Only a drag changes the remembered width. The collapse rule at
+small sizes is explicit (DS-67):
+
+1. While the sidebar is shown the window's content minimum is the editor layout's minimum plus the
+   divider plus 260 points (1061 by 500 for one group or two columns). It is never lower than the
+   minimum without the sidebar, and hiding the sidebar restores that minimum.
+2. Showing the sidebar in a narrower window grows the window to the new minimum and keeps it on
+   screen. A full-screen window is never resized. If the screen cannot fit the minimum, the command
+   is refused with a status message and nothing changes.
+3. A narrowing window takes width from the sidebar first, down to 260 points. The editor groups keep
+   at least 320 points each.
+4. Inside a group, Both keeps its own rule: source and preview keep 120 points each while there is
+   room and otherwise share the width equally.
+
+Nothing collapses to zero and no pane overlaps another; the sidebar's own controls fit at 260 points.
+
+View > Workspace Browser keeps its command identity and has no shortcut. It is a toggle with a
+checkmark (DS-22). Choosing it while hidden shows the sidebar and moves the keyboard to its list;
+choosing it while shown hides the sidebar. Escape in the sidebar returns the keyboard to the text and
+leaves the sidebar showing. Hiding returns the keyboard, if the sidebar held it, to the view that had
+it before, or to the active tab's editor when that view is gone. Showing for another reason (a
+restored layout, Add Folder, Monitor Current File) never moves the keyboard. None of these changes a
+document, its selection, scroll position, Undo history or the active tab. In the list the arrow keys
+move, typing selects by name, and Return opens the selected file or selects its tab, expands a folder,
+or shows an open document. The sidebar is an accessibility group named "Workspace Browser" holding an
+outline labelled "Workspace files"; its controls join the window's key-view order after the layout
+picker. The three views are chosen from a pop-up, because three segment titles do not fit 260 points.
+
+`WorkspaceLayoutState` version 1 gains two optional keys, `sidebarShown` and `sidebarWidth` (points,
+greater than 0 and at most 10,000; clamped to the bounds when applied). A workspace whose sidebar was
+never shown writes neither, so its files and the golden fixtures are byte-for-byte unchanged. Once it
+has been used both are written, `sidebarShown` as true or false. A layout without the keys changes
+nothing when it is applied, which at launch means hidden: an older file opens as it always did. The
+automatic launch file carries the layout, so the sidebar's state returns at the next launch. It is
+applied at launch even when last session's documents are not reopened, because it describes the
+window, as its frame does. Restoring an explicit session applies the keys its layout has.
+
+Physical keyboard, VoiceOver, pointer dragging of the divider and full screen with the sidebar shown
+have not been observed; the native checks drive the same views and commands in an owned window.

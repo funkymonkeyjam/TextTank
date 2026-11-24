@@ -29,10 +29,17 @@ import TextTankCore
         var documentName: @MainActor () -> String
         /// Where the document is saved, or nil for an untitled document.
         var documentURL: @MainActor () -> URL?
+        /// The source panes that are beside the preview, the one used last first; empty unless
+        /// the tab shows Both. The preview follows them and they follow it.
+        var syncEditors: @MainActor () -> [TTEditor] = { [] }
+        /// True while "Sync scrolling in Both" is on.
+        var wantsScrollSync: @MainActor () -> Bool = { false }
     }
 
     let pane: PreviewPane
     private let tab: Tab
+    /// Follows scrolling between the source and the preview while the tab shows Both.
+    let scrollSync: PreviewScrollSync
 
     /// Makes content from a request. Replaced by checks to make a render slow or observable.
     var renderer: @Sendable (PreviewRequest) -> PreviewContent? = { PreviewRenderer.render($0) }
@@ -85,6 +92,12 @@ import TextTankCore
     init(pane: PreviewPane, tab: Tab) {
         self.pane = pane
         self.tab = tab
+        scrollSync = PreviewScrollSync(
+            pane: pane, editors: tab.syncEditors,
+            isEligible: {
+                tab.isLive() && PreviewScrollSync.follows(tab.kind()) && !tab.syncEditors().isEmpty
+            }, isOn: tab.wantsScrollSync)
+        scrollSync.isPreviewCurrent = { [weak self] in self?.isCurrent ?? false }
         pane.onContentLost = { [weak self] in self?.contentWasLost() }
     }
 
@@ -116,6 +129,8 @@ import TextTankCore
 
     /// The document's text or state may have changed ("look again").
     func documentStateChanged() {
+        // The pane in use or the clone split may be what changed.
+        scrollSync.refresh()
         guard tab.isLive(), !isCurrent, let editor = tab.editor() else { return }
         // A caret move or another notification for text that is already on its way changes nothing.
         if !isIdle, requestedRevision == editor.revision { return }
@@ -125,6 +140,8 @@ import TextTankCore
     /// The tab was shown or hidden, or changed between Source, Preview and Both, or its
     /// document's kind or location changed.
     func tabStateChanged() {
+        // A tab that is hidden, or shows Preview alone, follows nothing.
+        scrollSync.refresh()
         guard tab.isLive() else {
             cancelWork()
             return
@@ -136,6 +153,7 @@ import TextTankCore
     /// Stops everything and releases the pane's presenters. The coordinator is not used again.
     func invalidate() {
         cancelWork()
+        scrollSync.stop()
         pane.tearDown()
     }
 
@@ -204,6 +222,8 @@ import TextTankCore
         shown = (revision, kind, documentURL)
         pane.setDocumentName(tab.documentName())
         pane.show(content, documentURL: documentURL)
+        // Another presenter may be showing now: a table where there was a sentence.
+        scrollSync.refresh()
         appliedCount += 1
         lastApplySeconds = ProcessInfo.processInfo.systemUptime - started
     }

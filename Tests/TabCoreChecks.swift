@@ -86,6 +86,31 @@ import Foundation
                     change(&v)
                     rejects(name) { _ = try v.encoded() }
                 }
+                // V4: a pane's own zoom is optional, bounded and absent at the default.
+                let plain = String(decoding: bytes, as: UTF8.self)
+                check(!plain.contains("oom"), "a tab at the default zoom is written without a zoom field \(kind)")
+                check(
+                    try WorkspaceLayoutState.decoded(bytes).groups[0].tabs[0].zoom == nil,
+                    "a record without a zoom reads as the default zoom \(kind)")
+                for level in [-10, -1, 0, 7, 60] {
+                    var zoomed = state
+                    zoomed.groups[0].tabs[0].zoom = level
+                    zoomed.groups[0].tabs[0].split = .init(
+                        otherAnchorByte: 0, otherCaretByte: 0, otherFirstVisibleLine: 0, otherHorizontalOffset: 0,
+                        activeHorizontalOffset: 0, secondaryActive: false, primaryFraction: 0.5)
+                    zoomed.groups[0].tabs[0].split?.otherZoom = 50 - level
+                    check(
+                        try WorkspaceLayoutState.decoded(zoomed.encoded()) == zoomed,
+                        "layout round trip keeps zoom \(level) and the other pane's \(kind)")
+                }
+                bad("zoom above 60") { $0.groups[0].tabs[0].zoom = 61 }
+                bad("zoom below -10") { $0.groups[0].tabs[0].zoom = -11 }
+                bad("other pane zoom out of range") {
+                    $0.groups[0].tabs[0].split = .init(
+                        otherAnchorByte: 0, otherCaretByte: 0, otherFirstVisibleLine: 0, otherHorizontalOffset: 0,
+                        activeHorizontalOffset: 0, secondaryActive: false, primaryFraction: 0.5)
+                    $0.groups[0].tabs[0].split?.otherZoom = 61
+                }
                 bad("negative anchor") { $0.groups[0].tabs[0].anchorByte = -1 }
                 bad("negative caret") { $0.groups[0].tabs[0].caretByte = -1 }
                 bad("negative line") { $0.groups[0].tabs[0].firstVisibleLine = -1 }
@@ -105,6 +130,17 @@ import Foundation
                 bad("wrong group count") { $0.groups.append($0.groups[0]) }
                 if kind.groupCount > 1 { bad("duplicate slot") { $0.groups[1].slot = .first } }
             }
+            // V4: the golden session was written before a tab could record its zoom.
+            let golden = try JSONSerialization.jsonObject(
+                with: Data(
+                    contentsOf: TestPaths.fixtures.appendingPathComponent(
+                        "persistence/SessionLayout.texttanksession")))
+            let goldenLayout = try WorkspaceLayoutState.decoded(
+                JSONSerialization.data(withJSONObject: (golden as? [String: Any])?["layoutState"] ?? [:]))
+            check(
+                goldenLayout.groups.flatMap(\.tabs).count == 3
+                    && goldenLayout.groups.flatMap(\.tabs).allSatisfy { $0.zoom == nil && $0.split == nil },
+                "the golden session layout decodes unchanged, every tab at the default zoom")
             _ = try workspace.remove(tb, reviewed: true, openDocuments: open)
             try workspace.validate(openDocuments: [])
             check(workspace.activeTab == nil, "last close keeps empty workspace")

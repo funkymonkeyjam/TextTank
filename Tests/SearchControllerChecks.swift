@@ -30,6 +30,27 @@ private final class SelectionReadCounterEditor: TTEditor {
         return super.selectionEnd
     }
 }
+/// Progress reports arrive on the search's own thread.
+final class ProgressTicks: @unchecked Sendable {
+    private let lock = NSLock()
+    private var reports = 0, reachedEnd = false
+    func record(_ done: Int, _ total: Int) {
+        lock.lock()
+        reports += 1
+        if done == total, total > 0 { reachedEnd = true }
+        lock.unlock()
+    }
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return reports
+    }
+    var complete: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return reachedEnd
+    }
+}
 @main struct SearchControllerChecks {
     @MainActor static func followUpCancelChecks(_ controller: SearchController, editor: TTEditor) async throws {
         let nativeSearch = controller.searchAfterReplace
@@ -93,6 +114,603 @@ private final class SelectionReadCounterEditor: TTEditor {
                     "releasing the same real report without Cancel selects and records the next match")
             }
         }
+    }
+
+    /// A source of shared Find text that is not the window: stands for a find bar.
+    private final class OtherSurface {}
+    /// V3: one Find text and one replacement, live; history; captions; DS-21 and DS-45.
+    @MainActor static func findStateChecks(_ support: URL) async throws {
+        let url = support.appendingPathComponent("find-state.json")
+        let editor = TTEditor(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: .titled, backing: .buffered,
+            defer: false)
+        window.contentView = editor
+        let controller = SearchController(preferencesURL: url)
+        controller.currentEditor = { editor }
+        controller.openEditors = { [editor] }
+        controller.onFailureSignal = {}
+        @MainActor func finished() async { await waitUntil("the search to finish") { !controller.isSearching } }
+        let panel = try requireValue(controller.window, "fixture: the Find and Replace window")
+        func inWindow(_ view: NSView) -> Bool { view.window === panel && !view.isHiddenOrHasHiddenAncestor }
+        check(
+            controller.queryCaption.stringValue == "Find" && controller.replacementCaption.stringValue == "Replace with"
+                && inWindow(controller.queryCaption) && inWindow(controller.replacementCaption)
+                && inWindow(controller.queryField) && inWindow(controller.replacementField),
+            "the window's two fields have visible captions, Find and Replace with")
+        panel.layoutIfNeeded()
+        check(
+            controller.queryCaption.frame.maxX <= controller.queryField.frame.minX
+                && controller.replacementCaption.frame.maxX <= controller.replacementField.frame.minX
+                && abs(controller.queryCaption.frame.midY - controller.queryField.frame.midY) < 8
+                && controller.queryField.frame.width > 400,
+            "each caption sits before its own field, on its row")
+        check(
+            controller.queryField.stringValue.isEmpty && controller.mode.indexOfSelectedItem == 0
+                && controller.findHistory == FindHistory(),
+            "a first launch has an empty field, Normal mode and no history")
+        // Typing in the window is shared as it is typed, without touching the field typed in.
+        var changes: [AnyObject?] = []
+        controller.sharedTextChanged = { changes.append($0) }
+        panel.makeFirstResponder(controller.queryField)
+        let typing = try requireValue(panel.firstResponder as? NSTextView, "fixture: the Find field editor")
+        typing.string = "needle"
+        typing.setSelectedRange(NSRange(location: 2, length: 3))
+        let before = controller.reusedResults
+        controller.controlTextDidChange(
+            Notification(name: NSControl.textDidChangeNotification, object: controller.queryField))
+        check(
+            controller.sharedQuery == "needle" && changes.count == 1 && changes.first.map { $0 === controller } == true,
+            "text typed in the window becomes the shared Find text at once, and names the window as its source")
+        check(
+            typing.selectedRange() == NSRange(location: 2, length: 3) && panel.firstResponder === typing
+                && typing.string == "needle",
+            "sharing what is typed leaves the caret and selection of the field typed in alone")
+        check(
+            !controller.isSearching && controller.lastOutcome == nil && controller.reusedResults == before,
+            "sharing text runs no search")
+        controller.controlTextDidChange(
+            Notification(name: NSControl.textDidChangeNotification, object: controller.queryField))
+        check(changes.count == 1, "unchanged text is not announced to the other surfaces again")
+        // Typing somewhere else (a find bar) shows in the window at once.
+        let bar = OtherSurface()
+        controller.setSharedQuery("from the bar", from: bar)
+        controller.setSharedReplacement("swap", from: bar)
+        check(
+            controller.queryField.stringValue == "from the bar" && controller.replacementField.stringValue == "swap"
+                && changes.count == 3 && changes.last.map { $0 === bar } == true,
+            "text typed in a find bar is in the window's fields as it is typed")
+        panel.makeFirstResponder(nil)
+        controller.replacementField.stringValue = "typed replacement"
+        controller.controlTextDidChange(
+            Notification(name: NSControl.textDidChangeNotification, object: controller.replacementField))
+        check(controller.sharedReplacement == "typed replacement", "the replacement text is shared the same way")
+        // History: the last ten distinct searches, saved privately, offered and never applied.
+        editor.text = "one two three one two three"
+        for number in 1...12 {
+            controller.queryField.stringValue = number % 2 == 0 ? "one" : "word \(number)"
+            controller.findAll(nil)
+            await finished()
+        }
+        check(
+            controller.findHistory.queries.count == 7 && controller.findHistory.queries.first == "one"
+                && controller.findHistory.queries.filter { $0 == "one" }.count == 1,
+            "a search repeated is one history entry, moved to the front")
+        for number in 20...31 {
+            controller.queryField.stringValue = "entry \(number)"
+            controller.findAll(nil)
+            await finished()
+        }
+        check(
+            controller.findHistory.queries == (22...31).reversed().map { "entry \($0)" }
+                && (controller.queryField.objectValues as? [String]) == controller.findHistory.queries
+                && controller.queryField.numberOfItems == 10,
+            "the Find field offers the last ten distinct searches, newest first")
+        check(
+            controller.findHistory.replacements.isEmpty && controller.replacementField.numberOfItems == 0,
+            "a search that replaces nothing adds no replacement to the history")
+        controller.queryField.stringValue = "two"
+        controller.replacementField.stringValue = "2"
+        controller.replaceAll(nil)
+        await finished()
+        check(
+            editor.text == "one 2 three one 2 three" && controller.findHistory.replacements == ["2"]
+                && (controller.replacementField.objectValues as? [String]) == ["2"],
+            "a replacement that was used is offered by the Replace with field")
+        // Choosing an entry: the pointer picks a row, the arrow keys move through rows.
+        changes = []
+        controller.queryField.selectItem(at: 3)
+        controller.comboBoxSelectionDidChange(
+            Notification(name: NSComboBox.selectionDidChangeNotification, object: controller.queryField))
+        check(
+            controller.sharedQuery == controller.findHistory.queries[3]
+                && controller.queryField.stringValue == controller.findHistory.queries[3] && !changes.isEmpty,
+            "an entry chosen from the history becomes the shared Find text for every surface")
+        check(
+            controller.queryField.isButtonBordered && controller.queryField.numberOfVisibleItems == 10
+                && controller.queryField.acceptsFirstResponder,
+            "the history is a combo box: its arrow button for the pointer, Down Arrow for the keyboard")
+        let saved = try FindPreferences.decode(Data(contentsOf: url))
+        check(
+            saved.history == controller.findHistory && saved.options.query.isEmpty && saved.options.mode == .normal,
+            "the history is kept in the private settings file, without the live text")
+        check(
+            try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int == 0o600,
+            "the settings file with the history is private to the user")
+        // Regex mode and a query in force now; the next launch has neither.
+        controller.mode.selectItem(at: 2)
+        controller.queryField.stringValue = "t(w|h)"
+        controller.findAll(nil)
+        await finished()
+        let relaunched = SearchController(preferencesURL: url)
+        check(
+            relaunched.queryField.stringValue.isEmpty && relaunched.replacementField.stringValue.isEmpty
+                && relaunched.mode.indexOfSelectedItem == 0
+                && relaunched.sharedOptions(query: "", replacement: "").mode == .normal,
+            "a new launch is in Normal mode with an empty Find field after a Regex search")
+        check(
+            relaunched.findHistory.queries.first == "t(w|h)" && relaunched.findHistory.queries.count == 10
+                && relaunched.findHistory.replacements == ["2"],
+            "the new launch offers the earlier searches as history")
+        // A find pasteboard left over from before launch is not taken in; a later one is.
+        var board = "left over"
+        relaunched.readFindText = { board }
+        relaunched.adoptFindPasteboard()
+        check(
+            !relaunched.importFindPasteboard() && relaunched.sharedQuery.isEmpty,
+            "find-pasteboard text from before the launch does not fill the Find field")
+        board = "searched in another application"
+        check(
+            relaunched.importFindPasteboard() && relaunched.queryField.stringValue == board
+                && !relaunched.importFindPasteboard(),
+            "a search made in another application afterwards is taken in, once")
+        relaunched.setSharedQuery("typed after that", from: bar)
+        check(
+            !relaunched.importFindPasteboard() && relaunched.queryField.stringValue == "typed after that",
+            "opening the window never replaces newer typed text with the pasteboard it already took")
+        // DS-21: Replace All is not offered for a search known to find nothing.
+        controller.mode.selectItem(at: 0)
+        editor.text = "alpha beta"
+        controller.queryField.stringValue = "zebra"
+        controller.replacementField.stringValue = "z"
+        controller.findAll(nil)
+        await finished()
+        check(
+            controller.lastOutcome == .found(matches: 0, documents: 1, truncated: false)
+                && !controller.replaceAllButton.isEnabled && controller.replaceAllButton.toolTip?.isEmpty == false
+                && controller.replaceAllButton.title == "Replace All",
+            "Replace All is disabled, with the reason, when the last count found nothing")
+        controller.windowDidUpdate(Notification(name: NSWindow.didUpdateNotification, object: panel))
+        check(!controller.replaceAllButton.isEnabled, "it stays disabled while nothing about the search changed")
+        controller.replacementField.stringValue = "y"
+        controller.controlTextDidChange(
+            Notification(name: NSControl.textDidChangeNotification, object: controller.replacementField))
+        check(!controller.replaceAllButton.isEnabled, "a different replacement does not change what is found")
+        controller.queryField.stringValue = "alpha"
+        controller.controlTextDidChange(
+            Notification(name: NSControl.textDidChangeNotification, object: controller.queryField))
+        check(
+            controller.replaceAllButton.isEnabled && controller.replaceAllButton.toolTip == nil,
+            "changing the Find text offers Replace All again")
+        controller.queryField.stringValue = "zebra"
+        controller.findAll(nil)
+        await finished()
+        try require(!controller.replaceAllButton.isEnabled, "fixture: Replace All is disabled again")
+        editor.text = "alpha zebra"
+        controller.windowDidUpdate(Notification(name: NSWindow.didUpdateNotification, object: panel))
+        check(controller.replaceAllButton.isEnabled, "editing the document offers Replace All again")
+        controller.findAll(nil)
+        await finished()
+        check(
+            controller.lastOutcome == .found(matches: 1, documents: 1, truncated: false)
+                && controller.replaceAllButton.isEnabled, "a count that finds a match leaves Replace All enabled")
+        controller.queryField.stringValue = "nothing here"
+        controller.findAll(nil)
+        await finished()
+        controller.caseButton.state = .on
+        _ = NSApp.sendAction(
+            try requireValue(controller.caseButton.action, "fixture"), to: controller, from: controller.caseButton)
+        check(controller.replaceAllButton.isEnabled, "changing an option offers Replace All again")
+        controller.caseButton.state = .off
+        // DS-45: an expression that does not compile marks the field and shows the whole message.
+        controller.mode.selectItem(at: 2)
+        controller.queryField.stringValue = "(unclosed [group"
+        controller.findAll(nil)
+        await finished()
+        let complaint = controller.status.stringValue
+        check(
+            controller.patternIsMarked && controller.patternNotice.stringValue == complaint && complaint.count > 20
+                && inWindow(controller.patternNotice) && controller.queryField.accessibilityHelp() == complaint
+                && controller.queryField.toolTip == complaint,
+            "an invalid pattern marks the Find field, under it and for assistive technology")
+        if case .failed(let reason)? = controller.lastOutcome {
+            check(reason == complaint, "the outcome carries the same whole message")
+        } else {
+            check(false, "the outcome carries the same whole message")
+        }
+        check(
+            controller.status.lineBreakMode == .byWordWrapping && controller.status.maximumNumberOfLines == 3
+                && controller.patternNotice.maximumNumberOfLines == 0
+                && controller.patternNotice.lineBreakMode == .byWordWrapping
+                && controller.queryField.stringValue == "(unclosed [group",
+            "the whole message is shown, wrapped and not cut off, and what was typed is kept")
+        controller.queryField.stringValue = "(closed)"
+        controller.controlTextDidChange(
+            Notification(name: NSControl.textDidChangeNotification, object: controller.queryField))
+        check(
+            !controller.patternIsMarked && controller.queryField.accessibilityHelp() == nil,
+            "correcting the expression removes the mark")
+        controller.queryField.stringValue = "alpha"
+        controller.mode.selectItem(at: 0)
+        controller.findAll(nil)
+        await finished()
+        check(!controller.patternIsMarked, "a search that fails for another reason, or succeeds, marks nothing")
+        controller.window?.close()
+        relaunched.window?.close()
+    }
+    /// V5: Current document and Selection scope above the engine's limit, with the limit and the
+    /// window lowered so that a few hundred bytes are a large document read in many windows.
+    @MainActor static func largeDocumentChecks(_ support: URL) async throws {
+        let editor = TTEditor(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: .titled, backing: .buffered,
+            defer: false)
+        window.contentView = editor
+        let controller = SearchController(preferencesURL: support.appendingPathComponent("find-large.json"))
+        controller.currentEditor = { editor }
+        controller.openEditors = { [editor] }
+        var signals = 0, recorded: [String] = [], unrecordable = 0
+        controller.onFailureSignal = { signals += 1 }
+        controller.onCommand = { _, action, _ in recorded.append(action) }
+        controller.onUnrecordableCommand = { _ in unrecordable += 1 }
+        controller.largeDocumentUnits = 64
+        controller.largeChunkBytes = 32
+        @MainActor func finished() async { await waitUntil("the search to finish") { !controller.isSearching } }
+        let text =
+            String(repeating: "caf\u{e9} Na\u{ef}ve \u{1F600} na\u{ef}ve needle\n", count: 12) + "tail NA\u{cf}VE end\n"
+        func byteRanges(_ query: String, matchCase: Bool, mode: SearchOptions.Mode = .normal, in source: String) throws
+            -> [NSRange]
+        {
+            let hits = try SearchCore.search(
+                source, options: SearchOptions(query: query, mode: mode, matchCase: matchCase)
+            )
+            .hits
+            return try requireValue(SearchCore.byteRanges(hits.map(\.range), in: source), "fixture: byte ranges")
+        }
+        editor.text = text
+        editor.resetUndoHistory()
+        try require(controller.largeSnapshot(of: editor) != nil, "fixture: the document is above the lowered limit")
+        editor.text = "short"
+        check(controller.largeSnapshot(of: editor) == nil, "a document at or under the limit is not copied or counted")
+        editor.text = text
+        editor.resetUndoHistory()
+        let folded = try byteRanges("na\u{ef}ve", matchCase: false, in: text)
+        let exact = try byteRanges("na\u{ef}ve", matchCase: true, in: text)
+        try require(folded.count == 25 && exact.count == 12, "fixture: 25 folded and 12 exact matches")
+        // Count.
+        controller.queryField.stringValue = "na\u{ef}ve"
+        controller.findAll(nil)
+        check(
+            controller.isSearching && controller.status.stringValue == "Searching…",
+            "a large search starts off the main thread")
+        await finished()
+        check(
+            controller.lastOutcome == .found(matches: 25, documents: 1, truncated: false)
+                && controller.numberOfRows(in: controller.table) == 0
+                && controller.status.stringValue.hasPrefix("25 matches in 1 document.")
+                && controller.status.stringValue.contains("not listed"),
+            "Find All / Count above the limit reports the right count, case-insensitively, and says the matches are not listed"
+        )
+        check(controller.progressReports > 0, "a large search shows real progress while it runs")
+        controller.caseButton.state = .on
+        controller.findAll(nil)
+        await finished()
+        check(
+            controller.lastOutcome == .found(matches: 12, documents: 1, truncated: false),
+            "Match case counts only the exact matches in multi-byte text")
+        controller.caseButton.state = .off
+        // Next, Previous, wrap.
+        _ = editor.setSelectionAnchor(0, caret: 0)
+        recorded = []
+        controller.next(nil)
+        await finished()
+        check(
+            editor.selectionStart == folded[0].location && editor.selectionEnd == NSMaxRange(folded[0])
+                && controller.lastOutcome == .movedToMatch && recorded == ["next"] && signals == 0,
+            "Find Next above the limit selects the first match after the caret and is recorded")
+        controller.next(nil)
+        await finished()
+        controller.next(nil)
+        await finished()
+        check(
+            editor.selectionStart == folded[2].location && editor.selectedText == "Na\u{ef}ve",
+            "Find Next again moves on, one match at a time, across windows")
+        controller.previous(nil)
+        await finished()
+        check(
+            editor.selectionStart == folded[1].location && recorded == ["next", "next", "next", "previous"],
+            "Find Previous goes back to the match before")
+        _ = editor.setSelectionAnchor(editor.byteLength, caret: editor.byteLength)
+        controller.next(nil)
+        await finished()
+        check(editor.selectionStart == folded[0].location, "Find Next at the end wraps to the first match")
+        _ = editor.setSelectionAnchor(0, caret: 0)
+        controller.previous(nil)
+        await finished()
+        check(
+            editor.selectionStart == folded[24].location && editor.selectedText == "NA\u{cf}VE",
+            "Find Previous at the start wraps to the last match")
+        controller.wrapButton.state = .off
+        _ = editor.setSelectionAnchor(editor.byteLength, caret: editor.byteLength)
+        signals = 0
+        controller.next(nil)
+        await finished()
+        check(
+            controller.lastOutcome == .noFurtherMatches && signals == 1 && editor.selectionStart == editor.byteLength
+                && controller.status.stringValue == "No further matches.",
+            "with Wrap Around off, Find Next at the end says so and moves nothing")
+        controller.wrapButton.state = .on
+        // Regex is refused in plain words, with what to do next.
+        controller.mode.selectItem(at: 2)
+        controller.queryField.stringValue = "n[a\u{e4}]\u{ef}ve"
+        _ = editor.setSelectionAnchor(3, caret: 3)
+        let regexRevision = editor.revision
+        controller.next(nil)
+        await finished()
+        check(
+            controller.lastOutcome == .failed(SearchFailure.largeDocumentRegex.localizedDescription)
+                && controller.status.stringValue.contains("too large for a regular expression search")
+                && controller.status.stringValue.contains("Selection")
+                && controller.status.stringValue.contains("Normal") && editor.selectionStart == 3
+                && editor.revision == regexRevision && !controller.patternIsMarked,
+            "a Regex Find above the limit says so in plain words and says what to do next")
+        // ...and searching a selection is what it says: the selection is searched on its own.
+        let half = text.utf8.count / 2 - (text.utf8.count / 2) % 1
+        let scopeEnd = try requireValue(
+            (0...4).map { half + $0 }.first { editor.setSelectionAnchor(0, caret: $0) && editor.selectionEnd == $0 },
+            "fixture: a selection ending on a character boundary")
+        controller.largeDocumentUnits = 400
+        try require(
+            controller.largeSnapshot(of: editor) == nil, "fixture: under a higher limit the document is ordinary")
+        controller.largeDocumentUnits = 64
+        _ = editor.setSelectionAnchor(0, caret: scopeEnd)
+        controller.scope.selectItem(at: 1)
+        controller.findAll(nil)
+        await finished()
+        check(
+            controller.lastOutcome == .failed(SearchFailure.largeSelectionRegex.localizedDescription),
+            "a selection that is itself above the limit is refused for Regex, saying to select less")
+        controller.largeDocumentUnits = 300
+        try require(controller.largeSnapshot(of: editor) != nil, "fixture: still a large document")
+        let selected = String(decoding: Data(text.utf8).prefix(scopeEnd), as: UTF8.self)
+        let inScope = try byteRanges("n[a\u{e4}]\u{ef}ve", matchCase: false, mode: .regularExpression, in: selected)
+        controller.findAll(nil)
+        await finished()
+        check(
+            controller.lastOutcome == .found(matches: inScope.count, documents: 1, truncated: false)
+                && inScope.count > 4,
+            "a Regex search of a selection in a large document counts the matches in the selection")
+        controller.next(nil)
+        await finished()
+        check(
+            editor.selectionStart == inScope[0].location && editor.selectionEnd == NSMaxRange(inScope[0]),
+            "the first Regex Next in Selection scope selects the first match in the selection")
+        controller.next(nil)
+        await finished()
+        check(
+            editor.selectionStart == inScope[1].location,
+            "the next press continues inside the remembered scope, not from a new selection")
+        controller.mode.selectItem(at: 0)
+        controller.queryField.stringValue = "needle"
+        _ = editor.setSelectionAnchor(0, caret: scopeEnd)
+        controller.findAll(nil)
+        await finished()
+        check(
+            controller.lastOutcome
+                == .found(
+                    matches: try byteRanges("needle", matchCase: false, in: selected).count, documents: 1,
+                    truncated: false),
+            "a Normal search of a selection in a large document reads only the selection, in windows")
+        controller.scope.selectItem(at: 0)
+        controller.largeDocumentUnits = 64
+        // Replace: the selected match, one Undo step, then on to the next match.
+        let needles = try byteRanges("needle", matchCase: false, in: text)
+        controller.replacementField.stringValue = "PIN"
+        _ = editor.setSelectionAnchor(needles[0].location, caret: NSMaxRange(needles[0]))
+        recorded = []
+        controller.replaceOne(nil)
+        await finished()
+        let afterOne = text.replacingCharacters(in: try requireValue(text.range(of: "needle"), "fixture"), with: "PIN")
+        check(
+            editor.text == afterOne && controller.lastOutcome == .replaced(changed: 1, stale: 0)
+                && controller.status.stringValue.hasSuffix("Selected the next match.")
+                && editor.selectedText == "needle"
+                && editor.selectionStart == needles[1].location - 3 && recorded == ["replaceOne", "next"],
+            "Replace above the limit replaces the selected match and selects the next one")
+        editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+        check(editor.text == text, "one Undo restores the single replacement")
+        _ = editor.setSelectionAnchor(2, caret: 2)
+        recorded = []
+        controller.replaceOne(nil)
+        await finished()
+        check(
+            editor.text == text && controller.lastOutcome == .selectedNextMatch && editor.selectedText == "needle"
+                && editor.selectionStart == needles[0].location && recorded == ["next"],
+            "Replace with no match selected selects the next match and changes nothing")
+        // Replace All is supported above the limit: every match, one bounded Undo step.
+        recorded = []
+        let undoRevision = editor.revision
+        controller.replaceAll(nil)
+        await finished()
+        check(
+            editor.text == text.replacingOccurrences(of: "needle", with: "PIN")
+                && controller.lastOutcome == .replaced(changed: 12, stale: 0) && recorded == ["replaceAll"],
+            "Replace All above the limit replaces every match")
+        editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+        check(
+            editor.text == text && editor.revision != undoRevision, "one Undo restores every replacement of Replace All"
+        )
+        controller.queryField.stringValue = "absent"
+        controller.replaceAll(nil)
+        await finished()
+        check(
+            editor.text == text && controller.lastOutcome == .replaced(changed: 0, stale: 0)
+                && !controller.replaceAllButton.isEnabled,
+            "Replace All that finds nothing changes nothing, and is then disabled")
+        controller.queryField.stringValue = "needle"
+        // The result cap is the engine's: a truncated result never replaces.
+        editor.text = String(repeating: "x", count: 100_001)
+        let cappedRevision = editor.revision
+        controller.queryField.stringValue = "x"
+        controller.replacementField.stringValue = "y"
+        controller.replaceAll(nil)
+        await finished()
+        check(
+            controller.lastOutcome == .limitReached && editor.revision == cappedRevision,
+            "100,001 matches in a large document reach the result cap and replace nothing")
+        controller.findAll(nil)
+        await finished()
+        check(
+            controller.lastOutcome == .found(matches: 100_000, documents: 1, truncated: true),
+            "a count at the cap says the limit was reached")
+        editor.text = text
+        editor.resetUndoHistory()
+        controller.queryField.stringValue = "needle"
+        // Marks, bookmarks and All open documents are refused in words; nothing changes.
+        controller.mark(nil)
+        check(
+            controller.lastOutcome == .failed(SearchFailure.largeDocumentAction.localizedDescription)
+                && !controller.isSearching,
+            "Mark Matches is refused in a large document")
+        controller.bookmark(nil)
+        check(
+            controller.lastOutcome == .failed(SearchFailure.largeDocumentAction.localizedDescription)
+                && editor.bookmarkLines.isEmpty, "Bookmark Matches is refused in a large document")
+        controller.scope.selectItem(at: 2)
+        controller.findAll(nil)
+        check(
+            controller.status.stringValue.contains("too large to search together with the other open documents")
+                && !controller.isSearching,
+            "All open documents refuses a large document and says to search it on its own")
+        controller.scope.selectItem(at: 0)
+        // Cancel and revalidation.
+        _ = editor.setSelectionAnchor(0, caret: 0)
+        controller.next(nil)
+        controller.cancel(nil)
+        await finished()
+        check(
+            controller.lastOutcome == .cancelled && editor.selectionStart == 0 && editor.selectionEnd == 0
+                && controller.status.stringValue.hasPrefix("Cancelled"),
+            "a large search can be cancelled and then selects nothing")
+        recorded = []
+        controller.next(nil)
+        try require(editor.replaceSelection("edit "), "fixture: an edit while the search runs")
+        let editedRevision = editor.revision, editedCaret = editor.selectionCaret
+        await finished()
+        check(
+            controller.lastOutcome == .staleResult && editor.revision == editedRevision
+                && editor.selectionCaret == editedCaret && recorded.isEmpty,
+            "a result for a revision that has changed selects nothing and is not recorded")
+        editor.text = text
+        controller.replaceAll(nil)
+        _ = editor.setSelectionAnchor(5, caret: 5)
+        await finished()
+        check(
+            controller.lastOutcome == .staleResult && editor.text == text,
+            "a replacement is not applied after the selection moved while the search ran")
+        // The find bar's path: the same planner through performInline, with progress.
+        var inlineResult: InlineSearchOutcome?
+        let ticks = ProgressTicks()
+        @MainActor func inline(_ action: String, _ options: SearchOptions) async {
+            inlineResult = nil
+            controller.performInline(
+                options: options, action: action, on: editor, cancellation: TTSearchCancellation(),
+                isCurrent: { true }, progress: { done, total in ticks.record(done, total) },
+                completion: { inlineResult = $0 })
+            await waitUntil("the inline search completion") { inlineResult != nil }
+        }
+        editor.text = text
+        editor.resetUndoHistory()
+        _ = editor.setSelectionAnchor(0, caret: 0)
+        await inline("next", SearchOptions(query: "NA\u{cf}VE"))
+        if case .applied? = inlineResult {
+            check(editor.selectionStart == folded[0].location, "the find bar's Next works above the limit")
+        } else {
+            check(false, "the find bar's Next works above the limit")
+        }
+        await inline("previous", SearchOptions(query: "NA\u{cf}VE", matchCase: true))
+        check(editor.selectedText == "NA\u{cf}VE", "the find bar's Previous works above the limit, with Match case")
+        check(ticks.count > 0 && ticks.complete, "the find bar is told real progress for a large search")
+        await inline("next", SearchOptions(query: "zebra"))
+        if case .noMatch? = inlineResult {
+            check(true, "no match above the limit is reported as no match")
+        } else {
+            check(false, "no match above the limit is reported as no match")
+        }
+        await inline("next", SearchOptions(query: "n.ve", mode: .regularExpression))
+        if case .failed(let error)? = inlineResult {
+            check(
+                error as? SearchFailure == .largeDocumentRegex,
+                "the find bar's Regex Find above the limit is refused with the plain message")
+        } else {
+            check(false, "the find bar's Regex Find above the limit is refused with the plain message")
+        }
+        _ = editor.setSelectionAnchor(0, caret: 0)
+        await inline("replaceAll", SearchOptions(query: "needle", replacement: "PIN"))
+        if case .replacedAll(let count)? = inlineResult {
+            check(
+                count == 12 && editor.text == text.replacingOccurrences(of: "needle", with: "PIN"),
+                "the find bar's Replace All works above the limit")
+        } else {
+            check(false, "the find bar's Replace All works above the limit")
+        }
+        editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+        check(editor.text == text, "and is one Undo step")
+        let cancelled = TTSearchCancellation()
+        inlineResult = nil
+        controller.performInline(
+            options: SearchOptions(query: "needle"), action: "next", on: editor, cancellation: cancelled,
+            isCurrent: { true }, completion: { inlineResult = $0 })
+        cancelled.cancel()
+        await waitUntil("the cancelled inline search") { inlineResult != nil }
+        if case .cancelled? = inlineResult {
+            check(true, "a large find-bar search can be cancelled")
+        } else {
+            check(false, "a large find-bar search can be cancelled")
+        }
+        // The live count: the same publication as below the limit.
+        let data = Data(text.utf8)
+        for (query, caret, wrap) in [
+            ("na\u{ef}ve", 0, true), ("needle", needles[5].location + 1, true), ("NEEDLE", data.count, false),
+            ("zebra", 0, true), ("e", folded[3].location, true)
+        ] {
+            let options = SearchOptions(query: query, wrap: wrap)
+            let ordinary = try SearchController.preview(
+                data, options: options, openingCaret: caret, cancellation: TTSearchCancellation())
+            let large = try SearchController.preview(
+                data, options: options, openingCaret: caret, cancellation: TTSearchCancellation(), unitLimit: 64,
+                chunkBytes: 32)
+            check(
+                large.highlights == ordinary.highlights && large.selected == ordinary.selected
+                    && large.countText == ordinary.countText && large.foundNothing == (query == "zebra"),
+                "the live count above the limit matches the ordinary one for “\(query)”")
+        }
+        rejects("the live count refuses Regex above the limit", expecting: SearchFailure.largeDocumentRegex) {
+            _ = try SearchController.preview(
+                data, options: SearchOptions(query: "n.ve", mode: .regularExpression), openingCaret: 0,
+                cancellation: TTSearchCancellation(), unitLimit: 64, chunkBytes: 32)
+        }
+        // Recorded searches replay above the limit by the same bounded synchronous rules.
+        _ = editor.setSelectionAnchor(0, caret: 0)
+        try controller.playRecorded(options: SearchOptions(query: "needle"), action: "next", on: editor)
+        check(editor.selectionStart == needles[0].location, "a recorded Next replays in a large document")
+        try controller.playRecorded(
+            options: SearchOptions(query: "needle", replacement: "PIN"), action: "replaceOne", on: editor)
+        check(editor.text == afterOne, "a recorded Replace replays in a large document")
+        rejects("a recorded search that finds nothing stops the macro", message: "did not match") {
+            try controller.playRecorded(options: SearchOptions(query: "zebra"), action: "next", on: editor)
+        }
+        controller.window?.close()
     }
 
     @MainActor static func main() async {
@@ -516,20 +1134,29 @@ private final class SelectionReadCounterEditor: TTEditor {
             check(
                 editor.text == "one:12 two:34" && controller.queryField.stringValue == "([a-z]+)=(\\d+)",
                 "active shared field editor commits only replacement and preserves regex query")
-            let persisted = try FindPreferences.decode(Data(contentsOf: AppStorage.url(.find))).options
+            // V3: the private file keeps what was searched for as history. The live text and the
+            // Regex mode are not carried to the next launch (this replaces the earlier restore).
+            let persisted = try FindPreferences.decode(Data(contentsOf: AppStorage.url(.find)))
             check(
-                persisted.query == "([a-z]+)=(\\d+)" && persisted.replacement == "$1:$2"
-                    && persisted.mode == .regularExpression,
-                "a Find-window action saves its options in the isolated private file")
+                persisted.history.queries.first == "([a-z]+)=(\\d+)" && persisted.history.replacements.first == "$1:$2"
+                    && persisted.options.query.isEmpty && persisted.options.replacement.isEmpty
+                    && persisted.options.mode == .normal,
+                "a Find-window action saves its search and replacement as history in the isolated private file")
             check(
                 providerCalls == 0 && protected.data(forKey: "TextTank.Search.v1") == Data("sentinel".utf8)
                     && isolated.data(forKey: "TextTank.Search.v1") == nil,
                 "private saves never obtain shared legacy defaults or write either protected legacy fixture")
             let reopened = SearchController(defaults: isolated)
             check(
-                reopened.queryField.stringValue == "([a-z]+)=(\\d+)" && reopened.replacementField.stringValue == "$1:$2"
-                    && reopened.mode.indexOfSelectedItem == 2,
-                "a second controller on the same defaults restores the saved options")
+                reopened.queryField.stringValue.isEmpty && reopened.replacementField.stringValue.isEmpty
+                    && reopened.mode.indexOfSelectedItem == 0 && reopened.sharedQuery.isEmpty,
+                "a new launch starts in Normal mode with empty fields; nothing is silently restored into Regex")
+            check(
+                reopened.findHistory.queries.first == "([a-z]+)=(\\d+)"
+                    && reopened.findHistory.replacements.first == "$1:$2"
+                    && (reopened.queryField.objectValues as? [String]) == reopened.findHistory.queries
+                    && (reopened.replacementField.objectValues as? [String]) == reopened.findHistory.replacements,
+                "what was searched for before is offered by both fields as history")
             editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(editor.text == "one=12 two=34", "native focused-field replace all one Undo")
             editor.setSavePoint()
@@ -1794,6 +2421,8 @@ private final class SelectionReadCounterEditor: TTEditor {
             check(
                 controller.lastOutcome == .found(matches: 1, documents: 1, truncated: false),
                 "F182 reordered mode display retains represented search identity")
+            try await findStateChecks(support.url)
+            try await largeDocumentChecks(support.url)
             Checks.summary { "PASS SearchControllerChecks: \(Checks.count) assertions" }
         }
     }

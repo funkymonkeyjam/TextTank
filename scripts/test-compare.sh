@@ -9,7 +9,7 @@ suite_run compare-core-layering harness/logs/compare-core-layering.log /bin/echo
 suite_build "compare-checks" swiftc "${SWIFT_BASE[@]}" "$SUITE_SUPPORT" Tests/CompareChecks.swift -o build/tests/compare-checks
 suite_run compare-checks harness/logs/compare-checks.log build/tests/compare-checks
 if [[ "${1:-}" != --core-only ]]; then
-suite_build "compare-controller-checks" swiftc "${SWIFT_BASE[@]}" -F "$VENDOR_BUILD" -framework Scintilla -framework Cocoa -lc++ -Xlinker -rpath -Xlinker "$VENDOR_BUILD" "$SUITE_SUPPORT" Tests/Support/ModelessForms.swift Tests/SavedVersionChecks.swift Tests/CompareControllerChecks.swift -Xlinker "$NATIVE_BRIDGE_LIBRARY" -o build/tests/compare-controller-checks
+suite_build "compare-controller-checks" swiftc "${SWIFT_BASE[@]}" -F "$VENDOR_BUILD" -framework Scintilla -framework Cocoa -lc++ -Xlinker -rpath -Xlinker "$VENDOR_BUILD" "$SUITE_SUPPORT" Tests/Support/ModelessForms.swift Tests/SavedVersionChecks.swift Tests/LocalHistoryChecks.swift Tests/CompareControllerChecks.swift -Xlinker "$NATIVE_BRIDGE_LIBRARY" -o build/tests/compare-controller-checks
 compare_client=build/tests/compare-controller-checks
 if [[ "$SUITE_BROKEN" != *" compare-controller-checks "* ]]; then
   if compare_client=$(python3 scripts/prepare-native-check-app.py --executable build/tests/compare-controller-checks --application "$APP_PATH"); then :; else

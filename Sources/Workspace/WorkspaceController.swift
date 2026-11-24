@@ -260,12 +260,22 @@ final class SessionCheckCancellation: @unchecked Sendable {
             return doc
         }
     }
-    func diskLayout() throws -> LastSessionLayout {
-        let files = try documents.compactMap { doc -> LastSessionLayout.File? in
-            guard let url = doc.fileURL else { return nil }
-            return try .init(id: DocumentID(doc.recoveryID), url: url, encoding: doc.revertEncoding)
+    /// Files always; an untitled document only where `keeping` says its unsaved text is kept (DS-D9).
+    func diskLayout(keeping: (TextDocument) -> Bool = { _ in false }) throws -> LastSessionLayout {
+        var files = [LastSessionLayout.File](), untitled = [LastSessionLayout.Untitled]()
+        for doc in documents {
+            let id = DocumentID(doc.recoveryID)
+            if let url = doc.fileURL {
+                files.append(try .init(id: id, url: url, encoding: doc.revertEncoding))
+            } else if keeping(doc) {
+                let language = doc.languageIdentifier
+                untitled.append(
+                    .init(
+                        id: id, language: language == LanguageProfile.plainTextID ? nil : language,
+                        lineEnding: doc.editor.statusInfo.eol.lineEnding.rawValue))
+            }
         }
-        return try LastSessionLayout(files: files, layout: layout)
+        return try LastSessionLayout(files: files, untitled: untitled, layout: layout)
     }
 }
 
@@ -278,6 +288,10 @@ final class SessionCheckCancellation: @unchecked Sendable {
     private var reviewed: LastSessionLayout?
     private var review: OpenSessionLayout?
     private var suspending = false
+    /// Which untitled documents a record names (DS-D9). A periodic checkpoint names every edited
+    /// one, so that after a crash its recovery copy reopens in its place; a committed quit names
+    /// only those whose copy was verified. The default names none, as before the decision.
+    var keepsUntitled: @MainActor (TextDocument, _ quitting: Bool) -> Bool = { _, _ in false }
     init(url: URL = AppStorage.url(.lastSession)) {
         self.url = url
         writer = SessionWriter(url)
@@ -304,7 +318,7 @@ final class SessionCheckCancellation: @unchecked Sendable {
     func checkpoint(_ host: WorkspaceWindowController?, report: @escaping @MainActor @Sendable (Error) -> Void) {
         guard writable, !suspending, !writing, let host, !host.isMutatingGroups else { return }
         do {
-            let state = try OpenSessionLayout(host).diskLayout()
+            let state = try OpenSessionLayout(host).diskLayout { keepsUntitled($0, false) }
             writing = true
             writer.submit(state) { [weak self] error in
                 self?.writing = false
@@ -323,7 +337,7 @@ final class SessionCheckCancellation: @unchecked Sendable {
             return
         }
         // Keep final Save As paths after the review and release the closed NSDocuments.
-        if let captured = review, let state = try? captured.diskLayout() {
+        if let captured = review, let state = try? captured.diskLayout(keeping: { keepsUntitled($0, true) }) {
             reviewed = state
             review = nil
         }
@@ -347,15 +361,22 @@ final class SessionCheckCancellation: @unchecked Sendable {
         guard writable else { return false }
         if let reviewed { return try writer.finish(reviewed) }
         guard let capture = review ?? host.map(OpenSessionLayout.init) else { return true }
-        return try writer.finish(capture.diskLayout())
+        return try writer.finish(capture.diskLayout { keepsUntitled($0, true) })
     }
 
     /// Ordinary opens with an already populated workspace keep their own layout and focus.
-    func reopen(_ state: LastSessionLayout, in host: WorkspaceWindowController) -> (
-        files: [URL: TextDocument], notices: [String]
-    ) {
+    /// `untitled` reopens one kept untitled document from its recovery copy, or answers nil when
+    /// that copy is not there to be opened; the tab is then left out and the launch's recovery
+    /// review still sees whatever is in the folder.
+    func reopen(
+        _ state: LastSessionLayout, in host: WorkspaceWindowController,
+        untitled: (LastSessionLayout.Untitled) -> TextDocument? = { _ in nil }
+    ) -> (files: [URL: TextDocument], notices: [String]) {
         let previous = host.active
         var mapping = [DocumentID: TextDocument](), originals = [URL: TextDocument](), notices = [String]()
+        for item in state.untitled ?? [] {
+            if let doc = untitled(item) { mapping[item.id] = doc }
+        }
         for item in state.files {
             let url = item.url, disk = TextDocument.canonicalDiskURL(url)
             do {

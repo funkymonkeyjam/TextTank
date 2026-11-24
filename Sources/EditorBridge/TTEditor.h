@@ -106,6 +106,7 @@ __attribute__((objc_subclassing_restricted))
 ///   bookmarks, search highlights, the undo history and the save point (modified).
 /// - View: automatic indentation on Return, live brace feedback, current-line framing, indentation guides, wrap, zoom, selection and scroll position, syntax styles and fonts (setSyntaxStyle:,
 ///   setSyntaxFont:), margins, whitespace and line-ending visibility, and overtype.
+///   The horizontal scroll range is view state too: it tracks the widest line laid out.
 /// revision is counted per view, but views of one document always report the same value.
 @interface TTEditor : NSView
 /// Reading makes one copy, decoded straight from the engine's buffer. Do not read it only for
@@ -310,6 +311,14 @@ __attribute__((objc_subclassing_restricted))
 - (void)applyDefaultZoomLevel:(NSInteger)level;
 /// Actual Size: returns this view to the default zoom level, which it then follows again.
 - (void)resetZoomLevel;
+/// NO once this view was zoomed away from the default level; a saved session records only such a zoom.
+@property(nonatomic, readonly) BOOL followsDefaultZoom;
+/// The line-number gutter, whitespace marks and line-ending marks of this view. The View menu's
+/// three commands store one choice in Editor Settings and set it on every document view here;
+/// the catalog toggles of the same names flip the same per-view state.
+@property(nonatomic) BOOL lineNumbersVisible;
+@property(nonatomic) BOOL whitespaceVisible;
+@property(nonatomic) BOOL lineEndingsVisible;
 - (BOOL)setSyntaxFont:(NSInteger)index faceOverride:(nullable NSString *)name sizeOverride:(nullable NSNumber *)size;
 /// Comparison-only presentation primitives; callers use independent snapshot renderers.
 /// No method below edits text, Undo, savepoint or selections. Indicator21/22 and marker2/3/4

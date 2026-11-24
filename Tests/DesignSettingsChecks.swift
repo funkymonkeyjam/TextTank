@@ -280,11 +280,18 @@ import NativeSearch
                 "appearance",
                 [
                     "settings.appearance", "settings.font.choose", "settings.font.size", "settings.font.zoom",
-                    "settings.indentGuides", "settings.currentLineHighlight", "settings.braceHighlight"
+                    "settings.indentGuides", "settings.currentLineHighlight", "settings.braceHighlight",
+                    "settings.lineNumbers", "settings.showWhitespace", "settings.showLineEndings"
                 ]
             ),
-            ("files", ["settings.atLaunch", "settings.externalChanges", "settings.reveal"]),
-            ("previews", ["settings.preview.openIn"]),
+            (
+                "files",
+                [
+                    "settings.atLaunch", "settings.externalChanges", "settings.keepUntitledOnQuit",
+                    "settings.keepLocalHistory", "settings.clearLocalHistory", "settings.reveal"
+                ]
+            ),
+            ("previews", ["settings.preview.openIn", "settings.syncPreviewScrolling"]),
             ("shortcuts", ["settings.shortcuts"])
         ]
         var heights: [String: CGFloat] = [:]
@@ -427,6 +434,44 @@ import NativeSearch
         changed.performClick(nil)
         check(shownSettings(window) == expected[2].1, "V6 turning the filter off returns to the chosen pane")
 
+        // The rows the other slices' stored keys got through the extension point: each is found
+        // by the search, saves when clicked, and is listed by Changed from default while it differs.
+        let added: [(id: String, word: String, read: (EditorSettings) -> Bool, standard: Bool)] = [
+            ("settings.lineNumbers", "gutter", { $0.lineNumbersEnabled }, true),
+            ("settings.showWhitespace", "whitespace", { $0.showWhitespaceEnabled }, false),
+            ("settings.showLineEndings", "crlf", { $0.showLineEndingsEnabled }, false),
+            ("settings.syncPreviewScrolling", "sync scrolling", { $0.syncsPreviewScrolling }, true),
+            ("settings.keepUntitledOnQuit", "untitled quitting", { $0.keepsUntitledOnQuit }, true),
+            ("settings.keepLocalHistory", "earlier versions saving", { $0.keepsLocalHistory }, true)
+        ]
+        for row in added {
+            try search(row.word, in: window)
+            check(shownSettings(window) == [row.id], "V6 “\(row.word)” finds \(row.id): \(shownSettings(window))")
+            let box: NSButton = try control(row.id, window)
+            check(
+                (box.state == .on) == row.standard && !(box.accessibilityLabel() ?? "").isEmpty,
+                "V6 \(row.id) shows its default and is labelled")
+            box.performClick(nil)
+            try search("", in: window)
+            changed.performClick(nil)
+            check(
+                row.read(controller.value) != row.standard && row.read(SettingsStore(url: url).value) != row.standard
+                    && shownSettings(window) == [row.id],
+                "V6 \(row.id) saves when clicked and is then the one changed setting: \(shownSettings(window))")
+            try control(row.id + ".default", window, as: NSButton.self).performClick(nil)
+            check(
+                row.read(controller.value) == row.standard && shownSettings(window).isEmpty,
+                "V6 Use Default returns \(row.id) to its default")
+            changed.performClick(nil)
+        }
+        try search("local history", in: window)
+        let clearHistory: NSButton = try control("settings.clearLocalHistory", window)
+        check(
+            shownSettings(window) == ["settings.keepLocalHistory", "settings.clearLocalHistory"]
+                && clearHistory.title == "Clear Local History…" && clearHistory.action != nil,
+            "V6 Clear Local History… is a row of the Files pane, found with the setting it belongs to")
+        try search("", in: window)
+
         // Stored view toggles: one helper lists each of them (the row extension point).
         try choosePane("editing", in: window)
         let autoIndent: NSButton = try control("settings.autoIndent", window)
@@ -553,7 +598,7 @@ import NativeSearch
         // (a) Every command, with its key and whether that is the default.
         let palette = composition.commandDiscovery.commands(in: bar)
         let titles = Set(listed())
-        let missing = palette.map(\.row.title).filter { !titles.contains($0) }
+        let missing = palette.map(\.path).filter { !titles.contains($0) }
         check(
             missing.isEmpty && titles.contains("Help › Command Palette…") && titles.count == listed().count,
             "V8 the list has every command the Command Palette has, once each (missing: \(missing.prefix(5)))")
@@ -583,6 +628,18 @@ import NativeSearch
             text(try row(automation), 2) == "Fixed" && !recorder.isEnabled
                 && note.stringValue.contains("Tools › Automations › Manage Automations…"),
             "V8 an automation's own shortcut is shown read-only with where to change it")
+        // Commands the other slices added are ordinary rows: each can be given a key.
+        for (title, key, status) in [
+            ("File › Quick Open…", "⇧⌘O", "Default"), ("View › Toggle Preview", "⇧⌘V", "Default"),
+            ("Compare › Compare with Earlier Version…", "", "None"), ("Compare › Clear Local History…", "", "None"),
+            ("View › Show Whitespace", "", "None"), ("View › Show Line Endings", "", "None"),
+            ("View › Show Line Numbers", "", "None")
+        ] {
+            try select(title)
+            check(
+                try text(try row(title), 1) == key && text(try row(title), 2) == status && recorder.isEnabled,
+                "V8 \(title) is in the list and can be given a shortcut")
+        }
         try find("copy save")
         check(
             listed() == ["File › Save Copy…"], "V8 the list is searched by the words of a command: \(listed())")
@@ -652,11 +709,12 @@ import NativeSearch
             "V8 and its former key no longer does")
         NSDocumentController.shared.documents.forEach { $0.close() }
         let entry = try requireValue(
-            composition.commandDiscovery.commands(in: bar).first { $0.row.title == "File › New" },
+            composition.commandDiscovery.commands(in: bar).first { $0.path == "File › New" },
             "V8 fixture: File › New in the Command Palette")
         check(
-            entry.row.shortcut == "⌃⌥K" && entry.row.shortcut == MenuShortcut(new)?.displayText
-                && palette.first { $0.row.title == "File › Save" }?.row.shortcut == "⌘S",
+            entry.row.accessory == "⌃⌥K" && entry.row.accessory == MenuShortcut(new)?.displayText
+                && entry.row.accessoryLabel == "Shortcut Control-Option-K"
+                && palette.first { $0.path == "File › Save" }?.row.accessory == "⌘S",
             "V8 DS-20 the Command Palette shows the same key in the same form")
 
         // (c) A key in use names the clash and offers Replace or Cancel.
@@ -693,6 +751,31 @@ import NativeSearch
                 && text(try row("View › Toggle Preview"), 1).isEmpty
                 && text(try row("View › Toggle Preview"), 2) == "Default, given up",
             "V8 a yielding default gives way to the assignment and the list says so")
+
+        // Quick Open's Shift-Command-O is a yielding default too.
+        let quickOpen = try item("quickOpen:")
+        try select("Edit › Convert Case › Lowercase")
+        try press("O", [.command, .shift], code: 31)
+        check(
+            try settings.value.shortcuts["lower"] == "O" && replace.isHidden && quickOpen.keyEquivalent.isEmpty
+                && text(try row("File › Quick Open…"), 2) == "Default, given up",
+            "V8 Quick Open gives Shift-Command-O to an assignment without a question")
+        try button("default").performClick(nil)
+        check(
+            settings.value.shortcuts["lower"] == nil && quickOpen.keyEquivalent == "O"
+                && quickOpen.keyEquivalentModifierMask == .command,
+            "V8 and has it again when the assignment goes")
+        // A view toggle added by another slice takes a key and runs from it.
+        try select("View › Show Whitespace")
+        try press("w", [.control, .option], code: 13)
+        let whitespace = settings.value.showWhitespaceEnabled
+        check(
+            try settings.value.shortcuts["showWhitespace"] == "ctrl+opt+w"
+                && text(try row("View › Show Whitespace"), 1) == "⌃⌥W",
+            "V8 View › Show Whitespace takes Control-Option-W")
+        try button("default").performClick(nil)
+        check(settings.value.shortcuts["showWhitespace"] == nil && settings.value.showWhitespaceEnabled == whitespace,
+            "V8 fixture: the toggle's shortcut is removed and its setting was not touched")
 
         // Changed from default narrows the list to the commands that were changed.
         let changed: NSButton = try control("settings.filter.changed", window)

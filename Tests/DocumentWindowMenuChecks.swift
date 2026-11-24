@@ -236,7 +236,8 @@ extension DocumentChecks {
             let bar = try requireValue(NSApp.mainMenu, "actual menu bar")
             let palette = sessionDelegate.commandDiscovery
             let entries = palette.commands(in: bar)
-            let titles = entries.map { $0.row.title }
+            // A row shows the command's name, with its menu as secondary text; `path` is both.
+            let titles = entries.map(\.path)
             check(Set(entries.map { $0.row.id }).count == entries.count, "palette row identities are unique")
             check(titles.contains("Edit › Undo") && titles.contains("Tools › Automations › Run Automation…")
                 && titles.contains(where: { $0.hasPrefix("View › Syntax Highlighting › ") && $0.hasSuffix(" › Markdown") })
@@ -245,7 +246,7 @@ extension DocumentChecks {
                 && titles.contains(where: { $0.hasPrefix("Tools › Run Commands › ") }),
                 "actual editor, language, saved automation chooser, macro, group and Run routes are discoverable at any depth")
             // DS-D4: a person who types where a command used to be, or its old name, still finds it.
-            @MainActor func found(_ query: String) -> [String] { CommandDiscovery.rows(entries, matching: query).map(\.title) }
+            @MainActor func found(_ query: String) -> [String] { CommandDiscovery.matches(entries, query: query).map(\.path) }
             let formerPlaces = [
                 ("Search Compare", "Compare › Compare Text…"), ("Encoding Reload", "File › Reload with Encoding › UTF-8…"),
                 ("Reload as Windows-1252", "File › Reload with Encoding › Windows-1252…"),
@@ -277,7 +278,7 @@ extension DocumentChecks {
                     && found("no-such-command-anywhere").isEmpty
                     && !titles.contains(where: { $0.contains("Text Utilities") || $0.hasPrefix("Search › ") }),
                 "an empty filter lists every command; a former menu name is matched but never shown")
-            @MainActor func detail(_ title: String) -> String? { entries.first { $0.row.title == title }?.row.detail }
+            @MainActor func detail(_ title: String) -> String? { entries.first { $0.path == title }?.scope }
             check(
                 detail("File › Quick Open…") == "Reads workspace state • Changes windows or tabs"
                     && detail("Find › Function List…") == "Reads language profiles • Changes editor assistance or settings"
@@ -291,17 +292,22 @@ extension DocumentChecks {
                         == "Reads saved file • Reloads document contents after the normal review"
                     && detail("View › Guides and Highlights › Highlight Current Line")
                         == "Reads active view • Changes display or view settings",
-                "DS-20 a palette row describes what its command works on, wherever the menu bar lists it")
+                "DS-20 a palette entry records what its command works on, wherever the menu bar lists it")
+            check(
+                !entries.contains { $0.row.detail == $0.scope || $0.row.title.contains(" › ") }
+                    && entries.allSatisfy { $0.path == ($0.row.detail.isEmpty ? "" : $0.row.detail + " › ") + $0.row.title },
+                "a palette row shows the command's name and the menu that holds it, never the internal description")
             // Toggle Preview is an ordinary menu item, so the palette lists and validates it
             // exactly as it does Source, Preview and Both.
             let toggleRow = try requireValue(
-                entries.first { $0.row.title == "View › Toggle Preview" }, "palette row for View › Toggle Preview")
+                entries.first { $0.path == "View › Toggle Preview" }, "palette row for View › Toggle Preview")
             let previewRow = try requireValue(
-                entries.first { $0.row.title == "View › Preview" }, "palette row for View › Preview")
+                entries.first { $0.path == "View › Preview" }, "palette row for View › Preview")
             let previewable = sessionDelegate.currentDocumentController?.previewKind != nil
             check(
                 found("toggle preview") == ["View › Toggle Preview"]
-                    && toggleRow.row.detail == "Reads active view • Changes display or view settings"
+                    && toggleRow.scope == "Reads active view • Changes display or view settings"
+                    && toggleRow.scope == previewRow.scope && toggleRow.row.detail == "View"
                     && toggleRow.row.detail == previewRow.row.detail,
                 "DS-20 the palette finds Toggle Preview and describes it as it does the three mode commands")
             check(
@@ -313,7 +319,7 @@ extension DocumentChecks {
                 "fixture: Auto-Indent on Return found by its former View menu")
             let autoIndent = sessionDelegate.settings.value.autoIndentEnabled
             check(
-                aliased.row.title == "Edit › Typing › Auto-Indent on Return" && aliased.row.enabled
+                aliased.path == "Edit › Typing › Auto-Indent on Return" && aliased.row.enabled
                     && palette.perform(aliased, in: bar)
                     && sessionDelegate.settings.value.autoIndentEnabled == !autoIndent,
                 "a command found by its former menu runs through the same validated menu item")
@@ -322,10 +328,10 @@ extension DocumentChecks {
                 "fixture: Auto-Indent on Return is put back")
             check(!titles.contains(where: { $0.contains(" › Services › ") || $0.contains(" › Reopen Recent File › ") || $0.hasSuffix(" › Command Palette…") }),
                 "system services and recursive palette invocation are omitted")
-            check(entries.contains { $0.item.action == NSSelectorFromString("runAction:") && $0.row.detail.hasPrefix("Reads ") && $0.row.detail.contains("Writes ") },
+            check(entries.contains { $0.item.action == NSSelectorFromString("runAction:") && $0.scope.hasPrefix("Reads ") && $0.scope.contains("Writes ") },
                 "saved workflows identify their actual input and output")
             check(entries.contains {
-                $0.item.action == #selector(MacroController.playAgain) && $0.row.detail == "Reads recorded commands • Changes active editor"
+                $0.item.action == #selector(MacroController.playAgain) && $0.scope == "Reads recorded commands • Changes active editor"
             }, "Play Again declares its recorded input and current editor destination")
             let menu = NSMenu(), target = PaletteActionFixture(), other = PaletteActionFixture()
             let item = NSMenuItem(title: "Owned action", action: #selector(PaletteActionFixture.selected(_:)), keyEquivalent: "")
@@ -341,6 +347,194 @@ extension DocumentChecks {
             check(palette.perform(row, in: menu) && target.count == 1, "deliberate choice dispatches the actual menu action once")
             menu.removeItem(item)
             check(!palette.perform(row, in: menu) && target.count == 1, "a removed command remains unavailable")
+        }
+        section("command palette ranking, recent commands and shortcuts", #line) {
+            let bar = try requireValue(NSApp.mainMenu, "actual menu bar")
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent(
+                "TextTankPalette-" + UUID().uuidString)
+            try FileManager.default.createDirectory(
+                at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            defer { try? FileManager.default.removeItem(at: folder) }
+            let storage = folder.appendingPathComponent("CommandPaletteRecents.json")
+            let palette = CommandDiscovery(recentsURL: storage)
+            let entries = palette.commands(in: bar)
+            @MainActor func paths(_ query: String, recent: [String] = []) -> [String] {
+                CommandDiscovery.matches(entries, query: query, recent: recent).map(\.path)
+            }
+            check(
+                paths("sort").first == "Edit › Lines › Sort Lines Ascending"
+                    && CommandDiscovery.rows(entries, matching: "sort").first?.title == "Sort Lines Ascending"
+                    && CommandDiscovery.rows(entries, matching: "sort").first?.detail == "Edit › Lines",
+                "typing sort lists Sort Lines Ascending first, with its menu as secondary text: \(paths("sort").prefix(3))")
+            check(
+                CommandDiscovery.rank(name: "Quick Open…", query: " quick  OPEN ") == 0
+                    && CommandDiscovery.rank(name: "Sort Lines Ascending", query: "sort") == 1
+                    && CommandDiscovery.rank(name: "Sort Lines Ascending", query: "asc lines") == 2
+                    && CommandDiscovery.rank(name: "Sort Lines Ascending", query: "ort") == 3
+                    && CommandDiscovery.rank(name: "Undo", query: "edit") == 4,
+                "a name ranks exact, then prefix, then word prefix, then inside the name, then path only")
+            let sorted = CommandDiscovery.matches(entries, query: "sort")
+            let sortedRanks = sorted.map { CommandDiscovery.rank(name: $0.name, query: "sort") }
+            let positions = sorted.map { found in entries.firstIndex { $0.row.id == found.row.id } ?? -1 }
+            check(
+                sorted.count > 3 && sortedRanks == sortedRanks.sorted()
+                    && zip(zip(sortedRanks, positions), zip(sortedRanks.dropFirst(), positions.dropFirst()))
+                        .allSatisfy { $0.0 != $1.0 || $0.1 < $1.1 },
+                "the real commands are listed best name match first, in menu order within a rank")
+
+            // An owned menu bar pins the whole order, the recent commands and what is left out.
+            let target = PaletteActionFixture()
+            let owned = NSMenu()
+            @MainActor func submenu(_ title: String, _ names: [String]) -> NSMenu {
+                let menu = NSMenu(title: title)
+                for name in names {
+                    let item = NSMenuItem(title: name, action: #selector(PaletteActionFixture.selected(_:)), keyEquivalent: "")
+                    item.target = target
+                    menu.addItem(item)
+                }
+                let parent = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+                parent.submenu = menu
+                owned.addItem(parent)
+                return menu
+            }
+            _ = submenu("Sort", ["Apply"])
+            let fix = submenu("Fix", ["Resort", "Quick Sort Now", "Sort Later", "Sort…", "Sort Again", "Unrelated"])
+            var fixture = palette.commands(in: owned)
+            @MainActor func names(_ query: String, recent: [String] = []) -> [String] {
+                CommandDiscovery.rows(fixture, matching: query, recent: recent).map(\.title)
+            }
+            @MainActor func identity(_ name: String) throws -> String {
+                try requireValue(fixture.first { $0.name == name }?.row.id, "fixture: command \(name)")
+            }
+            check(
+                names("sort") == ["Sort…", "Sort Later", "Sort Again", "Quick Sort Now", "Resort", "Apply"],
+                "exact, prefix in menu order, word prefix, inside the name, then the menu path alone: \(names("sort"))")
+            let againID = try identity("Sort Again"), applyID = try identity("Apply"), laterID = try identity("Sort Later")
+            check(
+                names("sort", recent: [againID, applyID])
+                    == ["Sort…", "Sort Again", "Sort Later", "Quick Sort Now", "Resort", "Apply"],
+                "a recent command leads its own rank and never leaves it")
+            check(
+                names("") == ["Apply", "Resort", "Quick Sort Now", "Sort Later", "Sort…", "Sort Again", "Unrelated"]
+                    && names("", recent: [laterID, "no-such-command", applyID])
+                        == ["Sort Later", "Apply", "Resort", "Quick Sort Now", "Sort…", "Sort Again", "Unrelated"],
+                "an empty palette lists recent commands first, newest first, then the rest in menu order")
+            check(names("no-such-command-anywhere").isEmpty, "nonsense matches no command")
+
+            // Six commands run from the palette: the newest five are kept, newest first.
+            let ran = ["Apply", "Resort", "Quick Sort Now", "Sort Later", "Sort…", "Sort Again"]
+            for name in ran {
+                let entry = try requireValue(fixture.first { $0.name == name }, "fixture: \(name)")
+                try require(palette.perform(entry, in: owned), "fixture: \(name) runs from the palette")
+            }
+            let expected = try ran.dropFirst().reversed().map(identity)
+            check(
+                target.count == 6 && palette.recentCommands == expected,
+                "the palette remembers the last five commands run from it, newest first")
+            target.enabled = false
+            let refused = try requireValue(fixture.first { $0.name == "Unrelated" }, "fixture: Unrelated")
+            check(
+                !palette.perform(refused, in: owned) && palette.recentCommands == expected,
+                "a command that did not run is not remembered")
+            target.enabled = true
+            // The storage round trip a relaunch makes: a new palette reads the same private file.
+            let relaunched = CommandDiscovery(recentsURL: storage)
+            var info = stat()
+            check(
+                relaunched.recentCommands == expected && lstat(storage.path, &info) == 0
+                    && info.st_mode & 0o777 == 0o600 && info.st_mode & S_IFMT == S_IFREG,
+                "recent commands survive a relaunch in a private file")
+            check(
+                CommandDiscovery.rows(
+                    relaunched.commands(in: owned), matching: "", recent: relaunched.recentCommands
+                ).prefix(5).map(\.title) == ["Sort Again", "Sort…", "Sort Later", "Quick Sort Now", "Resort"],
+                "after a relaunch the command just run is at the top of an empty palette")
+            fix.items.first { $0.title == "Sort Again" }?.isHidden = true
+            fix.removeItem(try requireValue(fix.items.first { $0.title == "Sort Later" }, "fixture: Sort Later"))
+            fixture = relaunched.commands(in: owned)
+            check(
+                names("", recent: relaunched.recentCommands)
+                    == ["Sort…", "Quick Sort Now", "Resort", "Apply", "Unrelated"]
+                    && relaunched.recentCommands == expected,
+                "a hidden or removed command is not listed, and is still remembered if it returns")
+            // A file a later version wrote is left alone; one that is not a list at all is replaced.
+            let later = folder.appendingPathComponent("later.json")
+            let laterBytes = Data(#"{"commands":["kept"],"later":true,"version":2}"#.utf8)
+            try laterBytes.write(to: later)
+            let laterStore = CommandRecentsStore(url: later)
+            laterStore.note("new")
+            check(
+                laterStore.recents.ids == ["new"] && (try? Data(contentsOf: later)) == laterBytes,
+                "a recent-commands file from a later version is not rewritten")
+            let damaged = folder.appendingPathComponent("damaged.json")
+            try Data("not json".utf8).write(to: damaged)
+            let damagedStore = CommandRecentsStore(url: damaged)
+            damagedStore.note("fresh")
+            check(
+                damagedStore.recents.ids == ["fresh"] && CommandRecentsStore(url: damaged).recents.ids == ["fresh"]
+                    && CommandRecentsStore(url: folder.appendingPathComponent("missing.json")).recents.ids.isEmpty,
+                "a damaged recent-commands file is replaced and a missing one means no recent commands")
+
+            // DS-20: each row shows the key its menu item has now.
+            @MainActor func key(_ path: String) -> String? { entries.first { $0.path == path }?.row.accessory }
+            let keyed = entries.filter { !$0.item.keyEquivalent.isEmpty }
+            // Command with the second function key. Spelled in two parts because the finding
+            // register reads an F followed by digits in a check as an audit finding's number.
+            let functionKeyTwo = "⌘F" + "2"
+            check(
+                keyed.count > 20 && keyed.allSatisfy { !$0.row.accessory.isEmpty && !$0.row.accessoryLabel.isEmpty }
+                    && entries.allSatisfy { $0.row.accessory == (ControlPresentation.shortcut(of: $0.item) ?? "") },
+                "every palette row whose command has a key shows it, and no other row shows one")
+            check(
+                key("File › Save") == "⌘S" && key("File › Save All") == "⌥⌘S" && key("View › Toggle Preview") == "⇧⌘V"
+                    && key("File › Quick Open…") == "⇧⌘O" && key("Window › Next Tab") == "⌃⇥"
+                    && key("Edit › Undo") == "⌘Z" && key("Edit › Redo") == "⇧⌘Z"
+                    && key("Find › Bookmarks › Toggle Bookmark") == functionKeyTwo
+                    && entries.first { $0.path == "View › Toggle Preview" }?.row.accessoryLabel == "Shortcut Shift-Command-V",
+                "keys read as the menu bar draws them: \(["File › Save All", "Window › Next Tab", "Find › Bookmarks › Toggle Bookmark"].map { key($0) ?? "none" })")
+            let upper = EditorCommand.upper.rawValue
+            let before = sessionDelegate.settings.value
+            var custom = before
+            custom.setShortcut("J", for: upper)
+            try sessionDelegate.settings.save(custom)
+            check(
+                palette.commands(in: bar).first { ($0.item.representedObject as? String) == upper }?.row.accessory == "⇧⌘J",
+                "a shortcut assigned in Settings is the one the palette shows")
+            try sessionDelegate.settings.save(before)
+
+            // The palette itself: the row that says nothing matched, and a retained query.
+            FormPanel.visible.filter { $0.window.identifier?.rawValue == "command.palette" }.forEach { $0.close() }
+            palette.show(editor: { nil })
+            let chooser = try requireValue(palette.panel, "fixture: the Command Palette is showing")
+            defer { chooser.form.close() }
+            let choose = try DesignSettingsChecks.button("command.palette.choose", chooser.form.window)
+            chooser.filter.stringValue = "save"
+            chooser.refresh()
+            let first = try requireValue(chooser.displayedRows.first, "fixture: a row for save")
+            let cell = try requireValue(
+                chooser.table.view(atColumn: 0, row: 0, makeIfNecessary: true), "fixture: the first row's view")
+            let texts = DesignSettingsChecks.descendants(cell).compactMap { ($0 as? NSTextField)?.stringValue }
+            check(
+                first.title == "Save" && texts == ["Save", "File", "⌘S"] && chooser.table.selectedRow == 0
+                    && choose.isEnabled == first.enabled,
+                "a palette row draws the name, the menu and the key: \(texts)")
+            chooser.filter.stringValue = "zz-no-such-command-qq"
+            chooser.refresh()
+            let placeholder =
+                chooser.table.numberOfRows > 0
+                ? chooser.table.view(atColumn: 0, row: 0, makeIfNecessary: true) as? NSTextField : nil
+            check(
+                chooser.displayedRows.isEmpty && chooser.table.numberOfRows == 1
+                    && placeholder?.stringValue == "No matching commands"
+                    && !chooser.tableView(chooser.table, shouldSelectRow: 0) && chooser.table.selectedRow == -1
+                    && chooser.selectedID == nil && !choose.isEnabled,
+                "DS-36 nonsense shows one No matching commands row that cannot be selected or run")
+            palette.show(editor: { nil })
+            let editing = chooser.filter.currentEditor()
+            check(
+                palette.panel === chooser && chooser.filter.stringValue == "zz-no-such-command-qq"
+                    && editing?.selectedRange == NSRange(location: 0, length: chooser.filter.stringValue.utf16.count),
+                "opening the palette again selects the retained query, so typing replaces it")
         }
         section("DG explicit filtered choice activation", #line) { try DesignSettingsChecks.choicePanelChecks() }
         section("DG Open Documents Cancel never switches documents", #line) {
@@ -547,7 +741,7 @@ extension DocumentChecks {
             // Path, key, modifiers, enabled without a document, enabled with one untitled document.
             let expected: [(String, String, NSEvent.ModifierFlags, Bool, Bool)] = [
                 ("Compare > Compare Two Visible Tabs", "", [.command], false, false),
-                ("File > Quick Open…", "", [.command], true, true),
+                ("File > Quick Open…", "O", [.command], true, true),
                 ("Edit > Lines > Sort Lines Ascending", "", [.command], false, true),
                 ("File > Reload with Encoding > UTF-8…", "", [.command], false, true),
                 ("File > Convert to Encoding > UTF-8", "", [.command], false, true),
@@ -856,14 +1050,28 @@ extension DocumentChecks {
             controller.clone(nil)
             let clone = try requireValue(controller.secondary, "fixture: catalog toggle clone")
             _ = controller.hostWindow?.makeFirstResponder(clone)
-            clone.executeCommand(TTEditorCommandIdentifier(rawValue: "toggleEOL"))
+            // V4: Show Line Endings is one stored choice, so its checkmark is the same in both panes;
+            // Overtype stays a choice of the view that has the keyboard.
+            try controller.perform(command: "toggleEOL")
             check(
-                controller.validateMenuItem(endings) && endings.state == .on,
+                controller.validateMenuItem(endings) && endings.state == .on && clone.lineEndingsVisible
+                    && doc.editor.lineEndingsVisible,
+                "DS22 a stored view choice made with the clone focused checks its item and reaches both panes")
+            let overtype = item(#selector(EditorWindowController.command(_:)), "toggleOvertype")
+            clone.executeCommand(TTEditorCommandIdentifier(rawValue: "toggleOvertype"))
+            check(
+                controller.validateMenuItem(overtype) && overtype.state == .on,
                 "DS22 catalog toggle checkmarks follow the focused clone's own view state")
             _ = controller.hostWindow?.makeFirstResponder(doc.editor)
             check(
-                controller.validateMenuItem(endings) && endings.state == .off,
-                "DS22 returning to the source pane restores that view's toggle checkmark")
+                controller.validateMenuItem(endings) && endings.state == .on
+                    && controller.validateMenuItem(overtype) && overtype.state == .off,
+                "DS22 returning to the source pane restores that view's toggle checkmark and keeps the stored choice")
+            try controller.perform(command: "toggleEOL")
+            check(
+                controller.validateMenuItem(endings) && endings.state == .off && !clone.lineEndingsVisible
+                    && !doc.editor.lineEndingsVisible,
+                "DS22 turning the stored view choice off clears its checkmark and both panes")
             controller.closeSplit(nil)
             doc.close()
         }
@@ -1595,6 +1803,20 @@ extension DocumentChecks {
             check(controller.regexBox.state == .on && controller.findCount.stringValue != "No matches"
                     && !controller.findCount.stringValue.contains(" of ") && NSApp.modalWindow == nil,
                   "a malformed bar regex reports its error in the Find bar")
+            // DS-45: the field is marked and the whole message is shown, not a clipped count label.
+            let malformed = try requireValue(controller.findField.toolTip, "the Find field carries the message")
+            check(
+                controller.findFieldIsMarked && controller.findCount.stringValue == "Expression not valid"
+                    && malformed.count > 20 && controller.findField.accessibilityHelp() == malformed
+                    && controller.statusText == malformed && controller.findField.stringValue == "[",
+                "an invalid pattern marks the Find field and shows the full message in the status line")
+            controller.findField.stringValue = "[a]"
+            controller.controlTextDidChange(
+                Notification(name: NSControl.textDidChangeNotification, object: controller.findField))
+            spinUntil("the corrected regex to publish") { !controller.findCount.stringValue.isEmpty }
+            check(
+                !controller.findFieldIsMarked && controller.findField.accessibilityHelp() == nil,
+                "correcting the expression removes the mark")
             sessionDelegate.searchController.mode.selectItem(at: priorMode)
             _ = NSApp.sendAction(sessionDelegate.searchController.mode.action!, to: sessionDelegate.searchController,
                                  from: sessionDelegate.searchController.mode)
@@ -1611,6 +1833,103 @@ extension DocumentChecks {
             controller.hideFind(nil)
             check(document.editor.selectionAnchor == 3 && document.editor.selectionCaret == 1,
                   "closing an uncommitted live Find restores the reversed opening selection")
+            // V3, DS-35: one Find text and one replacement, live in the bar and the Find window.
+            let oneFind = sessionDelegate.searchController
+            let peerBar = try requireValue(plain.presentation, "fixture: another tab's find bar")
+            controller.showFind(nil)
+            let barEditor = try requireValue(
+                controller.findField.currentEditor() as? NSTextView,
+                "fixture: the Find field editor")
+            barEditor.string = "alp"
+            barEditor.setSelectedRange(NSRange(location: 1, length: 1))
+            controller.controlTextDidChange(
+                Notification(name: NSControl.textDidChangeNotification, object: controller.findField))
+            check(
+                oneFind.queryField.stringValue == "alp" && oneFind.sharedQuery == "alp"
+                    && peerBar.findField.stringValue == "alp",
+                "text typed in the find bar is in the Find and Replace window, and in other tabs' bars, as it is typed")
+            check(
+                barEditor.selectedRange() == NSRange(location: 1, length: 1)
+                    && controller.hostWindow?.firstResponder === barEditor && barEditor.string == "alp",
+                "sharing the typed text leaves the caret and selection in the find bar where they were")
+            controller.replaceField.stringValue = "swap"
+            controller.controlTextDidChange(
+                Notification(name: NSControl.textDidChangeNotification, object: controller.replaceField))
+            check(
+                oneFind.replacementField.stringValue == "swap", "the replacement typed in the bar is in the window too")
+            oneFind.queryField.stringValue = "beta"
+            oneFind.controlTextDidChange(
+                Notification(name: NSControl.textDidChangeNotification, object: oneFind.queryField))
+            oneFind.replacementField.stringValue = "BETA"
+            oneFind.controlTextDidChange(
+                Notification(name: NSControl.textDidChangeNotification, object: oneFind.replacementField))
+            check(
+                controller.findField.stringValue == "beta" && controller.replaceField.stringValue == "BETA"
+                    && peerBar.findField.stringValue == "beta" && !controller.inlineSearchPending
+                    && !oneFind.isSearching,
+                "text typed in the Find and Replace window is in the find bar as it is typed, and runs no search")
+            // History: reachable from the bar by pointer (the magnifying glass) and keyboard (Down Arrow).
+            for word in ["alpha", "beta"] {
+                controller.findField.stringValue = word
+                controller.findFromMenu(backwards: false)
+                spinUntil("a remembered bar Find to finish") { !controller.inlineSearchPending }
+            }
+            let recentFinds = controller.findHistoryMenu(replacements: false)
+            check(
+                recentFinds.items.prefix(2).map(\.title) == ["beta", "alpha"]
+                    && oneFind.findHistory.queries.prefix(2) == ["beta", "alpha"]
+                    && (oneFind.queryField.objectValues as? [String])?.prefix(2) == ["beta", "alpha"],
+                "a search made from the bar is in the history both surfaces offer, newest first")
+            check(
+                controller.findField.searchMenuTemplate?.items.prefix(2).map(\.title) == ["beta", "alpha"]
+                    && controller.findField.searchMenuTemplate?.items.contains {
+                        $0.submenu?.title == "Recent Replacements"
+                    } == true,
+                "the Find field's magnifying glass opens the recent searches, with the recent replacements beneath")
+            var shownHistory: (menu: NSMenu, anchor: NSView)?
+            let nativeHistoryPresenter = controller.presentFindHistory
+            controller.presentFindHistory = { shownHistory = ($0, $1) }
+            check(
+                controller.control(
+                    controller.findField, textView: NSTextView(),
+                    doCommandBy: #selector(NSResponder.moveDown(_:)))
+                    && shownHistory?.menu.items.first?.title == "beta" && shownHistory?.anchor === controller.findField,
+                "Down Arrow in the Find field opens its history")
+            check(
+                controller.control(
+                    controller.replaceField, textView: NSTextView(),
+                    doCommandBy: #selector(NSResponder.moveDown(_:)))
+                    && shownHistory?.menu.title == "Recent Replacements"
+                    && shownHistory?.anchor === controller.replaceField,
+                "Down Arrow in the Replace field opens the replacement history")
+            controller.presentFindHistory = nativeHistoryPresenter
+            let earlier = recentFinds.items[1]
+            check(
+                NSApp.sendAction(
+                    try requireValue(earlier.action, "a history entry has an action"), to: earlier.target, from: earlier
+                )
+                    && controller.findField.stringValue == "alpha" && oneFind.queryField.stringValue == "alpha",
+                "an entry chosen from the history is the Find text in the bar and in the window")
+            // DS-21: Replace All is not offered once the live count has found nothing.
+            _ = document.editor.setSelectionAnchor(0, caret: 0)
+            controller.findField.stringValue = "no such text here"
+            controller.controlTextDidChange(
+                Notification(name: NSControl.textDidChangeNotification, object: controller.findField))
+            spinUntil("the live count to find nothing") { controller.findCount.stringValue == "No matches" }
+            check(
+                !controller.replaceAllButton.isEnabled && controller.replaceAllButton.toolTip?.isEmpty == false
+                    && controller.findNavigation.isEnabled,
+                "the bar's Replace All is disabled, with the reason, when the live count found nothing")
+            controller.findField.stringValue = "alpha"
+            controller.controlTextDidChange(
+                Notification(name: NSControl.textDidChangeNotification, object: controller.findField))
+            check(
+                controller.replaceAllButton.isEnabled && controller.replaceAllButton.toolTip == nil,
+                "changing the Find text offers Replace All again at once")
+            spinUntil("the live count for the new text") { !controller.findCount.stringValue.isEmpty }
+            check(controller.replaceAllButton.isEnabled, "a live count with matches leaves Replace All enabled")
+            controller.hideFind(nil)
+            _ = document.editor.setSelectionAnchor(3, caret: 1)
             controller.findField.stringValue = priorQuery
             controller.showFind(nil)
             let beforeBarRecording = document.editor.text

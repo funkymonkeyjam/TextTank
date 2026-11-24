@@ -3,6 +3,9 @@
 #include <atomic>
 #include <chrono>
 #include <locale>
+#include <memory>
+#include <cstring>
+#include <algorithm>
 #include <mutex>
 #include <string>
 #include <stdexcept>
@@ -30,6 +33,7 @@
 @end
 namespace {
 struct SearchTimeLimit : std::runtime_error { using std::runtime_error::runtime_error; };
+struct InvalidPattern : std::runtime_error { using std::runtime_error::runtime_error; };
 struct Budget {
     TTSearchCancellation *cancellation;
     std::chrono::steady_clock::time_point deadline;
@@ -143,6 +147,63 @@ SearchRegex compiledRegex(const std::wstring &pattern,bool matchCase){
     std::lock_guard<std::mutex> lock(mutex);cached=true;cachedCase=matchCase;cachedPattern=pattern;cachedRegex=regex;
     return regex;
 }
+
+/// UTF-8 helpers for the chunked search. Positions handed to them are scalar boundaries.
+bool continuationByte(uint8_t b){return (b&0xC0)==0x80;}
+/// The scalar that starts at `i`, and its length in bytes. Malformed input counts as one byte.
+uint32_t scalarAt(const uint8_t *p,size_t n,size_t i,size_t *length){
+    const uint8_t b=p[i];
+    const size_t need=b<0x80?1:(b>>5)==6?2:(b>>4)==14?3:(b>>3)==30?4:0;
+    *length=1;
+    if(need==0||i+need>n)return 0xFFFD;
+    if(need==1)return b;
+    uint32_t c=need==2?(b&0x1F):need==3?(b&0x0F):(b&0x07);
+    for(size_t k=1;k<need;k++){if(!continuationByte(p[i+k]))return 0xFFFD;c=(c<<6)|(p[i+k]&0x3F);}
+    *length=need;return c;
+}
+/// Where the scalar that ends at `i` starts; `i` is greater than `floor`.
+size_t scalarStartBefore(const uint8_t *p,size_t floor,size_t i){
+    size_t s=i-1;for(int k=0;k<3&&s>floor&&continuationByte(p[s]);k++)--s;return s;
+}
+bool wordScalar(uint32_t c){return c=='_'||[[NSCharacterSet alphanumericCharacterSet]longCharacterIsMember:c];}
+bool wordBeforeByte(const uint8_t *p,size_t n,size_t i){
+    if(i==0)return false;
+    size_t length=0;return wordScalar(scalarAt(p,n,scalarStartBefore(p,0,i),&length));
+}
+bool wordAfterByte(const uint8_t *p,size_t n,size_t i){
+    if(i>=n)return false;
+    size_t length=0;return wordScalar(scalarAt(p,n,i,&length));
+}
+/// One decoded window of the document, for matching that needs Unicode case folding. It maps
+/// between UTF-16 offsets in the window and byte offsets in the document with a cursor that
+/// moves either way, so each window is walked once however many matches it holds.
+struct FoldedWindow {
+    NSString *string=nil;size_t byteStart=0;std::vector<unichar> units;bool ascii=true;
+    size_t unit=0,byte=0;
+    FoldedWindow(const uint8_t *p,size_t start,size_t end):byteStart(start){
+        string=[[NSString alloc]initWithBytesNoCopy:(void *)(p+start) length:end-start encoding:NSUTF8StringEncoding freeWhenDone:NO];
+        if(!string)throw std::runtime_error("This document holds bytes that are not valid UTF-8, so it can only be searched with Match case on. Turn on Match case and search again.");
+        ascii=string.length==end-start;
+        if(!ascii){units.resize(string.length);[string getCharacters:units.data() range:NSMakeRange(0,string.length)];}
+        byte=start;
+    }
+    static size_t width(unichar c){return c<0x80?1:c<0x800?2:3;}
+    /// The byte offset in the document of UTF-16 offset `target` in the window.
+    size_t byteAt(size_t target){
+        if(ascii)return byteStart+target;
+        while(unit<target){if(high(units[unit])&&unit+1<units.size()&&low(units[unit+1])){if(unit+2>target)break;byte+=4;unit+=2;}else{byte+=width(units[unit]);++unit;}}
+        while(unit>target){if(low(units[unit-1])&&unit>=2&&high(units[unit-2])){if(unit-2<target)break;byte-=4;unit-=2;}else{byte-=width(units[unit-1]);--unit;}}
+        return byte;
+    }
+    /// The UTF-16 offset in the window of byte offset `target` in the document.
+    size_t unitAt(size_t target){
+        if(ascii)return target-byteStart;
+        while(byte<target&&unit<units.size()){if(high(units[unit])&&unit+1<units.size()&&low(units[unit+1])){byte+=4;unit+=2;}else{byte+=width(units[unit]);++unit;}}
+        while(byte>target&&unit>0){if(low(units[unit-1])&&unit>=2&&high(units[unit-2])){byte-=4;unit-=2;}else{byte-=width(units[unit-1]);--unit;}}
+        return unit;
+    }
+};
+const NSUInteger defaultChunkBytes=4*1024*1024;
 }
 @implementation TTSearchEngine
 + (BOOL)isTimeLimitError:(NSError *)error {
@@ -163,6 +224,151 @@ SearchRegex compiledRegex(const std::wstring &pattern,bool matchCase){
     }return out;
 }
 + (NSUInteger)regexCompilationCount { return compilations.load(); }
++ (BOOL)isInvalidPatternError:(NSError *)error {
+    return [error.domain isEqualToString:@"TextTank.Search"] && [error.userInfo[@"TextTankSearchInvalidPattern"] boolValue];
+}
++ (NSUInteger)maximumTextUnits { return maximumUnits; }
++ (NSUInteger)utf16LengthOfUTF8:(NSData *)data {
+    const uint8_t *p=(const uint8_t *)data.bytes;const size_t n=data.length;size_t units=0;
+    // Every byte that starts a scalar is one unit; a four-byte scalar is a surrogate pair.
+    // Eight bytes at a time: a continuation byte has its top bit set and the next one clear, and
+    // the lead byte of a four-byte scalar has its top four bits set.
+    const uint64_t top=0x8080808080808080ULL;size_t i=0;
+    for(;i+8<=n;i+=8){
+        uint64_t w;memcpy(&w,p+i,8);
+        const uint64_t continuation=(w&top)&~((w<<1)&top),four=w&(w<<1)&(w<<2)&(w<<3)&top;
+        units+=8-(size_t)__builtin_popcountll(continuation)+(size_t)__builtin_popcountll(four);
+    }
+    for(;i<n;i++){units+=(p[i]&0xC0)!=0x80;units+=p[i]>=0xF0;}
+    return units;
+}
++ (TTSearchResult *)searchUTF8:(NSData *)data range:(NSRange)scope query:(NSString *)query replacement:(NSString *)replacement mode:(TTSearchMode)mode matchCase:(BOOL)matchCase wholeWord:(BOOL)wholeWord backwards:(BOOL)backwards overlapping:(BOOL)overlapping maximumMatches:(NSInteger)maximumMatches chunkBytes:(NSUInteger)chunkBytes cancellation:(TTSearchCancellation *)cancellation timeLimit:(NSTimeInterval)timeLimit progress:(void (NS_NOESCAPE ^)(NSUInteger))progress error:(NSError **)error {
+    @try { try {
+        const uint8_t *p=(const uint8_t *)data.bytes;const size_t n=data.length;
+        if(mode==TTSearchModeRegularExpression)throw std::runtime_error("A regular expression cannot search a document this large. Select part of the document and search the selection, or change the search mode to Normal.");
+        if(mode<0||mode>2)throw std::runtime_error("Unknown search mode.");
+        if(query.length==0)throw std::runtime_error("Enter a nonempty search expression.");
+        if(query.length>65536)throw std::runtime_error("The search expression is longer than the 64 Ki UTF-16 limit.");
+        if(replacement.length>1024*1024)throw std::runtime_error("The replacement is longer than the 1 Mi UTF-16 limit.");
+        if(maximumMatches<1||maximumMatches>100000)throw std::runtime_error("The result limit must be between 1 and 100,000.");
+        if(!(timeLimit>0&&timeLimit<=600))throw std::runtime_error("The large-document search time limit must be more than 0 and at most 600 seconds.");
+        if(chunkBytes==0)chunkBytes=defaultChunkBytes;
+        if(chunkBytes<16||chunkBytes>256*1024*1024)throw std::runtime_error("The search window must be between 16 bytes and 256 MiB.");
+        const size_t first=scope.location,rangeEnd=first+scope.length;
+        if(scope.location>n||scope.length>n-scope.location||(first<n&&continuationByte(p[first]))||(rangeEnd<n&&continuationByte(p[rangeEnd])))throw std::runtime_error("The search range is outside the text or splits a character.");
+        if(cancellation.cancelled)throw std::runtime_error("Search cancelled; no replacement was applied.");
+        NSString *needle=mode==TTSearchModeExtended?[self decodeExtended:query]:query;
+        NSString *replacementText=mode==TTSearchModeExtended?[self decodeExtended:replacement]:replacement;
+        if(needle.length==0)throw std::runtime_error("Enter a nonempty search expression.");
+        if(!validUnits(needle))throw std::runtime_error("The search text contains an incomplete Unicode surrogate pair; write both \\u halves or the full character.");
+        if(!validUnits(replacementText))throw std::runtime_error("The replacement contains an incomplete Unicode surrogate pair; no edits were applied.");
+        NSData *needleData=[needle dataUsingEncoding:NSUTF8StringEncoding];
+        if(!needleData)throw std::runtime_error("The search text cannot be written as UTF-8.");
+        const uint8_t *needleBytes=(const uint8_t *)needleData.bytes;const size_t needleLength=needleData.length;
+        // The most bytes one match can cover. Case folding can match one character of the search
+        // text against up to three characters of the document ("\uFB03" against "FFI", U+0390 against
+        // its three-scalar decomposition), each of at most four bytes, so twelve bytes per UTF-16
+        // unit of the search text is a safe ceiling. The window overlap is this long.
+        const size_t longest=matchCase?needleLength:12*needle.length+16;
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds((long long)(timeLimit*1000));
+        auto checkBudget=[&]{
+            if(cancellation.cancelled)throw std::runtime_error("Search cancelled; no replacement was applied.");
+            if(std::chrono::steady_clock::now()>deadline)throw SearchTimeLimit("Search exceeded its time budget; narrow the scope.");
+        };
+        const NSStringCompareOptions folded=NSLiteralSearch|NSCaseInsensitiveSearch;
+        NSMutableArray<TTSearchMatch *> *matches=[NSMutableArray array];bool truncated=false;size_t outputSize=0;
+        // Returns false when the result limit stops the search.
+        auto consider=[&](size_t start,size_t length,bool *accepted){
+            *accepted=!wholeWord||(!wordBeforeByte(p,n,start)&&!wordAfterByte(p,n,start+length));
+            if(!*accepted)return true;
+            if(matches.count>=(NSUInteger)maximumMatches){truncated=true;return false;}
+            outputSize+=replacementText.length;
+            if(outputSize>maximumUnits)throw std::runtime_error("Replacement expansion exceeded the 64 Mi UTF-16 safety limit.");
+            [matches addObject:[[TTSearchMatch alloc]initWithRange:NSMakeRange(start,length) replacement:replacementText]];
+            return true;
+        };
+        auto alignDown=[&](size_t i,size_t floor){while(i>floor&&i<n&&continuationByte(p[i]))--i;return i;};
+        auto alignUp=[&](size_t i,size_t ceiling){while(i<ceiling&&continuationByte(p[i]))++i;return i;};
+        bool stopped=false;
+        if(!backwards){
+            // `position` is where the next candidate may start. A window takes the matches that
+            // start before `coreEnd` and reads far enough past it to hold the longest of them.
+            for(size_t position=first;!stopped;){@autoreleasepool{
+                checkBudget();
+                const size_t coreEnd=rangeEnd-position>chunkBytes?std::max(alignDown(position+chunkBytes,position),position+1):rangeEnd;
+                const size_t windowEnd=rangeEnd-coreEnd>longest?alignUp(coreEnd+longest,rangeEnd):rangeEnd;
+                std::unique_ptr<FoldedWindow> window;if(!matchCase)window.reset(new FoldedWindow(p,position,windowEnd));
+                size_t from=position,inWindow=0;
+                while(from<coreEnd){
+                    if((++inWindow&255)==0)checkBudget();
+                    size_t start=0,length=0;
+                    if(matchCase){
+                        if(windowEnd-from<needleLength)break;
+                        const void *hit=memmem(p+from,windowEnd-from,needleBytes,needleLength);
+                        if(!hit)break;
+                        start=(const uint8_t *)hit-p;length=needleLength;
+                    }else{
+                        const size_t unit=window->unitAt(from);
+                        NSRange r=[window->string rangeOfString:needle options:folded range:NSMakeRange(unit,window->string.length-unit)];
+                        if(r.location==NSNotFound)break;
+                        start=window->byteAt(r.location);length=window->byteAt(NSMaxRange(r))-start;
+                    }
+                    if(start>=coreEnd)break; // it belongs to the next window, which finds it again
+                    bool accepted=false;
+                    if(!consider(start,length,&accepted)){stopped=true;break;}
+                    size_t step=0;scalarAt(p,n,start,&step);
+                    from=accepted&&!overlapping?start+length:start+step;
+                }
+                position=std::max(coreEnd,from);
+                if(progress)progress(std::min(position,rangeEnd)-first);
+                if(coreEnd>=rangeEnd)stopped=true;
+            }}
+        }else{
+            // Mirror image. `ceiling` is where a match must end by; `high` is where the windows
+            // already searched begin. Every match that starts at or after `high` and ends by
+            // `ceiling` has been taken, so a window never reports one twice.
+            for(size_t high=rangeEnd,ceiling=rangeEnd;!stopped;){@autoreleasepool{
+                checkBudget();
+                const size_t coreStart=high-first>chunkBytes?alignDown(high-chunkBytes,first):first;
+                const size_t reach=rangeEnd-high>longest?alignUp(high+longest,rangeEnd):rangeEnd;
+                const size_t windowEnd=std::min(reach,ceiling);
+                std::unique_ptr<FoldedWindow> window;if(!matchCase&&windowEnd>coreStart)window.reset(new FoldedWindow(p,coreStart,windowEnd));
+                size_t to=windowEnd,inWindow=0;
+                while(to>coreStart){
+                    if((++inWindow&255)==0)checkBudget();
+                    size_t start=0,length=0;bool found=false;
+                    if(matchCase){
+                        if(to-coreStart>=needleLength){
+                            for(size_t i=to-needleLength+1;i-->coreStart;){
+                                if(p[i]==needleBytes[0]&&memcmp(p+i,needleBytes,needleLength)==0){start=i;length=needleLength;found=true;break;}
+                            }
+                        }
+                    }else{
+                        const size_t lowUnit=window->unitAt(coreStart),highUnit=window->unitAt(to);
+                        NSRange r=[window->string rangeOfString:needle options:folded|NSBackwardsSearch range:NSMakeRange(lowUnit,highUnit-lowUnit)];
+                        if(r.location!=NSNotFound){start=window->byteAt(r.location);length=window->byteAt(NSMaxRange(r))-start;found=true;}
+                    }
+                    if(!found)break;
+                    bool accepted=false;
+                    if(!consider(start,length,&accepted)){stopped=true;break;}
+                    to=accepted&&!overlapping?start:scalarStartBefore(p,coreStart,start+length);
+                    ceiling=to;
+                }
+                if(progress)progress(rangeEnd-coreStart);
+                if(coreStart<=first)stopped=true;
+                high=coreStart;
+            }}
+        }
+        return [[TTSearchResult alloc]initWithMatches:matches truncated:truncated];
+    } catch(const SearchTimeLimit &e) {
+        if (error) *error = [NSError errorWithDomain:@"TextTank.Search" code:1 userInfo:@{
+            NSLocalizedDescriptionKey: [NSString stringWithUTF8String:e.what()], @"TextTankSearchTimeLimit": @YES
+        }];
+        return nil;
+    } catch(const std::exception&e){if(error)*error=[NSError errorWithDomain:@"TextTank.Search" code:1 userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithUTF8String:e.what()]?:@"Search failed safely."}];return nil;}
+    catch(...){if(error)*error=[NSError errorWithDomain:@"TextTank.Search" code:1 userInfo:@{NSLocalizedDescriptionKey:@"Search failed safely."}];return nil;}}
+    @catch(NSException *e){if(error)*error=[NSError errorWithDomain:@"TextTank.Search" code:2 userInfo:@{NSLocalizedDescriptionKey:e.reason?:@"Search failed safely."}];return nil;}
+}
 + (TTSearchResult *)searchText:(NSString *)text range:(NSRange)scope query:(NSString *)query replacement:(NSString *)replacement mode:(TTSearchMode)mode matchCase:(BOOL)matchCase wholeWord:(BOOL)wholeWord dotMatchesNewline:(BOOL)dotMatchesNewline cancellation:(TTSearchCancellation *)cancellation maximumMatches:(NSInteger)maximumMatches timeLimit:(NSTimeInterval)timeLimit error:(NSError **)error {
     return [self searchText:text range:scope query:query replacement:replacement mode:mode matchCase:matchCase wholeWord:wholeWord dotMatchesNewline:dotMatchesNewline cancellation:cancellation maximumMatches:maximumMatches overlappingLiterals:NO timeLimit:timeLimit error:error];
 }
@@ -197,7 +403,8 @@ SearchRegex compiledRegex(const std::wstring &pattern,bool matchCase){
             std::wstring input;appendCodePoints(input,text,NSMakeRange(0,scope.location));
             const size_t firstPoint=input.size();appendCodePoints(input,text,scope);
             auto pattern=codePoints(needle),format=codePoints(replacementText);
-            const SearchRegex regex=compiledRegex(pattern,matchCase);
+            // Only compilation is an invalid pattern; a failure while matching is reported as it was.
+            const SearchRegex regex=[&]{try{return compiledRegex(pattern,matchCase);}catch(const boost::regex_error &e){throw InvalidPattern(e.what());}}();
             auto flags=dotMatchesNewline?boost::match_default:boost::match_not_dot_newline;
             if(scopeEnd<text.length){
                 // $ may match at the end of the range only where a line really ends there.
@@ -251,6 +458,11 @@ SearchRegex compiledRegex(const std::wstring &pattern,bool matchCase){
     } catch(const SearchTimeLimit &e) {
         if (error) *error = [NSError errorWithDomain:@"TextTank.Search" code:1 userInfo:@{
             NSLocalizedDescriptionKey: [NSString stringWithUTF8String:e.what()], @"TextTankSearchTimeLimit": @YES
+        }];
+        return nil;
+    } catch(const InvalidPattern &e) {
+        if (error) *error = [NSError errorWithDomain:@"TextTank.Search" code:1 userInfo:@{
+            NSLocalizedDescriptionKey: [NSString stringWithUTF8String:e.what()]?:@"The regular expression is not valid.", @"TextTankSearchInvalidPattern": @YES
         }];
         return nil;
     } catch(const std::exception&e){if(error)*error=[NSError errorWithDomain:@"TextTank.Search" code:1 userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithUTF8String:e.what()]?:@"Search failed safely."}];return nil;}

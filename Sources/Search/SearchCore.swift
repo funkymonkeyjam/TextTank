@@ -45,14 +45,89 @@ package struct SearchOptions: Codable, Equatable, Sendable {
     }
 }
 
+/// The last ten distinct things searched for and the last ten distinct replacements, newest
+/// first. Entries are compared by their UTF-8 bytes, as the engine compares search text: two
+/// spellings of one accented letter are two entries. An entry longer than `maximumEntryUnits`
+/// is not remembered, so the private file stays small whatever was searched for.
+package struct FindHistory: Equatable, Sendable {
+    static package let capacity = 10
+    static package let maximumEntryUnits = 1_000
+    package private(set) var queries: [String]
+    package private(set) var replacements: [String]
+    package init(queries: [String] = [], replacements: [String] = []) {
+        self.queries = Self.normalised(queries)
+        self.replacements = Self.normalised(replacements)
+    }
+    /// Keeps the first of each distinct entry, drops empty and oversized ones, and stops at ten.
+    static package func normalised(_ entries: [String]) -> [String] {
+        var kept: [String] = []
+        for entry in entries where kept.count < capacity {
+            guard !entry.isEmpty, entry.utf16.count <= maximumEntryUnits,
+                !kept.contains(where: { $0.utf8.elementsEqual(entry.utf8) })
+            else { continue }
+            kept.append(entry)
+        }
+        return kept
+    }
+    /// True when the history changed. An entry used again moves to the front.
+    @discardableResult package mutating func remember(query: String) -> Bool {
+        let updated = Self.normalised([query] + queries)
+        defer { queries = updated }
+        return !Self.same(updated, queries)
+    }
+    @discardableResult package mutating func remember(replacement: String) -> Bool {
+        let updated = Self.normalised([replacement] + replacements)
+        defer { replacements = updated }
+        return !Self.same(updated, replacements)
+    }
+    package mutating func clearQueries() { queries = [] }
+    package mutating func clearReplacements() { replacements = [] }
+    private static func same(_ a: [String], _ b: [String]) -> Bool {
+        a.count == b.count && zip(a, b).allSatisfy { $0.utf8.elementsEqual($1.utf8) }
+    }
+}
+
 package struct FindPreferences: Codable {
-    package init(version: Int = 1, options: SearchOptions = SearchOptions()) {
+    package init(
+        version: Int = 1, options: SearchOptions = SearchOptions(), queryHistory: [String]? = nil,
+        replacementHistory: [String]? = nil
+    ) {
         self.version = version
         self.options = options
+        self.queryHistory = queryHistory
+        self.replacementHistory = replacementHistory
+    }
+    /// What an action saves: the option flags and the history. The text being searched for and
+    /// the search mode are not carried to the next launch (see `startingOptions`).
+    package init(saving options: SearchOptions, history: FindHistory) {
+        var kept = options
+        kept.query = ""
+        kept.replacement = ""
+        kept.mode = .normal
+        self.init(options: kept, queryHistory: history.queries, replacementHistory: history.replacements)
     }
 
     package var version: Int
     package var options: SearchOptions
+    /// Optional, so a file written before the history existed still loads; newest first.
+    package var queryHistory: [String]?
+    package var replacementHistory: [String]?
+    /// A new launch starts in Normal mode with nothing in either field, whatever the file holds:
+    /// a regular expression left over from an earlier day is never silently in force. The flags
+    /// (match case, whole word, dot matches newline, wrap) are kept.
+    package var startingOptions: SearchOptions {
+        var start = options
+        start.query = ""
+        start.replacement = ""
+        start.mode = .normal
+        return start
+    }
+    /// The saved history. A file from before the history existed offers the text it restored
+    /// then as the first entry, so nothing the person had is lost; it is offered, not applied.
+    package var history: FindHistory {
+        FindHistory(
+            queries: queryHistory ?? [options.query], replacements: replacementHistory ?? [options.replacement])
+    }
     // Six JSON bytes per allowed UTF-16 unit plus keys/flags fit within 8 MiB.
     static package let maximumBytes = SizePolicy.standard.searchSettings
     static package func decode(_ data: Data) throws -> Self {
@@ -102,6 +177,26 @@ package struct SearchReport: Sendable {
     package let truncated: Bool
     package let purpose: SearchCore.Purpose
 }
+/// One match in a document searched as bytes: a UTF-8 byte range in the document, never a
+/// UTF-16 range, and the text that replaces it.
+package struct ByteSearchHit: Equatable, Sendable {
+    package init(range: NSRange, replacement: String) {
+        self.range = range
+        self.replacement = replacement
+    }
+
+    package let range: NSRange
+    package let replacement: String
+}
+package struct ByteSearchReport: Sendable {
+    package init(hits: [ByteSearchHit], truncated: Bool) {
+        self.hits = hits
+        self.truncated = truncated
+    }
+
+    package let hits: [ByteSearchHit]
+    package let truncated: Bool
+}
 package enum SearchFailure: LocalizedError, CustomNSError, Equatable {
     package enum ReplacementCondition: Error, Equatable { case readOnly, multipleSelections, closed, stale }
     case positionMapping
@@ -110,10 +205,15 @@ package enum SearchFailure: LocalizedError, CustomNSError, Equatable {
     case replacementByteLimit(Int)
     case replacementCancelled, invalidReplacementRange, macroResultLimit, macroReplacement(String)
     case unknownRecordedAction, macroStopped(String)
+    case largeDocumentRegex, largeSelectionRegex, largeDocumentAction, largeDocumentAllOpen(String)
     static package var errorDomain: String { "TextTank.Search" }
     package var errorCode: Int {
         switch self {
         case .replacementByteLimit: return 15
+        case .largeDocumentRegex: return 16
+        case .largeSelectionRegex: return 17
+        case .largeDocumentAction: return 18
+        case .largeDocumentAllOpen: return 19
         case .inlineResultLimit: return 12
         case .inlineReplacement: return 13
         case .positionMapping: return 14
@@ -130,6 +230,18 @@ package enum SearchFailure: LocalizedError, CustomNSError, Equatable {
     }
     package var errorDescription: String? {
         switch self {
+        case .largeDocumentRegex:
+            return
+                "This document is too large for a regular expression search. Select part of it and choose Selection in Find and Replace, or change the search mode to Normal. Nothing was changed."
+        case .largeSelectionRegex:
+            return
+                "The selection is too large for a regular expression search. Select less text, or change the search mode to Normal. Nothing was changed."
+        case .largeDocumentAction:
+            return
+                "Bookmark Matches and Mark Matches are not available in a document this large. Use Next, Previous, Find All / Count or Replace. Nothing was changed."
+        case .largeDocumentAllOpen(let name):
+            return
+                "“\(name)” is too large to search together with the other open documents. Choose Current document to search it on its own. Nothing was changed."
         case .replacementByteLimit(let bytes):
             return "Replacement exceeds the \(bytes / 1_048_576) MiB result limit. Nothing was changed."
         case .inlineResultLimit:
@@ -236,6 +348,55 @@ package enum SearchCore {
         return SearchReport(
             hits: hits,
             truncated: result.truncated, purpose: purpose)
+    }
+    /// The longest text, in UTF-16 units, the snapshot engine searches in one piece (64 Mi). A
+    /// longer document is searched as bytes, in windows.
+    static package var maximumTextUnits: Int { Int(TTSearchEngine.maximumTextUnits()) }
+    /// The window a large document is read in. Working memory follows this, not the document.
+    static package let largeChunkBytes = 4 * 1_048_576
+    /// The large-document variant of the time budget: the interactive two seconds for every
+    /// started 64 MiB, so a large document is allowed the same rate as a document at the limit
+    /// and no more. The search runs off the main thread with progress and Cancel throughout.
+    static package func largeTimeLimit(bytes: Int) -> TimeInterval {
+        let pieces = max(1, (bytes + 64 * 1_048_576 - 1) / (64 * 1_048_576))
+        return min(600, defaultTimeLimit * Double(pieces))
+    }
+    /// Whether `data` is longer than `limit` UTF-16 units. Bytes are never fewer than units, and
+    /// three bytes are never more than one unit short of three units, so most answers need no count.
+    static package func isLarge(_ data: Data, limit: Int = maximumTextUnits) -> Bool {
+        data.count > limit && (data.count / 3 > limit || utf16Length(ofUTF8: data) > limit)
+    }
+    /// UTF-16 length of UTF-8 `data` without decoding it: one pass, no second copy.
+    static package func utf16Length(ofUTF8 data: Data) -> Int {
+        autoreleasepool { Int(TTSearchEngine.utf16Length(ofUTF8: data)) }
+    }
+    /// Normal and Extended search of a document's UTF-8 bytes in bounded windows; see
+    /// TTSearchEngine.searchUTF8. `range` and the reported hits are byte ranges in `data`. The
+    /// result cap is the snapshot engine's. A regular expression is refused in plain words.
+    static package func searchBytes(
+        _ data: Data, options: SearchOptions, range: NSRange? = nil, backwards: Bool = false,
+        overlapping: Bool = false, limit: Int = 100000, timeLimit: TimeInterval? = nil,
+        chunkBytes: Int = largeChunkBytes, cancellation: TTSearchCancellation = TTSearchCancellation(),
+        progress: ((Int) -> Void)? = nil
+    ) throws -> ByteSearchReport {
+        guard options.mode != .regularExpression else { throw SearchFailure.largeDocumentRegex }
+        let scope = range ?? NSRange(location: 0, length: data.count)
+        // The engine reads the bytes through a bridged object that is kept alive by the calling
+        // thread's autorelease pool. A search runs on a concurrency thread whose pool may not be
+        // drained for a long time, so the pool is drained here: the document's bytes are released
+        // when the search that copied them ends, not several searches later.
+        let result = try autoreleasepool {
+            try TTSearchEngine.searchUTF8(
+                data, range: scope, query: options.query, replacement: options.replacement,
+                mode: options.mode.nativeMode, matchCase: options.matchCase, wholeWord: options.wholeWord,
+                backwards: backwards, overlapping: overlapping, maximumMatches: limit,
+                chunkBytes: UInt(max(0, chunkBytes)),
+                cancellation: cancellation, timeLimit: timeLimit ?? largeTimeLimit(bytes: scope.length),
+                progress: progress.map { report in { report(Int($0)) } })
+        }
+        return ByteSearchReport(
+            hits: result.matches.map { ByteSearchHit(range: $0.range, replacement: $0.replacement) },
+            truncated: result.truncated)
     }
     /// Presentation positions share one cancellable forward pass over existing immutable text.
     /// Internal UTF-16 columns/ranges stay unchanged. Tabs advance to the captured tab stops;

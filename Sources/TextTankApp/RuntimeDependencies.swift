@@ -9,6 +9,9 @@ struct DocumentDependencies {
     var afterWrite: (() throws -> Void)?
     var duringWrite: (() -> Void)?
     var recoveryFailureNotice: ((TextDocument, Error) -> Bool)?
+    /// Runs on the recovery queue just before a quit writes and verifies an untitled document's
+    /// copy (DS-D9). A check throws here to stand for a disk that refuses the write.
+    var beforeQuitHold: (@Sendable () throws -> Void)?
 }
 
 /// Effects whose process-owned implementations can be supplied by an isolated host.

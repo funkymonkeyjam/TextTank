@@ -34,20 +34,57 @@ package enum MarkdownRenderer {
         return render(bytes: Array(source), limits: limits, isCancelled: isCancelled)
     }
 
+    /// Renders UTF-8 bytes and also says which source lines each top-level block of the output
+    /// was made from. The fragment is the same one `render` returns: the map is a second
+    /// result, not marks in the HTML. `map` is nil unless the rendering is `.rendered`.
+    ///
+    /// Lines are counted as the editor counts them: a line ends at LF, CRLF or CR.
+    package static func renderWithScrollMap(
+        _ source: Data, limits: PreviewLimits = .standard, isCancelled: @escaping () -> Bool = { Task.isCancelled }
+    ) -> (rendering: MarkdownRendering, map: PreviewScrollMap?) {
+        guard source.count <= limits.maxSourceBytes else {
+            return (.limited(.sourceTooLarge(maxBytes: limits.maxSourceBytes)), nil)
+        }
+        var map: PreviewScrollMap?
+        let rendering = render(bytes: Array(source), limits: limits, isCancelled: isCancelled, map: &map)
+        return (rendering, map)
+    }
+
     private static func render(bytes: [UInt8], limits: PreviewLimits, isCancelled: @escaping () -> Bool)
         -> MarkdownRendering
     {
+        var noMap: PreviewScrollMap?
+        return render(bytes: bytes, limits: limits, isCancelled: isCancelled, map: &noMap, wantsMap: false)
+    }
+
+    private static func render(
+        bytes: [UInt8], limits: PreviewLimits, isCancelled: @escaping () -> Bool, map: inout PreviewScrollMap?,
+        wantsMap: Bool = true
+    ) -> MarkdownRendering {
         guard bytes.count <= limits.maxSourceBytes else {
             return .limited(.sourceTooLarge(maxBytes: limits.maxSourceBytes))
         }
         let poll = CancellationPoll(isCancelled)
         do {
             var parser = MarkdownBlockParser(limits: limits, poll: poll)
-            let blocks = try parser.parse(MarkdownText.lines(of: bytes), depth: 0).blocks
+            let lines = MarkdownText.lines(of: bytes)
+            let parsed = try parser.parse(lines, depth: 0)
             var writer = MarkdownHTMLWriter(
                 inline: MarkdownInlineRenderer(references: parser.references, poll: poll),
                 maxOutputBytes: limits.maxOutputBytes, poll: poll)
-            try writer.write(blocks, isTight: false)
+            try writer.write(parsed.blocks, isTight: false)
+            if wantsMap {
+                var blocks: [PreviewScrollMap.Block] = []
+                blocks.reserveCapacity(parsed.lineRanges.count)
+                for range in parsed.lineRanges {
+                    try poll.checkpoint()
+                    blocks.append(
+                        PreviewScrollMap.Block(
+                            firstLine: range.lowerBound, lineCount: range.count,
+                            fingerprint: PreviewScrollMap.fingerprint(of: lines[range])))
+                }
+                map = PreviewScrollMap(blocks: blocks)
+            }
             return .rendered(String(decoding: writer.output, as: UTF8.self))
         } catch PreviewStop.outputTooLarge {
             return .limited(.outputTooLarge(maxBytes: limits.maxOutputBytes))

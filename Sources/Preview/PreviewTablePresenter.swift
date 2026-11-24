@@ -58,6 +58,28 @@ final class PreviewTableView: NSTableView {
         tableView.selectRowIndexes(kept, byExtendingSelection: false)
     }
 
+    // MARK: Following the source
+
+    /// The zero-based source line row `row` starts on. A value with a line break inside its
+    /// quotation marks makes a row span several lines; the row is still found from any of them.
+    func sourceLine(ofRow row: Int) -> Int? {
+        guard let table, row >= 0, row < table.rowCount else { return nil }
+        return table.rowLines[row] - 1
+    }
+
+    /// The row that zero-based source `line` belongs to: the last row that starts on or before
+    /// it. A binary search over the rows' starting lines.
+    func row(forSourceLine line: Int) -> Int? {
+        guard let table, table.rowCount > 0 else { return nil }
+        var low = 0
+        var high = table.rowCount - 1
+        while low < high {
+            let middle = (low + high + 1) / 2
+            if table.rowLines[middle] - 1 <= line { low = middle } else { high = middle - 1 }
+        }
+        return low
+    }
+
     private func rebuildColumns(count: Int) {
         tableView.tableColumns.forEach(tableView.removeTableColumn)
         let line = NSTableColumn(identifier: Self.lineColumn)

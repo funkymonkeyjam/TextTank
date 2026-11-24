@@ -27,6 +27,15 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     let replaceMatchButton = NSButton(title: "Replace", target: nil, action: nil)
     let replaceAllButton = NSButton(title: "Replace All", target: nil, action: nil)
     private(set) var findBar: NSView?
+    /// DS-35, one Find: what this bar last sent to or took from the shared Find text. A field
+    /// that no longer matches was changed here and is shared; otherwise the shared text is shown.
+    private var sharedQuerySeen = "", sharedReplacementSeen = ""
+    /// The live count searched the whole document and found nothing (DS-21: no Replace All).
+    private var previewFoundNothing = false
+    /// Shows a history menu under a field. Checks replace it, so no menu is tracked on the desktop.
+    var presentFindHistory: @MainActor (NSMenu, NSView) -> Void = { menu, view in
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: view.bounds.height + 4), in: view)
+    }
     private var splitBelowFindBar: NSLayoutConstraint?
     private var splitBelowTabs: NSLayoutConstraint?
     var findBarVisible: Bool { findBar?.isHidden == false }
@@ -272,6 +281,10 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         findField.sendsWholeSearchString = true
         findField.setAccessibilityLabel("Find in document")
         replaceField.setAccessibilityLabel("Replace selection with")
+        // The magnifying glass opens the recent searches; so does the Down Arrow key (DS-73).
+        (findField.cell as? NSSearchFieldCell)?.searchButtonCell?.setAccessibilityLabel(
+            "Recent searches and replacements")
+        refreshFindHistory()
         // The bar is out of the way until Find is chosen, so the text is the hostWindow's main surface.
         search.isHidden = true
         findBar = search
@@ -579,7 +592,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 }
                 item.isEnabled =
                     enabled && (!TTEditor.commandModifiesText(command.nativeIdentifier) || !editor.readOnly)
-                if command.isToggle { item.state = editor.commandIsChecked(command.nativeIdentifier) ? .on : .off }
+                if command.isToggle { item.state = isChecked(command, in: editor) ? .on : .off }
             }
         }
         func command(_ value: EditorCommand) { add(value.title, #selector(statusOption(_:)), self, value.rawValue) }
@@ -905,6 +918,12 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         guard let command = EditorCommand(rawValue: id) else { throw EditorCommandFailure.unsupported }
         if TTEditor.commandModifiesText(command.nativeIdentifier) { try editor.requireWritable() }
         let recorder = EditorServices.current?.macros
+        if let preference = command.viewPreference, let settings = EditorServices.current?.settings {
+            // One stored choice for every editor view; the settings write applies it to all of them.
+            recorder?.willExecuteCommand(id, on: editor)
+            settings.toggle(preference)
+            return
+        }
         let finishing: ((Bool) -> Void)?
         if command == .bookmarkCutLines || command == .bookmarkDeleteLines {
             finishing = recorder?.prepareUnrecordedChange(
@@ -922,6 +941,14 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         _ = editor.exchangeNextUndoName(priorName)
         finishing?(accepted && editor.revision != before)
         guard accepted else { throw EditorCommandFailure.unsupported }
+    }
+    /// A toggle's checkmark. The three stored View choices show the Editor Settings value, which
+    /// every view has; the other toggles show the given view's own state.
+    private func isChecked(_ command: EditorCommand, in editor: TTEditor) -> Bool {
+        if let preference = command.viewPreference, let settings = EditorServices.current?.settings {
+            return settings.isEnabled(preference)
+        }
+        return editor.commandIsChecked(command.nativeIdentifier)
     }
     deinit {
         precondition(Thread.isMainThread)
@@ -945,16 +972,156 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         get { RuntimeEnvironment.current.readFindText() }
         set { RuntimeEnvironment.current.writeFindText(newValue) }
     }
-    /// The advanced hostWindow and inline bar share the query without scheduling another search.
-    func acceptSharedFindText(_ text: String) {
-        endFindPreview()
-        cancelInlineSearch()
-        findField.stringValue = text
-        updateInlineFindValidation()
+    /// Text typed in the Find and Replace window or in another find bar is shown here as it is
+    /// typed. The field that is being typed in is never the one set, and no search is scheduled.
+    func acceptSharedFindText() {
+        guard let search = EditorServices.current?.searchController else { return }
+        let query = search.sharedQuery, replacement = search.sharedReplacement
+        var changed = false
+        if !findField.stringValue.utf8.elementsEqual(query.utf8) {
+            endFindPreview()
+            findField.stringValue = query
+            clearFindFieldMark()
+            changed = true
+        }
+        if !replaceField.stringValue.utf8.elementsEqual(replacement.utf8) {
+            replaceField.stringValue = replacement
+            changed = true
+        }
+        sharedQuerySeen = query
+        sharedReplacementSeen = replacement
+        if changed { cancelInlineSearch() }
+    }
+    /// Before the bar is shown or acts: a field changed here by anything other than typing (which
+    /// is shared as it happens) is shared now; an untouched field takes the shared text.
+    private func reconcileSharedFindText() {
+        guard let search = EditorServices.current?.searchController else { return }
+        if !findField.stringValue.utf8.elementsEqual(sharedQuerySeen.utf8) {
+            sharedQuerySeen = findField.stringValue
+            search.setSharedQuery(sharedQuerySeen, from: self)
+        } else if !search.sharedQuery.utf8.elementsEqual(sharedQuerySeen.utf8) {
+            sharedQuerySeen = search.sharedQuery
+            findField.stringValue = sharedQuerySeen
+        }
+        if !replaceField.stringValue.utf8.elementsEqual(sharedReplacementSeen.utf8) {
+            sharedReplacementSeen = replaceField.stringValue
+            search.setSharedReplacement(sharedReplacementSeen, from: self)
+        } else if !search.sharedReplacement.utf8.elementsEqual(sharedReplacementSeen.utf8) {
+            sharedReplacementSeen = search.sharedReplacement
+            replaceField.stringValue = sharedReplacementSeen
+        }
+    }
+    /// Another application's search is taken in when the Find field is empty, as before; text
+    /// left on the find pasteboard from before this launch is not (a new launch starts empty).
+    private func importFindPasteboardIfEmpty() {
+        guard findField.stringValue.isEmpty else { return }
+        if let search = EditorServices.current?.searchController {
+            search.importFindPasteboard(onlyIfEmpty: true)
+            reconcileSharedFindText()
+        } else {
+            findField.stringValue = Self.findPasteboardText
+        }
+    }
+    private static func historyTitle(_ entry: String) -> String {
+        let line = entry.replacingOccurrences(of: "\n", with: " ↵ ").replacingOccurrences(of: "\t", with: " ⇥ ")
+        return line.count > 60 ? String(line.prefix(60)) + "…" : line
+    }
+    /// The last ten searches, then the last ten replacements in a submenu (DS-23), each with a
+    /// command that forgets them. `replacements` is the menu shown under the Replace field.
+    func findHistoryMenu(replacements: Bool) -> NSMenu {
+        let history = EditorServices.current?.searchController?.findHistory ?? FindHistory()
+        func section(_ entries: [String], replacement: Bool) -> NSMenu {
+            let menu = NSMenu(title: replacement ? "Recent Replacements" : "Recent Searches")
+            menu.autoenablesItems = false
+            for entry in entries {
+                let item = NSMenuItem(
+                    title: Self.historyTitle(entry), action: #selector(chooseFindHistory(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = entry
+                item.identifier = .init(replacement ? "find.history.replacement" : "find.history.query")
+                item.toolTip = entry.count > 60 ? String(entry.prefix(400)) : nil
+                menu.addItem(item)
+            }
+            if entries.isEmpty {
+                let none = NSMenuItem(
+                    title: replacement ? "No Recent Replacements" : "No Recent Searches", action: nil,
+                    keyEquivalent: "")
+                none.isEnabled = false
+                menu.addItem(none)
+            } else {
+                menu.addItem(.separator())
+                let clear = NSMenuItem(
+                    title: replacement ? "Clear Recent Replacements" : "Clear Recent Searches",
+                    action: #selector(clearFindHistory(_:)), keyEquivalent: "")
+                clear.target = self
+                clear.identifier = .init(replacement ? "find.history.clear.replacement" : "find.history.clear.query")
+                menu.addItem(clear)
+            }
+            return menu
+        }
+        if replacements { return section(history.replacements, replacement: true) }
+        let menu = section(history.queries, replacement: false)
+        menu.addItem(.separator())
+        let nested = NSMenuItem(title: "Recent Replacements", action: nil, keyEquivalent: "")
+        nested.submenu = section(history.replacements, replacement: true)
+        menu.addItem(nested)
+        return menu
+    }
+    /// The Find field's magnifying glass shows the history; rebuilt whenever the history changes.
+    func refreshFindHistory() { findField.searchMenuTemplate = findHistoryMenu(replacements: false) }
+    @objc func chooseFindHistory(_ sender: NSMenuItem) {
+        guard let entry = sender.representedObject as? String else { return }
+        let replacement = sender.identifier?.rawValue == "find.history.replacement"
+        if replacement {
+            replaceField.stringValue = entry
+            sharedReplacementSeen = entry
+            EditorServices.current?.searchController?.setSharedReplacement(entry, from: self)
+            cancelInlineSearch()
+        } else {
+            findField.stringValue = entry
+            sharedQuerySeen = entry
+            EditorServices.current?.searchController?.setSharedQuery(entry, from: self)
+            clearFindFieldMark()
+            cancelInlineSearch()
+            // Choosing an entry is the same as typing it: the live count follows.
+            scheduleFindPreview()
+        }
+    }
+    @objc func clearFindHistory(_ sender: NSMenuItem) {
+        EditorServices.current?.searchController?.clearHistory(
+            replacements: sender.identifier?.rawValue == "find.history.clear.replacement")
+    }
+    /// DS-45: an expression that does not compile marks the field. The count label beside it says
+    /// so, the field carries the whole message as its help and tooltip, and the status line shows it.
+    private func markFindField(_ message: String) {
+        findField.toolTip = message
+        findField.setAccessibilityHelp(message)
+    }
+    private func clearFindFieldMark() {
+        guard findField.toolTip != nil else { return }
+        findField.toolTip = nil
+        findField.setAccessibilityHelp(nil)
+    }
+    var findFieldIsMarked: Bool { findField.toolTip != nil }
+    private func showPreviewFailure(_ error: Error) {
+        let message = error.localizedDescription
+        if TTSearchEngine.invalidPattern(error as NSError) {
+            findCount.stringValue = "Expression not valid"
+            markFindField(message)
+            showSearchFailure(error, announce: false)
+        } else if let failure = error as? SearchFailure, failure == .largeDocumentRegex {
+            findCount.stringValue = "Not available"
+            showSearchFailure(error, announce: false)
+        } else {
+            findCount.stringValue = message
+        }
+        findCount.toolTip = message
+        findCount.setAccessibilityHelp(message)
     }
     func endFindPreview(restore: Bool = true) {
         let ending = findPreview
         findPreview = nil
+        previewFoundNothing = false
         ending?.cancel(restore: restore)
         findCount.stringValue = ""
         findCount.toolTip = nil
@@ -998,6 +1165,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         findCount.stringValue = ""
         findCount.toolTip = nil
         findCount.setAccessibilityHelp(nil)
+        previewFoundNothing = false
+        updateInlineFindValidation()
         findPreview?.search(
             options: options,
             isCurrent: { [weak self, weak editor] in
@@ -1006,10 +1175,18 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                     && !self.statusClosed && self.findField.stringValue.utf8.elementsEqual(options.query.utf8)
                     && self.inlineOptions() == options
             },
-            publish: { [weak self] message, detail in
-                self?.findCount.stringValue = message
-                self?.findCount.toolTip = detail ?? message
-                self?.findCount.setAccessibilityHelp(detail)
+            publish: { [weak self] shown in
+                guard let self else { return }
+                self.previewFoundNothing = shown.foundNothing
+                if let failure = shown.failure {
+                    self.showPreviewFailure(failure)
+                } else {
+                    self.clearFindFieldMark()
+                    self.findCount.stringValue = shown.count
+                    self.findCount.toolTip = shown.detail ?? shown.count
+                    self.findCount.setAccessibilityHelp(shown.detail)
+                }
+                self.updateInlineFindValidation()
             })
     }
     @objc func showFind(_ sender: Any?) {
@@ -1023,7 +1200,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         syncFindFlags()
         endFindPreview()
         findPreview = InlineFindPreview(activeEditor)
-        if findField.stringValue.isEmpty { findField.stringValue = Self.findPasteboardText }
+        reconcileSharedFindText()
+        importFindPasteboardIfEmpty()
         hostWindow?.makeFirstResponder(findField)
         findField.selectText(nil)
         updateInlineFindValidation()
@@ -1051,13 +1229,20 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             return
         }
         findField.stringValue = selected
-        Self.findPasteboardText = selected
-        EditorServices.current?.searchController?.queryField.stringValue = selected
+        if let search = EditorServices.current?.searchController {
+            sharedQuerySeen = selected
+            search.setSharedQuery(selected, from: self)
+            search.shareFindPasteboard(selected)
+        } else {
+            Self.findPasteboardText = selected
+        }
+        clearFindFieldMark()
         updateInlineFindValidation()
     }
     /// Find Next and Find Previous from the menu. With nothing to find yet, the bar opens instead.
     func findFromMenu(backwards: Bool) {
-        if findField.stringValue.isEmpty { findField.stringValue = Self.findPasteboardText }
+        reconcileSharedFindText()
+        importFindPasteboardIfEmpty()
         guard !findField.stringValue.isEmpty else {
             showFind(nil)
             return
@@ -1078,7 +1263,16 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         if let field = notification.object as? NSTextField, field === findField || field === replaceField {
             _ = focusPresentationChrome()
             cancelInlineSearch()
-            if field === findField { scheduleFindPreview() }
+            // Shared as it is typed. This bar is the source, so its own field is left alone.
+            let search = EditorServices.current?.searchController
+            if field === findField {
+                sharedQuerySeen = field.stringValue
+                search?.setSharedQuery(field.stringValue, from: self)
+                scheduleFindPreview()
+            } else {
+                sharedReplacementSeen = field.stringValue
+                search?.setSharedReplacement(field.stringValue, from: self)
+            }
         }
     }
     @objc private func inlineFindOptionsChanged(_ sender: Any?) {
@@ -1095,10 +1289,16 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     }
     @objc private func showMoreFindOptions(_ sender: Any?) {
         guard focusPresentationChrome(), let search = EditorServices.current?.searchController else { return }
+        reconcileSharedFindText()
         hideFind(nil)
         search.showFromInline(query: findField.stringValue, replacement: replaceField.stringValue, sender: sender)
     }
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        // Down Arrow in either field opens that field's history (DS-73).
+        if commandSelector == #selector(NSResponder.moveDown(_:)), control === findField || control === replaceField {
+            presentFindHistory(findHistoryMenu(replacements: control === replaceField), control)
+            return true
+        }
         guard control === findField else { return false }
         if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
             hideFind(nil)
@@ -1154,7 +1354,10 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             ready && !editor.readOnly && editor.selectionCount == 1
             && replaceField.stringValue.utf16.prefix(1_048_577).count <= 1_048_576
         replaceMatchButton.isEnabled = canReplace && editor.selectionStart < editor.selectionEnd
-        replaceAllButton.isEnabled = canReplace
+        // DS-21: the live count already searched the whole document for this text and found nothing.
+        replaceAllButton.isEnabled = canReplace && !previewFoundNothing
+        replaceAllButton.toolTip =
+            previewFoundNothing ? "The Find text has no matches in this document, so there is nothing to replace." : nil
     }
     private func cancelInlineSearch() {
         inlineCancellation?.cancel()
@@ -1171,6 +1374,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         // keeps the field editor, so repeated Return and Shift-Return continue to work (DS-35).
         if focusEditor { hostWindow?.makeFirstResponder(editor) }
         let replacing = action == "replaceOne" || action == "replaceAll"
+        reconcileSharedFindText()
         let options = inlineOptions(replacement: replacing ? replaceField.stringValue : "")
         cancelInlineSearch()
         guard !options.query.isEmpty, let delegate = EditorServices.current,
@@ -1181,8 +1385,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         findPreview?.cancel(restore: false)
         findCount.stringValue = ""
         if !afterReplacement {
-            Self.findPasteboardText = options.query
-            search.queryField.stringValue = options.query
+            search.shareFindPasteboard(options.query)
+            search.remember(query: options.query, replacement: replacing ? options.replacement : nil)
         }
         let token = inlineSearchGeneration, flag = TTSearchCancellation()
         inlineCancellation = flag
@@ -1199,10 +1403,21 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                     && (!replacing
                         || self.replaceField.stringValue.utf8.elementsEqual(options.replacement.utf8))
             },
+            // Only a document searched in windows reports progress. The label ends with an
+            // ellipsis, so it is shown without being announced step by step (DS-51, DS-72).
+            progress: { [weak self] done, total in
+                Task { @MainActor in
+                    guard let self, self.inlineSearchGeneration == token, self.inlineSearchPending, total > 0 else {
+                        return
+                    }
+                    self.findCount.stringValue = "Searching, \(Strings.number(min(100, done * 100 / total)))%…"
+                }
+            },
             completion: { [weak self, weak editor] result in
                 guard let self, self.inlineSearchGeneration == token else { return }
                 self.inlineSearchPending = false
                 self.inlineCancellation = nil
+                if self.findCount.stringValue.hasSuffix("…") { self.findCount.stringValue = "" }
                 self.updateInlineFindValidation()
                 switch result {
                 case .applied, .replacedAll:
@@ -1247,6 +1462,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                         self.showTransientStatus(
                             "Replaced the selected match. Find Next failed. " + error.localizedDescription)
                     } else {
+                        if TTSearchEngine.invalidPattern(error as NSError) {
+                            self.markFindField(error.localizedDescription)
+                        }
                         self.showSearchFailure(error)
                     }
                 }
@@ -1302,6 +1520,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 pending.caretByte = savedActive.selectionCaret
                 geometry.otherAnchorByte = savedOther.selectionAnchor
                 geometry.otherCaretByte = savedOther.selectionCaret
+                pending.zoom = sessionZoom(of: savedActive)
+                geometry.otherZoom = sessionZoom(of: savedOther)
                 pending.split = geometry
                 return recordingViewMode(in: pending)
             }
@@ -1313,8 +1533,17 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 primaryFraction: min(1, max(0, fraction)))
             state.split?.activeWrapping = wrapping(of: active)
             state.split?.otherWrapping = wrapping(of: other)
+            state.split?.otherZoom = sessionZoom(of: other)
         }
+        state.zoom = sessionZoom(of: active)
         return recordingViewMode(in: state)
+    }
+    /// A pane still at the Editor Settings default zoom records nothing and follows that default
+    /// when the session is restored; only a zoom the person chose for the pane is kept.
+    private func sessionZoom(of editor: TTEditor) -> Int? { editor.followsDefaultZoom ? nil : editor.zoomLevel }
+    private func restoreSessionZoom(_ zoom: Int?, in editor: TTEditor) {
+        editor.resetZoomLevel()
+        if let zoom { editor.zoomLevel = zoom }
     }
     private func wrapping(of editor: TTEditor) -> WorkspaceLayoutState.PaneWrapping {
         editor.wrap ? .wrapped(documentLine: editor.sessionTopDocumentLine, subline: editor.sessionTopSubline)
@@ -1327,6 +1556,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             let clone = secondary ?? addClone()
             active = state.secondaryActive ? clone : primaryEditor
             let other = state.secondaryActive ? primaryEditor : clone
+            // Zoom first: the rows and offsets restored below are measured at the restored size.
+            restoreSessionZoom(state.otherZoom, in: other)
+            restoreSessionZoom(tab.zoom, in: active)
             // Establish live, byte-clamped selections immediately, even when the
             // tab is hidden. Only geometry waits for the split's mounted width.
             other.restoreClosedTabView(anchor: state.otherAnchorByte, caret: state.otherCaretByte, firstVisibleLine: 0)
@@ -1335,6 +1567,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             applyRestoredSplitIfMounted()
         } else {
             if let clone = secondary { removeClone(clone) }
+            restoreSessionZoom(tab.zoom, in: active)
             active.restoreClosedTabView(anchor: tab.anchorByte, caret: tab.caretByte, firstVisibleLine: tab.firstVisibleLine)
         }
         lastEditor = active
@@ -1427,7 +1660,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 guard activeEditor.hasBookmarks else { return false }
             default: break
             }
-            item.state = command.isToggle && activeEditor.commandIsChecked(command.nativeIdentifier) ? .on : .off
+            item.state = command.isToggle && isChecked(command, in: activeEditor) ? .on : .off
             return !TTEditor.commandModifiesText(command.nativeIdentifier) || !activeEditor.readOnly
         case #selector(toggleWrap(_:)):
             // Wrapping belongs to the view, as the status bar's Wrap field shows it.

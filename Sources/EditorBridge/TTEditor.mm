@@ -759,6 +759,11 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         [_engine message:SCI_SETMARGINTYPEN wParam:1 lParam:SC_MARGIN_SYMBOL];
         [_engine message:SCI_SETMARGINMASKN wParam:1 lParam:TTBookmarkMask];
         [_engine message:SCI_SETMARGINWIDTHN wParam:1 lParam:14];
+        // Scintilla starts with a fixed 2000 px horizontal range whatever the text. Start with
+        // none and let it grow to the widest line it has laid out, so an empty or narrow
+        // document reports nothing to scroll sideways.
+        [_engine message:SCI_SETSCROLLWIDTH wParam:1];
+        [_engine message:SCI_SETSCROLLWIDTHTRACKING wParam:1];
         [_engine message:SCI_SETMULTIPLESELECTION wParam:1];
         [_engine message:SCI_SETADDITIONALSELECTIONTYPING wParam:1];
         [_engine message:SCI_SETMULTIPASTE wParam:SC_MULTIPASTE_EACH];
@@ -1432,8 +1437,24 @@ static constexpr int TTNamedHistoryBase = 0x54540000;
 - (NSInteger)horizontalScrollOffset { [self assertThread]; return [_engine message:SCI_GETXOFFSET]; }
 - (void)setHorizontalScrollOffset:(NSInteger)offset {
     [self assertThread];
-    const NSInteger width = self.wrap ? 0 : [_engine message:SCI_GETSCROLLWIDTH];
-    [_engine message:SCI_SETXOFFSET wParam:(uptr_t)MAX(0, MIN(width, offset))];
+    if (self.wrap || offset <= 0) { [_engine message:SCI_SETXOFFSET wParam:0]; return; }
+    // The range tracks lines as they are painted, and a restored offset can arrive before the
+    // first paint. Measure the lines on screen so the range already covers them; the engine
+    // then limits the offset to what those lines can scroll.
+    sptr_t widest = [_engine message:SCI_GETSCROLLWIDTH];
+    if (!_comparisonPresentation && offset > widest - (sptr_t)_engine.scrollView.contentView.bounds.size.width) {
+        const sptr_t count = [_engine message:SCI_GETLINECOUNT];
+        const sptr_t top = [_engine message:SCI_DOCLINEFROMVISIBLE wParam:[_engine message:SCI_GETFIRSTVISIBLELINE]];
+        const sptr_t last = MIN(count - 1, top + [_engine message:SCI_LINESONSCREEN]);
+        for (sptr_t line = top; line <= last; ++line) {
+            if (![_engine message:SCI_GETLINEVISIBLE wParam:line]) continue;
+            const sptr_t start = [_engine message:SCI_POSITIONFROMLINE wParam:line];
+            const sptr_t end = [_engine message:SCI_GETLINEENDPOSITION wParam:line];
+            widest = MAX(widest, [_engine message:SCI_POINTXFROMPOSITION wParam:0 lParam:end] - [_engine message:SCI_POINTXFROMPOSITION wParam:0 lParam:start]);
+        }
+        if (widest > [_engine message:SCI_GETSCROLLWIDTH]) [_engine message:SCI_SETSCROLLWIDTH wParam:(uptr_t)widest];
+    }
+    [_engine message:SCI_SETXOFFSET wParam:(uptr_t)MIN(offset, (NSInteger)INT_MAX)];
 }
 - (void)restoreClosedTabViewWithAnchor:(NSInteger)anchor caret:(NSInteger)caret firstVisibleLine:(NSInteger)line {
     [self assertThread];
@@ -1798,9 +1819,9 @@ static sptr_t TTMacWordDestination(ScintillaView *engine, sptr_t caret, bool rig
 - (BOOL)commandIsChecked:(TTEditorCommandIdentifier)identifier {
     [self assertThread];
     if (![identifier isKindOfClass:NSString.class]) return NO;
-    if ([identifier isEqualToString:@"showWhitespace"]) return [_engine message:SCI_GETVIEWWS] != SCWS_INVISIBLE;
-    if ([identifier isEqualToString:@"toggleEOL"]) return [_engine message:SCI_GETVIEWEOL] != 0;
-    if ([identifier isEqualToString:@"toggleLineNumbers"]) return [_engine message:SCI_GETMARGINWIDTHN wParam:0] != 0;
+    if ([identifier isEqualToString:@"showWhitespace"]) return self.whitespaceVisible;
+    if ([identifier isEqualToString:@"toggleEOL"]) return self.lineEndingsVisible;
+    if ([identifier isEqualToString:@"toggleLineNumbers"]) return self.lineNumbersVisible;
     if ([identifier isEqualToString:@"toggleOvertype"]) return [_engine message:SCI_GETOVERTYPE] != 0;
     if ([identifier isEqualToString:@"rectangularSelection"]) return [_engine message:SCI_GETSELECTIONMODE] == SC_SEL_RECTANGLE;
     if ([identifier isEqualToString:@"streamSelection"]) return [_engine message:SCI_GETSELECTIONMODE] == SC_SEL_STREAM;
@@ -2028,17 +2049,9 @@ static sptr_t TTMacWordDestination(ScintillaView *engine, sptr_t caret, bool rig
         [_engine message:SCI_FOLDALL wParam:[identifier isEqualToString:@"foldAll"] ? SC_FOLDACTION_CONTRACT : SC_FOLDACTION_EXPAND];
         return YES;
     }
-    if ([identifier isEqualToString:@"showWhitespace"]) {
-        [_engine message:SCI_SETVIEWWS wParam:[_engine message:SCI_GETVIEWWS] ? SCWS_INVISIBLE : SCWS_VISIBLEALWAYS]; return YES;
-    }
-    if ([identifier isEqualToString:@"toggleEOL"]) {
-        [_engine message:SCI_SETVIEWEOL wParam:![_engine message:SCI_GETVIEWEOL]]; return YES;
-    }
-    if ([identifier isEqualToString:@"toggleLineNumbers"]) {
-        if ([_engine message:SCI_GETMARGINWIDTHN wParam:0]) [_engine message:SCI_SETMARGINWIDTHN wParam:0 lParam:0];
-        else [self updateLineNumberMargin:YES];
-        return YES;
-    }
+    if ([identifier isEqualToString:@"showWhitespace"]) { self.whitespaceVisible = !self.whitespaceVisible; return YES; }
+    if ([identifier isEqualToString:@"toggleEOL"]) { self.lineEndingsVisible = !self.lineEndingsVisible; return YES; }
+    if ([identifier isEqualToString:@"toggleLineNumbers"]) { self.lineNumbersVisible = !self.lineNumbersVisible; return YES; }
     if ([identifier isEqualToString:@"toggleOvertype"]) {
         [_engine message:SCI_SETOVERTYPE wParam:![_engine message:SCI_GETOVERTYPE]]; return YES;
     }
@@ -2417,6 +2430,9 @@ static sptr_t TTMacWordDestination(ScintillaView *engine, sptr_t caret, bool rig
     [self applyCurrentLineFrameWithHighContrast:NSWorkspace.sharedWorkspace.accessibilityDisplayShouldIncreaseContrast];
     [self applyIndentGuides];
     _emptyLineNumbers.hidden=value;
+    // The two comparison panes scroll sideways together, so they keep one fixed range.
+    [_engine message:SCI_SETSCROLLWIDTHTRACKING wParam:!value];
+    [_engine message:SCI_SETSCROLLWIDTH wParam:value ? 2000 : 1];
     [_engine message:SCI_SETVSCROLLBAR wParam:!value];
     [_engine message:SCI_SETENDATLASTLINE wParam:!value];
     if(value) [self applyComparisonStyle];
@@ -2602,6 +2618,31 @@ static sptr_t TTMacWordDestination(ScintillaView *engine, sptr_t caret, bool rig
     [self assertThread];
     _followsDefaultZoom = YES;
     self.zoomLevel = _defaultZoomLevel;
+}
+- (BOOL)followsDefaultZoom { [self assertThread]; return _followsDefaultZoom; }
+- (BOOL)lineNumbersVisible { [self assertThread]; return [_engine message:SCI_GETMARGINWIDTHN wParam:0] != 0; }
+- (void)setLineNumbersVisible:(BOOL)visible {
+    [self assertThread];
+    if (visible == self.lineNumbersVisible) return;
+    if (visible) [self updateLineNumberMargin:YES];
+    else [_engine message:SCI_SETMARGINWIDTHN wParam:0 lParam:0];
+    // The margin change raises no synchronous notification.
+    [self invalidateLineNumbersIfChanged];
+    [self scheduleStateNotification];
+}
+- (BOOL)whitespaceVisible { [self assertThread]; return [_engine message:SCI_GETVIEWWS] != SCWS_INVISIBLE; }
+- (void)setWhitespaceVisible:(BOOL)visible {
+    [self assertThread];
+    if (visible == self.whitespaceVisible) return;
+    [_engine message:SCI_SETVIEWWS wParam:visible ? SCWS_VISIBLEALWAYS : SCWS_INVISIBLE];
+    [self scheduleStateNotification];
+}
+- (BOOL)lineEndingsVisible { [self assertThread]; return [_engine message:SCI_GETVIEWEOL] != 0; }
+- (void)setLineEndingsVisible:(BOOL)visible {
+    [self assertThread];
+    if (visible == self.lineEndingsVisible) return;
+    [_engine message:SCI_SETVIEWEOL wParam:visible];
+    [self scheduleStateNotification];
 }
 - (void)applyFontToStyle:(NSInteger)index name:(NSString *)name size:(NSNumber *)size {
     NSString *face = name ?: _baseFontName;

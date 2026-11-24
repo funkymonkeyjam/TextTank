@@ -136,7 +136,7 @@
   },
   {
     "action" : "quickOpen:",
-    "key" : "",
+    "key" : "O",
     "modifiers" : "1048576",
     "object" : "",
     "position" : "1.2",
@@ -3051,11 +3051,20 @@
     "title" : "Compare with Saved Version"
   },
   {
-    "action" : "showPicker:",
+    "action" : "compareWithEarlierVersion:",
     "key" : "",
     "modifiers" : "1048576",
     "object" : "",
     "position" : "5.2",
+    "target" : "responder",
+    "title" : "Compare with Earlier Version…"
+  },
+  {
+    "action" : "showPicker:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "5.3",
     "target" : "explicit",
     "title" : "Compare Text…"
   },
@@ -3064,7 +3073,7 @@
     "key" : "",
     "modifiers" : "1048576",
     "object" : "",
-    "position" : "5.3",
+    "position" : "5.4",
     "target" : "explicit",
     "title" : "Select for Compare"
   },
@@ -3073,16 +3082,25 @@
     "key" : "",
     "modifiers" : "1048576",
     "object" : "",
-    "position" : "5.4",
+    "position" : "5.5",
     "target" : "explicit",
     "title" : "Compare with Selected"
+  },
+  {
+    "action" : "clearLocalHistory:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "5.6",
+    "target" : "explicit",
+    "title" : "Clear Local History…"
   },
   {
     "action" : "",
     "key" : "",
     "modifiers" : "1048576",
     "object" : "",
-    "position" : "5.5",
+    "position" : "5.7",
     "target" : "responder",
     "title" : ""
   },
@@ -3091,7 +3109,7 @@
     "key" : "",
     "modifiers" : "131072",
     "object" : "previous",
-    "position" : "5.6",
+    "position" : "5.8",
     "target" : "explicit",
     "title" : "Previous Change"
   },
@@ -3100,7 +3118,7 @@
     "key" : "",
     "modifiers" : "0",
     "object" : "next",
-    "position" : "5.7",
+    "position" : "5.9",
     "target" : "explicit",
     "title" : "Next Change"
   },
@@ -3109,7 +3127,7 @@
     "key" : "",
     "modifiers" : "1048576",
     "object" : "",
-    "position" : "5.8",
+    "position" : "5.10",
     "target" : "responder",
     "title" : ""
   },
@@ -3118,7 +3136,7 @@
     "key" : "",
     "modifiers" : "1048576",
     "object" : "sideBySide",
-    "position" : "5.9",
+    "position" : "5.11",
     "target" : "responder",
     "title" : "Side by Side"
   },
@@ -3127,7 +3145,7 @@
     "key" : "",
     "modifiers" : "1048576",
     "object" : "unified",
-    "position" : "5.10",
+    "position" : "5.12",
     "target" : "responder",
     "title" : "Unified"
   },
@@ -3136,7 +3154,7 @@
     "key" : "",
     "modifiers" : "1048576",
     "object" : "linked",
-    "position" : "5.11",
+    "position" : "5.13",
     "target" : "responder",
     "title" : "Linked Scrolling"
   },
@@ -3145,7 +3163,7 @@
     "key" : "",
     "modifiers" : "1048576",
     "object" : "collapse",
-    "position" : "5.12",
+    "position" : "5.14",
     "target" : "responder",
     "title" : "Collapse Unchanged"
   },
@@ -3154,7 +3172,7 @@
     "key" : "",
     "modifiers" : "1048576",
     "object" : "expandAll",
-    "position" : "5.13",
+    "position" : "5.15",
     "target" : "responder",
     "title" : "Expand All Unchanged Lines"
   },
@@ -3163,7 +3181,7 @@
     "key" : "",
     "modifiers" : "1048576",
     "object" : "whitespace",
-    "position" : "5.14",
+    "position" : "5.16",
     "target" : "responder",
     "title" : "Show Whitespace"
   },
@@ -3172,7 +3190,7 @@
     "key" : "",
     "modifiers" : "1048576",
     "object" : "wrap",
-    "position" : "5.15",
+    "position" : "5.17",
     "target" : "responder",
     "title" : "Wrap Lines"
   },
@@ -3181,7 +3199,7 @@
     "key" : "",
     "modifiers" : "1048576",
     "object" : "",
-    "position" : "5.16",
+    "position" : "5.18",
     "target" : "responder",
     "title" : ""
   },
@@ -3190,7 +3208,7 @@
     "key" : "",
     "modifiers" : "1048576",
     "object" : "refresh",
-    "position" : "5.17",
+    "position" : "5.19",
     "target" : "responder",
     "title" : "Refresh Comparison"
   },
@@ -3199,7 +3217,7 @@
     "key" : "",
     "modifiers" : "1048576",
     "object" : "cancel",
-    "position" : "5.18",
+    "position" : "5.20",
     "target" : "responder",
     "title" : "Cancel Comparison"
   },
@@ -3208,7 +3226,7 @@
     "key" : "",
     "modifiers" : "1048576",
     "object" : "",
-    "position" : "5.19",
+    "position" : "5.21",
     "target" : "responder",
     "title" : ""
   },
@@ -3217,7 +3235,7 @@
     "key" : "",
     "modifiers" : "1048576",
     "object" : "",
-    "position" : "5.20",
+    "position" : "5.22",
     "target" : "explicit",
     "title" : "Merge Changes"
   },
@@ -3226,7 +3244,7 @@
     "key" : "",
     "modifiers" : "1048576",
     "object" : "chooseDestination",
-    "position" : "5.20.0",
+    "position" : "5.22.0",
     "target" : "responder",
     "title" : "Choose Destination…"
   },
@@ -3235,7 +3253,7 @@
     "key" : "",
     "modifiers" : "1048576",
     "object" : "selectChanges",
-    "position" : "5.20.1",
+    "position" : "5.22.1",
     "target" : "responder",
     "title" : "Select Changes…"
   },
@@ -3244,7 +3262,7 @@
     "key" : "",
     "modifiers" : "1048576",
     "object" : "selectAllChanges",
-    "position" : "5.20.2",
+    "position" : "5.22.2",
     "target" : "responder",
     "title" : "Select All Changes"
   },
@@ -3253,7 +3271,7 @@
     "key" : "",
     "modifiers" : "1048576",
     "object" : "clearChangeSelection",
-    "position" : "5.20.3",
+    "position" : "5.22.3",
     "target" : "responder",
     "title" : "Clear Selection"
   },
@@ -3262,7 +3280,7 @@
     "key" : "",
     "modifiers" : "1048576",
     "object" : "applySelected",
-    "position" : "5.20.4",
+    "position" : "5.22.4",
     "target" : "responder",
     "title" : "Apply Selected Changes"
   },
@@ -3271,7 +3289,7 @@
     "key" : "",
     "modifiers" : "1048576",
     "object" : "showDestination",
-    "position" : "5.20.5",
+    "position" : "5.22.5",
     "target" : "responder",
     "title" : "Show Destination"
   },
@@ -3280,7 +3298,7 @@
     "key" : "",
     "modifiers" : "1048576",
     "object" : "",
-    "position" : "5.21",
+    "position" : "5.23",
     "target" : "explicit",
     "title" : "Patch"
   },
@@ -3289,7 +3307,7 @@
     "key" : "",
     "modifiers" : "1048576",
     "object" : "exportPatch",
-    "position" : "5.21.0",
+    "position" : "5.23.0",
     "target" : "responder",
     "title" : "Export Unified Patch…"
   },
@@ -3298,7 +3316,7 @@
     "key" : "",
     "modifiers" : "1048576",
     "object" : "copyPatch",
-    "position" : "5.21.1",
+    "position" : "5.23.1",
     "target" : "responder",
     "title" : "Copy Patch"
   },

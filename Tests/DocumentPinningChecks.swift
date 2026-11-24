@@ -430,7 +430,11 @@ extension DocumentChecks {
             var reviews = 0, replies: [Bool] = []
             quitting.requestUnsavedReview = { delegate in if delegate === quitting { reviews += 1 } }
             quitting.replyToTerminate = { replies.append($0) }
+            // A file: since DS-D9 an untitled document's unsaved text is kept, not reviewed, at quit.
+            let dirtyURL = root.appendingPathComponent("unsaved-at-quit.txt")
+            try Data().write(to: dirtyURL)
             let dirty = TextDocument()
+            dirty.fileURL = dirtyURL
             NSDocumentController.shared.addDocument(dirty)
             dirty.editor.text = "unsaved at quit"
             let clean = TextDocument()
@@ -684,11 +688,16 @@ extension DocumentChecks {
             let finder = SearchController(defaults: defaults)
             check(
                 try JSONDecoder().decode(SearchOptions.self, from: searchBytes) == search
-                    && finder.queryField.stringValue == search.query
-                    && finder.replacementField.stringValue == search.replacement && finder.mode.indexOfSelectedItem == 2
                     && finder.caseButton.state == .on && finder.wordButton.state == .on && finder.dotButton.state == .on
                     && finder.wrapButton.state == .off,
-                "golden Find options decode and restore every Find-window control")
+                "golden Find options decode and restore every Find-window option flag")
+            // V3: the text and the Regex mode an older file would have restored are offered as
+            // history; a new launch starts in Normal mode with both fields empty.
+            check(
+                finder.queryField.stringValue.isEmpty && finder.replacementField.stringValue.isEmpty
+                    && finder.mode.indexOfSelectedItem == 0 && finder.findHistory.queries == [search.query]
+                    && finder.findHistory.replacements == [search.replacement],
+                "golden Find options start a launch in Normal mode, with their text offered as history")
 
             var folderSettings = FolderSearchSettings()
             folderSettings.folder = URL(fileURLWithPath: "/Users/Shared/TextTank Fixture/project", isDirectory: true)
@@ -992,7 +1001,7 @@ extension DocumentChecks {
                     "Settings.json", "Settings-v2.json", "SearchOptions.json", "FolderSearchSettings.json",
                     "WorkspaceBrowser.json",
                     "RunLibrary.json", "Session.texttanksession", "SessionLayout.texttanksession",
-                    "RecoverySnapshot.json", "ReminderBatch.json",
+                    "RecoverySnapshot.json", "ReminderBatch.json", "LastSession.json", "LastSession-untitled.json",
                     "MacroLibrary.json", "Automations.json", "Automations-before-flags.json", "LanguageCatalog.json",
                     "LanguageOverrides.json"
                 ], "every committed persistence fixture is decoded by a check")
@@ -1110,9 +1119,30 @@ extension DocumentChecks {
                     "target": "responder",
                 ]
             ]
-            var accounted = identities(formerCommands + deliberatelyAdded + togglePreviewAdded)
+            // Given a key on 23 November 2026: File > Quick Open… is the same command with a default
+            // shortcut, Shift-Command-O. Its row without a key is replaced by its row with one.
+            let quickOpenWithoutKey: [[String: String]] = [
+                ["action": "quickOpen:", "object": "", "key": "", "modifiers": "1048576", "target": "explicit"]
+            ]
+            let quickOpenWithKey: [[String: String]] = [
+                ["action": "quickOpen:", "object": "", "key": "O", "modifiers": "1048576", "target": "explicit"]
+            ]
+            // Added on 23 November 2026 (DS-D10, local history): Compare > Compare with Earlier
+            // Version… and Compare > Clear Local History…. Nothing was removed for them.
+            let localHistoryAdded: [[String: String]] = [
+                [
+                    "action": "compareWithEarlierVersion:", "object": "", "key": "", "modifiers": "1048576",
+                    "target": "responder",
+                ],
+                [
+                    "action": "clearLocalHistory:", "object": "", "key": "", "modifiers": "1048576",
+                    "target": "explicit",
+                ],
+            ]
+            var accounted = identities(
+                formerCommands + deliberatelyAdded + togglePreviewAdded + quickOpenWithKey + localHistoryAdded)
             var removedRowsInFixture = 0
-            for removed in identities(deliberatelyRemoved) {
+            for removed in identities(deliberatelyRemoved + quickOpenWithoutKey) {
                 if let index = accounted.firstIndex(of: removed) {
                     accounted.remove(at: index)
                     removedRowsInFixture += 1
@@ -1120,7 +1150,8 @@ extension DocumentChecks {
             }
             let current = identities(menuSnapshot)
             check(
-                formerCommands.count == 338 && removedRowsInFixture == deliberatelyRemoved.count,
+                formerCommands.count == 338
+                    && removedRowsInFixture == deliberatelyRemoved.count + quickOpenWithoutKey.count,
                 "DS-D4 the fixture lists all 338 commands of the fourteen-menu bar, the two rows of the retired recipe automation among them")
             if !check(
                 current == accounted.sorted(),

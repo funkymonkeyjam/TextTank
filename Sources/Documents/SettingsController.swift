@@ -101,6 +101,9 @@ extension EditorSettings {
         editor.braceHighlightEnabled = value.braceHighlightEnabled
         editor.currentLineHighlightEnabled = value.currentLineHighlightEnabled
         editor.indentGuidesEnabled = value.indentGuidesEnabled
+        editor.lineNumbersVisible = value.lineNumbersEnabled
+        editor.whitespaceVisible = value.showWhitespaceEnabled
+        editor.lineEndingsVisible = value.showLineEndingsEnabled
         editor.wrap = value.wrap
     }
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
@@ -124,6 +127,12 @@ extension EditorSettings {
         updateViewPreference(.currentLineHighlight, sender: sender)
     }
     @objc func toggleIndentGuides(_ sender: Any?) { updateViewPreference(.indentGuides, sender: sender) }
+    /// Show Line Numbers, Show Whitespace and Show Line Endings stay catalog commands in the View
+    /// menu; the active tab routes them here so that one stored choice reaches every editor view.
+    func isEnabled(_ preference: EditorViewPreference) -> Bool { preference.enabled(in: value) }
+    func toggle(_ preference: EditorViewPreference, sender: Any? = nil) {
+        updateViewPreference(preference, sender: sender)
+    }
     private func updateViewPreference(_ preference: EditorViewPreference, sender: Any?) {
         guard loadError == nil, ignoredShortcutBindings.isEmpty else {
             showSettings(sender)
@@ -590,8 +599,19 @@ private final class SettingsKeyEquivalents: NSView {
         toggleRow(
             "settings.braceHighlight", .appearance, "Highlight matching braces",
             keywords: ["brackets", "parentheses", "pair"], \.braceHighlight, default: standard.braceHighlightEnabled)
-        // SETTINGS-ROW-EXTENSION (Appearance): the global Show Line Numbers, Show Whitespace and
-        // Show Line Endings toggles go here, one `toggleRow` each.
+        // SETTINGS-ROW-EXTENSION (Appearance): the three View toggles that are one stored choice
+        // for every editor view.
+        toggleRow(
+            "settings.lineNumbers", .appearance, "Show line numbers", keywords: ["gutter", "margin"],
+            \.lineNumbers, default: standard.lineNumbersEnabled)
+        toggleRow(
+            "settings.showWhitespace", .appearance, "Show whitespace",
+            keywords: ["spaces", "invisibles", "invisible characters", "dots"], \.showWhitespace,
+            default: standard.showWhitespaceEnabled)
+        toggleRow(
+            "settings.showLineEndings", .appearance, "Show line endings",
+            keywords: ["eol", "crlf", "newline", "invisibles", "carriage return"], \.showLineEndings,
+            default: standard.showLineEndingsEnabled)
 
         // Files
         ControlPresentation.populate(
@@ -621,8 +641,25 @@ private final class SettingsKeyEquivalents: NSView {
             ],
             differs: { $0.diskChangeBehavior != standard.diskChangeBehavior },
             reset: { [unowned self] in try self.write { $0.externalChangePolicy = nil } })
-        // SETTINGS-ROW-EXTENSION (Files): local history goes here, a `toggleRow` for keeping it
-        // and an `actionRow` for Clear History….
+        // SETTINGS-ROW-EXTENSION (Files): unsaved work and local history.
+        toggleRow(
+            "settings.keepUntitledOnQuit", .files, "Keep unsaved untitled documents when quitting",
+            keywords: ["quit", "unsaved", "drafts", "scratch", "close"], \.keepUntitledOnQuit,
+            default: standard.keepsUntitledOnQuit)
+        toggleRow(
+            "settings.keepLocalHistory", .files, "Keep earlier versions when saving",
+            keywords: ["local history", "versions", "backup", "previous"], \.keepLocalHistory,
+            default: standard.keepsLocalHistory)
+        // The same command as Compare › Clear Local History…, with its own confirmation.
+        actionRow(
+            "settings.clearLocalHistory", .files, "Local history", button: "Clear Local History…",
+            keywords: ["earlier versions", "delete", "remove", "erase"]
+        ) { [weak self] in
+            guard let self else { return }
+            _ = NSApp.sendAction(
+                #selector(AppDelegate.clearLocalHistory(_:)), to: NSApp.delegate,
+                from: self.form.window)
+        }
         actionRow(
             "settings.reveal", .files, "Settings file", button: "Reveal Settings File in Finder",
             keywords: ["json", "location", "folder", "path", "backup", "show"]
@@ -655,7 +692,11 @@ private final class SettingsKeyEquivalents: NSView {
             ],
             differs: { settings in PreviewFormat.allCases.contains { settings.previewOpenMode(for: $0) != .source } },
             reset: { [unowned self] in try self.write { $0.previewOpenModes = nil } })
-        // SETTINGS-ROW-EXTENSION (Previews): Sync scrolling in Both goes here, one `toggleRow`.
+        // SETTINGS-ROW-EXTENSION (Previews)
+        toggleRow(
+            "settings.syncPreviewScrolling", .previews, "Sync scrolling in Both",
+            keywords: ["scroll", "synchronize", "follow", "side by side"], \.syncPreviewScrolling,
+            default: standard.syncsPreviewScrolling)
 
         // Shortcuts: one row that is the whole list. Changed from default narrows the list to
         // the commands whose shortcut was changed, and each has Use Default there.

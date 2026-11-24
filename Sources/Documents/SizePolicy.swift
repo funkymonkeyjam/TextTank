@@ -37,6 +37,10 @@ package struct SizePolicy: Sendable {
     package let recoveryMedium = 32 * 1024 * 1024
     package let recoveryLarge = 128 * 1024 * 1024
     package let automaticRecovery = 256 * 1024 * 1024
+    /// Unsaved untitled documents kept across one quit (DS-D9): each is bounded by
+    /// `automaticRecovery`, and together by these. A document beyond a bound is reviewed instead.
+    package let keptUntitledTotal = 512 * 1024 * 1024
+    package let keptUntitledCount = 256
     package let findHighlightLine = 1024 * 1024
 
     package let automationText = 32 * 1024 * 1024

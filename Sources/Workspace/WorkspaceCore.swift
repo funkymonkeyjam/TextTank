@@ -512,17 +512,38 @@ package struct LastSessionLayout: Codable, Equatable, Sendable {
         }
         package var url: URL { URL(fileURLWithPath: path) }
     }
+    /// An untitled document whose unsaved text is kept across a quit (DS-D9). The record holds
+    /// no text: the text, encoding and byte-order mark are the recovery copy with the same id.
+    package struct Untitled: Codable, Equatable, Sendable {
+        package let id: DocumentID
+        /// The language profile the tab showed; nil reads as plain text.
+        package let language: String?
+        /// `LineEnding` raw value the editor inserts for new lines; nil reads as detected from the text.
+        package let lineEnding: String?
+        package init(id: DocumentID, language: String? = nil, lineEnding: String? = nil) {
+            self.id = id
+            self.language = language
+            self.lineEnding = lineEnding
+        }
+    }
     package static let maximumBytes = SizePolicy.standard.workspaceLayout
+    /// 1 while only files are listed, so such a file is byte-for-byte what earlier builds wrote.
+    /// 2 exactly when `untitled` is present; an earlier build refuses that file and leaves it alone.
     package let version: Int
     package let files: [File]
+    package let untitled: [Untitled]?
     package let layout: WorkspaceLayoutState
 
-    package init(files: [File], layout: WorkspaceLayoutState) throws {
-        self.version = 1
+    package init(files: [File], untitled: [Untitled] = [], layout: WorkspaceLayoutState) throws {
+        self.version = untitled.isEmpty ? 1 : 2
         self.files = files
-        self.layout = Self.filter(layout, retaining: Set(files.map(\.id)))
+        self.untitled = untitled.isEmpty ? nil : untitled
+        self.layout = Self.filter(layout, retaining: Set(files.map(\.id)).union(untitled.map(\.id)))
         try validate()
     }
+    /// The same record without its files, for a launch that is set to start with a new document:
+    /// kept untitled text is still restored.
+    package func untitledOnly() throws -> Self { try Self(files: [], untitled: untitled ?? [], layout: layout) }
     package static func filter(_ original: WorkspaceLayoutState, retaining ids: Set<DocumentID>) -> WorkspaceLayoutState
     {
         var state = original
@@ -542,8 +563,14 @@ package struct LastSessionLayout: Codable, Equatable, Sendable {
     }
     private func validate() throws {
         try layout.validate()
-        let ids = Set(files.map(\.id))
-        guard version == 1, files.count <= 4096, ids.count == files.count,
+        let kept = untitled ?? []
+        let ids = Set(files.map(\.id)).union(kept.map(\.id))
+        guard version == (untitled == nil ? 1 : 2), untitled?.isEmpty != true,
+            files.count + kept.count <= 4096, ids.count == files.count + kept.count,
+            kept.allSatisfy({ item in
+                (item.language?.utf8.count ?? 1) <= 200 && item.language?.isEmpty != true
+                    && item.lineEnding.map { LineEnding(rawValue: $0) != nil } != false
+            }),
             Set(files.map(\.path)).count == files.count,
             files.allSatisfy({ $0.path.hasPrefix("/") && !$0.path.contains("\0") && $0.path.utf8.count <= 4096 }),
             Set(layout.groups.flatMap(\.tabs).map(\.documentID)) == ids

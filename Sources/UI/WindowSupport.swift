@@ -26,6 +26,19 @@ final class DefaultShortcutItem: NSMenuItem {
         keyEquivalentModifierMask = shortcut.appKitModifiers
     }
     required init(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    /// Sets this one item's key from the settings, by the rule `ShortcutCatalog.apply` uses for
+    /// the whole menu bar: its own assigned shortcut, or its default unless another command was
+    /// assigned that key.
+    @MainActor func applyEditorOverrides(_ settings: EditorSettings) {
+        var current: MenuShortcut? = shortcut
+        if let id = ShortcutCatalog.identifier(for: self), settings.hasShortcutOverride(for: id) {
+            current = settings.assignedShortcut(for: id)
+        } else if settings.isAssigned(shortcut) {
+            current = nil
+        }
+        keyEquivalent = current?.key ?? ""
+        keyEquivalentModifierMask = current?.appKitModifiers ?? shortcut.appKitModifiers
+    }
 }
 extension NSMenu {
     /// Adds one item without hiding its dispatch, shortcut or validation metadata in positional

@@ -65,6 +65,32 @@ package enum TabGroupGeometry {
     }
 }
 
+/// The docked Workspace Browser's share of the workspace window (DS-67).
+///
+/// The sidebar sits at the left edge, beside the editor groups, with a divider that can be
+/// dragged between `minimumWidth` and `maximumWidth`. The editor groups always keep the width
+/// their layout needs: when the window narrows, the sidebar gives up width first, down to its
+/// minimum, and the window cannot be made narrower than that minimum plus the editor groups'
+/// own. Hiding the sidebar returns the window to the editor groups' minimum.
+package enum WorkspaceSidebarGeometry {
+    package static let minimumWidth: Double = 260
+    package static let defaultWidth: Double = 280
+    package static let maximumWidth: Double = 480
+    package static let divider: Double = 1
+    /// The width the sidebar gets when the person asked for `preferred` and the window's content
+    /// is `total` wide.
+    package static func width(preferred: Double, total: Double, editorMinimum: Double) -> Double {
+        let wanted = preferred.isFinite ? preferred : defaultWidth
+        return max(minimumWidth, min(wanted, maximumWidth, total - divider - editorMinimum)).rounded()
+    }
+    /// The smallest window content for `layout` while the sidebar is shown or hidden.
+    package static func minimumContent(_ layout: LayoutKind, sidebarShown: Bool) -> TabGroupExtent {
+        let editors = TabGroupGeometry.minimumContent(layout)
+        guard sidebarShown else { return editors }
+        return TabGroupExtent(width: editors.width + divider + minimumWidth, height: editors.height)
+    }
+}
+
 extension TabWorkspace {
     package mutating func focusGroup(_ slot: GroupSlot, openDocuments: Set<DocumentID>) throws {
         try validate(openDocuments: openDocuments)

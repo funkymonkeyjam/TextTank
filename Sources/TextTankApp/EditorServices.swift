@@ -18,6 +18,8 @@ import AppKit
     var activePresentation: EditorWindowController? { activePresentationProvider() }
     var workspaceHostProvider: () -> WorkspaceWindowController? = { nil }
     var workspaceHost: WorkspaceWindowController? { workspaceHostProvider() }
+    var workspaceBrowserProvider: () -> WorkspaceBrowserController? = { nil }
+    var workspaceBrowser: WorkspaceBrowserController? { workspaceBrowserProvider() }
     var isAvailable: () -> Bool = { true }
     var settingsProvider: () -> SettingsController? = { nil }
     var languagesProvider: () -> LanguageController? = { nil }

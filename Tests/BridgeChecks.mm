@@ -1340,6 +1340,58 @@ int main(int argc, char **argv) {
         [ed setSyntaxFont:STYLE_LINENUMBER name:@"Menlo" size:40];
         check(needed(sv,"99")>48 && margin(sv)>=needed(sv,"99"), "Line-number margin follows a larger line-number font");
         });
+        ttchecks::section("stored view choices and horizontal range", [&] {
+        // V4: the three View choices are plain per-view properties that Editor Settings sets on every view.
+        TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        ScintillaView *sv=(ScintillaView *)ed.subviews.firstObject;
+        check(ed.lineNumbersVisible && !ed.whitespaceVisible && !ed.lineEndingsVisible, "V4 a new view shows line numbers and hides whitespace and line-ending marks");
+        ed.lineNumbersVisible=NO; ed.whitespaceVisible=YES; ed.lineEndingsVisible=YES;
+        check([sv message:SCI_GETMARGINWIDTHN wParam:0]==0 && [sv message:SCI_GETVIEWWS]==SCWS_VISIBLEALWAYS && [sv message:SCI_GETVIEWEOL]==1,
+              "V4 the view-choice properties set the gutter, whitespace marks and line-ending marks");
+        check(![ed commandIsChecked:@"toggleLineNumbers"] && [ed commandIsChecked:@"showWhitespace"] && [ed commandIsChecked:@"toggleEOL"],
+              "V4 the catalog toggles report the same state the properties set");
+        ed.lineNumbersVisible=NO; ed.whitespaceVisible=YES; ed.lineEndingsVisible=YES;
+        check(!ed.lineNumbersVisible && ed.whitespaceVisible && ed.lineEndingsVisible, "V4 setting a view choice to its current value changes nothing");
+        [ed executeCommand:@"toggleLineNumbers"]; [ed executeCommand:@"showWhitespace"]; [ed executeCommand:@"toggleEOL"];
+        check(ed.lineNumbersVisible && [sv message:SCI_GETMARGINWIDTHN wParam:0]>=48 && !ed.whitespaceVisible && !ed.lineEndingsVisible,
+              "V4 the catalog toggles flip the properties, and showing the gutter sizes it");
+        check(ed.followsDefaultZoom, "V4 a new view follows the default zoom");
+        [ed applyDefaultZoomLevel:2];
+        check(ed.followsDefaultZoom && ed.zoomLevel==2, "V4 a default zoom change keeps a following view following");
+        ed.zoomLevel=5;
+        check(!ed.followsDefaultZoom, "V4 a view zoomed away from the default no longer follows it");
+        [ed resetZoomLevel];
+        check(ed.followsDefaultZoom && ed.zoomLevel==2, "V4 Actual Size returns the view to following the default");
+        [ed applyDefaultZoomLevel:0];
+        // The horizontal range is what the laid-out lines need, not Scintilla's fixed 2000 px.
+        NSWindow *host=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,600,400) styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:YES];
+        host.contentView=ed; [host.contentView layoutSubtreeIfNeeded];
+        auto paint=[&] { NSBitmapImageRep *rep=[ed bitmapImageRepForCachingDisplayInRect:ed.bounds]; [ed cacheDisplayInRect:ed.bounds toBitmapImageRep:rep]; };
+        auto range=[&] { NSScrollView *scroll=sv.scrollView; return scroll.documentView.frame.size.width - scroll.contentView.bounds.size.width; };
+        paint();
+        check([sv message:SCI_GETSCROLLWIDTHTRACKING]==1 && range()<=0, "an empty document has no horizontal scroll range");
+        ed.text=@"short\nlines\n"; paint();
+        check(range()<=0, "a document narrower than its view has no horizontal scroll range");
+        ed.horizontalScrollOffset=300; paint();
+        check(ed.horizontalScrollOffset==0, "a document with nothing to scroll sideways refuses a horizontal offset");
+        NSString *wide=[@"" stringByPaddingToLength:4000 withString:@"0123456789" startingAtIndex:0];
+        ed.text=[NSString stringWithFormat:@"short\n%@\nshort\n", wide]; paint();
+        const sptr_t lineEnd=[sv message:SCI_GETLINEENDPOSITION wParam:1];
+        const sptr_t lineWidth=[sv message:SCI_POINTXFROMPOSITION wParam:0 lParam:lineEnd]-[sv message:SCI_POINTXFROMPOSITION wParam:0 lParam:[sv message:SCI_POSITIONFROMLINE wParam:1]];
+        check(lineWidth>2000 && [sv message:SCI_GETSCROLLWIDTH]>=lineWidth, "the horizontal range grows to a painted line wider than 2000 px");
+        ed.horizontalScrollOffset=lineWidth; paint();
+        const CGFloat textWidth=sv.scrollView.contentView.bounds.size.width;
+        const sptr_t endX=[sv message:SCI_POINTXFROMPOSITION wParam:0 lParam:lineEnd];
+        check(ed.horizontalScrollOffset>2000 && endX>0 && endX<=textWidth+[sv message:SCI_GETMARGINWIDTHN wParam:0]+[sv message:SCI_GETMARGINWIDTHN wParam:1]+[sv message:SCI_GETMARGINWIDTHN wParam:2],
+              "a long line scrolls fully to its end with wrap off");
+        // A restored offset can arrive before the first paint of a view.
+        TTEditor *fresh=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        fresh.text=ed.text;
+        fresh.horizontalScrollOffset=2500;
+        check(fresh.horizontalScrollOffset==2500, "a horizontal offset set before the first paint is kept when the lines on screen reach it");
+        fresh.wrap=YES; fresh.horizontalScrollOffset=2500;
+        check(fresh.horizontalScrollOffset==0, "a wrapped view has no horizontal offset");
+        });
         ttchecks::section("line-ending mode", [&] {
         // F126: the line-ending mode is metadata only and governs later insertions.
         TTEditor *eol=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,400,300)];
