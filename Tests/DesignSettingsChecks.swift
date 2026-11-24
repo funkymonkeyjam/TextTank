@@ -20,7 +20,7 @@ import NativeSearch
             return
         }
         let ids: Set<String> = [
-            "settings.shortcuts.apply", "settings.close", "settings.reset", "settings.font.choose", "automation.create",
+            "settings.close", "settings.reset", "settings.font.choose", "automation.create",
             "automation.edit",
             "automation.rules", "automation.duplicate", "automation.delete", "automation.favorite", "automation.json"
         ]
@@ -126,7 +126,6 @@ import NativeSearch
             defaults.removePersistentDomain(forName: suite)
         }
         try maintenanceSheetChecks(root: root)
-        try settingsPaneChecks(root: root)
         let controller = SettingsController(url: root.appendingPathComponent("design-settings-frames.json"))
         controller.showSettings(nil)
         let form = try requireValue(FormPanel.visible.last, "DG fixture: Settings frame")
@@ -286,7 +285,7 @@ import NativeSearch
             ),
             ("files", ["settings.atLaunch", "settings.externalChanges", "settings.reveal"]),
             ("previews", ["settings.preview.openIn"]),
-            ("shortcuts", ["settings.shortcut.command", "settings.shortcut.key"])
+            ("shortcuts", ["settings.shortcuts"])
         ]
         var heights: [String: CGFloat] = [:]
         for (pane, settings) in expected {
@@ -463,6 +462,374 @@ import NativeSearch
             revealed.map(\.path) == [root.path] && !FileManager.default.fileExists(atPath: fresh.url.path),
             "V6 before any setting is saved it shows the folder, and creates no file")
         freshForm.close()
+    }
+    /// Drives the Shortcuts pane through its own controls: the list, the search field and the recorder.
+    @MainActor struct ShortcutPaneDriver {
+        let window: NSWindow, table: NSTableView, recorder: ShortcutRecorder
+        let message: NSTextField, note: NSTextField, search: NSSearchField
+        init(_ window: NSWindow) throws {
+            self.window = window
+            table = try DesignSettingsChecks.control("settings.shortcuts.list", window)
+            recorder = try DesignSettingsChecks.control("settings.shortcuts.recorder", window)
+            message = try DesignSettingsChecks.field("settings.shortcuts.message", window)
+            note = try DesignSettingsChecks.field("settings.shortcuts.note", window)
+            search = try DesignSettingsChecks.control("settings.shortcuts.search", window)
+        }
+        func text(_ row: Int, _ column: Int) -> String {
+            (table.view(atColumn: column, row: row, makeIfNecessary: true) as? NSTextField)?.stringValue ?? ""
+        }
+        func listed() -> [String] { (0..<table.numberOfRows).map { text($0, 0) } }
+        func row(_ title: String) throws -> Int {
+            try requireValue((0..<table.numberOfRows).first { text($0, 0) == title }, "V8 fixture: the command \(title)")
+        }
+        func select(_ title: String) throws {
+            table.selectRowIndexes([try row(title)], byExtendingSelection: false)
+        }
+        func find(_ words: String) throws {
+            search.stringValue = words
+            _ = NSApp.sendAction(try requireValue(search.action, "V8 fixture: search"), to: search.target, from: search)
+        }
+        func key(_ characters: String, _ flags: NSEvent.ModifierFlags, code: UInt16 = 0) throws -> NSEvent {
+            try requireValue(
+                NSEvent.keyEvent(
+                    with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
+                    windowNumber: window.windowNumber, context: nil, characters: characters,
+                    charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code), "V8 fixture: key press")
+        }
+        /// Clicks the recorder and presses a key, as a person does.
+        func press(_ characters: String, _ flags: NSEvent.ModifierFlags, code: UInt16 = 0) throws {
+            recorder.performClick(nil)
+            try require(recorder.isRecording && window.firstResponder === recorder, "V8 fixture: the recorder is recording")
+            window.sendEvent(try key(characters, flags, code: code))
+        }
+        func button(_ id: String) throws -> NSButton { try DesignSettingsChecks.control("settings.shortcuts." + id, window) }
+    }
+    /// V8, in the real menu bar: the list of every command, the recorder, a key in use, a
+    /// reserved key, Replace, Use Default, Reset All Shortcuts and the live menu.
+    static func shortcutPaneChecks(composition: AppDelegate) throws {
+        let settings = composition.settings
+        let bar = try requireValue(NSApp.mainMenu, "V8 fixture: the menu bar")
+        settings.showSettings(nil)
+        let form = try requireValue(
+            FormPanel.visible.last { $0.window.identifier?.rawValue == "TextTank.Settings" }, "V8 fixture: Settings")
+        defer {
+            form.close()
+            // Whatever a failed check left behind, the application's menu bar gets its defaults back.
+            _ = try? settings.save(EditorSettings())
+        }
+        let window = form.window
+        try choosePane("shortcuts", in: window)
+        let pane = try ShortcutPaneDriver(window)
+        let table = pane.table, recorder = pane.recorder, message = pane.message, note = pane.note
+        func text(_ row: Int, _ column: Int) -> String { pane.text(row, column) }
+        func listed() -> [String] { pane.listed() }
+        func row(_ title: String) throws -> Int { try pane.row(title) }
+        func select(_ title: String) throws { try pane.select(title) }
+        func find(_ words: String) throws { try pane.find(words) }
+        func key(_ characters: String, _ flags: NSEvent.ModifierFlags, code: UInt16 = 0) throws -> NSEvent {
+            try pane.key(characters, flags, code: code)
+        }
+        func press(_ characters: String, _ flags: NSEvent.ModifierFlags, code: UInt16 = 0) throws {
+            try pane.press(characters, flags, code: code)
+        }
+        func button(_ id: String) throws -> NSButton { try pane.button(id) }
+        func item(_ action: String) throws -> NSMenuItem {
+            func search(_ menu: NSMenu) -> NSMenuItem? {
+                for item in menu.items {
+                    if !item.isHidden, item.action.map(NSStringFromSelector) == action { return item }
+                    if let found = item.submenu.flatMap(search) { return found }
+                }
+                return nil
+            }
+            return try requireValue(search(bar), "V8 fixture: the menu item for \(action)")
+        }
+        check(
+            table.accessibilityLabel() == "Commands and their shortcuts"
+                && ["default", "clear", "resetAll", "replace", "cancel"].allSatisfy {
+                    !((try? button($0))?.accessibilityLabel() ?? "").isEmpty
+                },
+            "V8 DS-70 the list and every button of the pane have accessibility labels")
+
+        // (a) Every command, with its key and whether that is the default.
+        let palette = composition.commandDiscovery.commands(in: bar)
+        let titles = Set(listed())
+        let missing = palette.map(\.row.title).filter { !titles.contains($0) }
+        check(
+            missing.isEmpty && titles.contains("Help › Command Palette…") && titles.count == listed().count,
+            "V8 the list has every command the Command Palette has, once each (missing: \(missing.prefix(5)))")
+        let save = try row("File › Save"), quit = try row("TextTank › Quit TextTank")
+        check(
+            try text(save, 1) == "⌘S" && text(save, 2) == "Default" && text(try row("File › Save Copy…"), 1).isEmpty
+                && text(try row("File › Save Copy…"), 2) == "None"
+                && text(try row("Edit › Lines › Move Line Up"), 1) == "⌃⌘↑",
+            "V8 each command shows its current key and that it is the default")
+        try select("TextTank › Quit TextTank")
+        check(
+            text(quit, 1) == "⌘Q" && text(quit, 2) == "System" && !recorder.isEnabled && !note.isHidden
+                && note.stringValue.contains("quits TextTank"),
+            "V8 DS-25 a system shortcut is listed, cannot be recorded over, and says why")
+        // The function key's own name is pinned in SettingsShortcutValidationChecks.storedForms.
+        let recordKey = MenuShortcut.recordMacro.displayText
+        try select("Tools › Macros › Start Recording")
+        check(
+            text(try row("Tools › Macros › Start Recording"), 1) == recordKey && !recorder.isEnabled
+                && note.stringValue.contains(recordKey + " starts and stops recording"),
+            "V8 a macro key is shown read-only with the reason")
+        let automation = try requireValue(
+            listed().first { $0.hasPrefix("Tools › Automations › ") && !$0.hasSuffix("…") },
+            "V8 fixture: a saved automation in the list")
+        try select(automation)
+        check(
+            text(try row(automation), 2) == "Fixed" && !recorder.isEnabled
+                && note.stringValue.contains("Tools › Automations › Manage Automations…"),
+            "V8 an automation's own shortcut is shown read-only with where to change it")
+        try find("copy save")
+        check(
+            listed() == ["File › Save Copy…"], "V8 the list is searched by the words of a command: \(listed())")
+        try find("⌘S")
+        check(listed().contains("File › Save") && listed().allSatisfy { !$0.isEmpty }, "V8 and by a key as it is shown")
+        try find("command-shift-v")
+        check(listed().isEmpty, "V8 fixture: modifiers are said in the menu bar's order")
+        try find("shift-command-v")
+        check(listed() == ["View › Toggle Preview"], "V8 and by a key in words: \(listed())")
+        try find("")
+
+        // (b) The recorder: a bare key and a reserved key are refused with the reason.
+        let original = settings.value
+        try select("Edit › Lines › Duplicate Line")
+        check(
+            try !listed().contains { $0.contains("duplicateLine") } && recorder.title == "⌘D"
+                && text(try row("Edit › Lines › Duplicate Line"), 1) == "⌘D"
+                && !FileManager.default.fileExists(atPath: settings.url.path),
+            "G396 Settings shows readable command names and the selected current shortcut, and reading saves nothing")
+        try select("File › New")
+        check(
+            recorder.isEnabled && recorder.title == "⌘N"
+                && recorder.accessibilityLabel() == "Record a shortcut for File › New, now Command-N",
+            "V8 DS-70 the recorder shows the selected command's key and names what it records")
+        NativeFixtureEnvironment.announcements = []
+        try press("k", [])
+        check(
+            settings.value == original && !recorder.isRecording && message.stringValue.contains("K would type text")
+                && NativeFixtureEnvironment.announcements.contains(message.stringValue),
+            "V8 a bare key that would type text is refused, in words that are announced: \(message.stringValue)")
+        try press("q", .command, code: 12)
+        check(
+            settings.value == original && message.stringValue.contains("Command-Q quits TextTank.")
+                && message.stringValue.contains("cannot be given to another command"),
+            "V8 DS-25 a reserved system shortcut is refused with its reason: \(message.stringValue)")
+        try press("\u{f70c}", .function, code: 101)
+        check(
+            settings.value == original
+                && message.stringValue.contains(recordKey + " is used by “Tools › Macros › Start Recording”"),
+            "V8 a key of a command that cannot change is refused, naming the command: \(message.stringValue)")
+        recorder.performClick(nil)
+        window.sendEvent(try key("\u{1b}", [], code: 53))
+        check(
+            !recorder.isRecording && settings.value == original && window.isVisible,
+            "V8 Escape ends recording, changes nothing and leaves Settings open")
+
+        // Control-Option-K for a File command, live in the menu bar.
+        let new = try item("newDocument:")
+        try press("k", [.control, .option], code: 40)
+        check(
+            try settings.value.shortcuts == ["newDocument:": "ctrl+opt+k"] && settings.value.version == 2
+                && SettingsStore(url: settings.url).value.shortcuts == settings.value.shortcuts
+                && text(try row("File › New"), 1) == "⌃⌥K" && text(try row("File › New"), 2) == "Custom"
+                && message.stringValue == "“File › New” now uses Control-Option-K.",
+            "V8 recording Control-Option-K for File › New saves it at once: \(settings.value.shortcuts) \(message.stringValue)")
+        check(
+            new.keyEquivalent == "k" && new.keyEquivalentModifierMask == [.control, .option],
+            "V8 the menu item has the key at once")
+        let documents = NSDocumentController.shared.documents.count
+        check(
+            bar.performKeyEquivalent(with: try key("k", [.control, .option], code: 40))
+                && NSDocumentController.shared.documents.count == documents + 1,
+            "V8 Control-Option-K runs File › New from the menu's key equivalent")
+        check(
+            !bar.performKeyEquivalent(with: try key("n", .command, code: 45))
+                && NSDocumentController.shared.documents.count == documents + 1,
+            "V8 and its former key no longer does")
+        NSDocumentController.shared.documents.forEach { $0.close() }
+        let entry = try requireValue(
+            composition.commandDiscovery.commands(in: bar).first { $0.row.title == "File › New" },
+            "V8 fixture: File › New in the Command Palette")
+        check(
+            entry.row.shortcut == "⌃⌥K" && entry.row.shortcut == MenuShortcut(new)?.displayText
+                && palette.first { $0.row.title == "File › Save" }?.row.shortcut == "⌘S",
+            "V8 DS-20 the Command Palette shows the same key in the same form")
+
+        // (c) A key in use names the clash and offers Replace or Cancel.
+        let open = try item("openDocument:")
+        try select("File › Open…")
+        try press("k", [.control, .option], code: 40)
+        let replace = try button("replace"), cancel = try button("cancel")
+        check(
+            settings.value.shortcuts == ["newDocument:": "ctrl+opt+k"] && !replace.isHidden && !cancel.isHidden
+                && replace.hasDestructiveAction && replace.keyEquivalent.isEmpty
+                && message.stringValue.hasPrefix("Control-Option-K is already used by “File › New”.")
+                && open.keyEquivalent == "o",
+            "V8 recording a key in use names the command that has it and changes nothing yet: \(message.stringValue)")
+        cancel.performClick(nil)
+        check(
+            settings.value.shortcuts == ["newDocument:": "ctrl+opt+k"] && replace.isHidden && cancel.isHidden
+                && message.stringValue == "The shortcut was not changed.",
+            "V8 Cancel keeps both shortcuts as they were")
+        try press("k", [.control, .option], code: 40)
+        try button("replace").performClick(nil)
+        check(
+            try settings.value.shortcuts == ["openDocument:": "ctrl+opt+k", "newDocument:": ""] && replace.isHidden
+                && open.keyEquivalent == "k" && open.keyEquivalentModifierMask == [.control, .option]
+                && new.keyEquivalent.isEmpty && text(try row("File › New"), 2) == "Custom: none"
+                && text(try row("File › Open…"), 1) == "⌃⌥K",
+            "V8 Replace gives the key to the command and leaves the other without one: \(settings.value.shortcuts)")
+
+        // A yielding default gives way without a question, and shows that it did.
+        let toggle = try item("toggleDocumentPreview:")
+        try select("Edit › Convert Case › Uppercase")
+        try press("V", [.command, .shift], code: 9)
+        check(
+            try settings.value.shortcuts["upper"] == "V" && replace.isHidden && toggle.keyEquivalent.isEmpty
+                && text(try row("View › Toggle Preview"), 1).isEmpty
+                && text(try row("View › Toggle Preview"), 2) == "Default, given up",
+            "V8 a yielding default gives way to the assignment and the list says so")
+
+        // Changed from default narrows the list to the commands that were changed.
+        let changed: NSButton = try control("settings.filter.changed", window)
+        changed.performClick(nil)
+        check(
+            shownSettings(window) == ["settings.shortcuts"]
+                && listed() == ["File › New", "File › Open…", "Edit › Convert Case › Uppercase"],
+            "V8 Changed from default lists exactly the commands whose shortcut was changed: \(listed())")
+        changed.performClick(nil)
+        try choosePane("shortcuts", in: window)
+
+        // (d) Reset one, then Reset all.
+        try select("Edit › Lines › Delete Line")
+        try press("k", .command, code: 40)
+        try select("Edit › Lines › Duplicate Line")
+        try press("j", .command, code: 38)
+        check(
+            try settings.value.shortcuts["deleteLine"] == "k" && settings.value.shortcuts["duplicateLine"] == "j"
+                && settings.value.shortcuts["upper"] == "V" && text(try row("Edit › Lines › Delete Line"), 1) == "⌘K",
+            "G396 the real Settings list keeps several assignments, each saved as it is made")
+        try button("default").performClick(nil)
+        try select("Edit › Lines › Delete Line")
+        try button("default").performClick(nil)
+        check(
+            try settings.value.shortcuts["deleteLine"] == nil && settings.value.shortcuts["duplicateLine"] == nil
+                && text(try row("Edit › Lines › Duplicate Line"), 1) == "⌘D"
+                && text(try row("Edit › Lines › Delete Line"), 1) == "⌃⇧K"
+                && SettingsStore(url: settings.url).value.shortcuts == settings.value.shortcuts,
+            "G396 Use Default restores each command's default without adding default or empty overrides")
+        try select("Edit › Convert Case › Uppercase")
+        try button("default").performClick(nil)
+        check(
+            try settings.value.shortcuts["upper"] == nil && toggle.keyEquivalent == "V"
+                && toggle.keyEquivalentModifierMask == .command && text(try row("View › Toggle Preview"), 2) == "Default",
+            "V8 Use Default removes one assignment and the yielding default has its key again")
+        try select("File › New")
+        try button("default").performClick(nil)
+        check(
+            try settings.value.shortcuts == ["openDocument:": "ctrl+opt+k"] && new.keyEquivalent == "n"
+                && new.keyEquivalentModifierMask == .command && !(try button("default")).isEnabled,
+            "V8 Use Default returns a command that had no key to its default")
+        try select("File › Open…")
+        try button("clear").performClick(nil)
+        check(
+            settings.value.shortcuts == ["openDocument:": ""] && open.keyEquivalent.isEmpty,
+            "V8 Clear Shortcut leaves a command without a key")
+        try select("File › Save Copy…")
+        try press("o", .command, code: 31)
+        check(
+            settings.value.shortcuts == ["openDocument:": "", "saveCopy:": "o"],
+            "V8 a default that was taken away is free for another command")
+        try select("File › Open…")
+        try button("default").performClick(nil)
+        check(
+            !replace.isHidden && message.stringValue.hasPrefix("Command-O is already used by “File › Save Copy…”."),
+            "V8 returning a command to a default that is now in use asks the same question: \(message.stringValue)")
+        cancel.performClick(nil)
+        let resetAll = try button("resetAll")
+        check(resetAll.isEnabled && resetAll.title.hasSuffix("…"), "V8 Reset All Shortcuts… asks first (DS-41)")
+        resetAll.performClick(nil)
+        let sheet = try requireValue(window.attachedSheet, "V8 fixture: the Reset All Shortcuts sheet")
+        check(NSApp.modalWindow == nil, "V8 the question blocks only Settings")
+        let confirm = try requireValue(
+            descendants(sheet.contentView!).compactMap { $0 as? NSButton }.first { $0.title == "Reset Shortcuts" },
+            "V8 fixture: Reset Shortcuts")
+        check(confirm.hasDestructiveAction, "V8 DS-41 the deliberate button is marked destructive")
+        confirm.performClick(nil)
+        _ = spinUntil("V8 the Reset All Shortcuts sheet finished") { sheet.sheetParent == nil && !sheet.isVisible }
+        check(
+            try settings.value.shortcuts.isEmpty && settings.value.version == 1 && window.isVisible
+                && open.keyEquivalent == "o" && open.keyEquivalentModifierMask == .command && new.keyEquivalent == "n"
+                && String(decoding: try Data(contentsOf: settings.url), as: UTF8.self).contains("\"version\":1")
+                && !resetAll.isEnabled,
+            "V8 Reset All Shortcuts restores every default, in the menu bar and in a version-1 file")
+
+        // A menu its owner rebuilds (Run Commands) gets new items; the saved shortcut returns to them.
+        try select("Tools › Run Commands › Manage Commands…")
+        try press("m", [.control, .option], code: 46)
+        let manage = try item("manage:")
+        check(
+            manage.keyEquivalent == "m" && manage.keyEquivalentModifierMask == [.control, .option],
+            "V8 fixture: a Run Commands item has an assigned key")
+        try composition.runner.persist([.uppercaseSample])
+        let rebuilt = try item("manage:")
+        check(rebuilt !== manage, "V8 fixture: saving a Run command rebuilds its menu")
+        _ = spinUntil("V8 the rebuilt Run Commands item has its shortcut again") {
+            rebuilt.keyEquivalent == "m" && rebuilt.keyEquivalentModifierMask == [.control, .option]
+        }
+        try choosePane("shortcuts", in: window)
+        let saved = "Tools › Run Commands › " + ConfiguredRun.uppercaseSample.menuTitle
+        try select(saved)
+        try press("u", [.control, .option], code: 32)
+        func runItem() -> NSMenuItem? {
+            func search(_ menu: NSMenu) -> NSMenuItem? {
+                for item in menu.items {
+                    if item.target is RunController, item.title == ConfiguredRun.uppercaseSample.menuTitle { return item }
+                    if let found = item.submenu.flatMap(search) { return found }
+                }
+                return nil
+            }
+            return search(bar)
+        }
+        check(
+            try settings.value.shortcuts.keys.contains { $0.hasPrefix("RunController.run:/") }
+                && text(try row(saved), 1) == "⌃⌥U" && runItem().flatMap { MenuShortcut($0) }?.displayText == "⌃⌥U",
+            "V8 a saved Run command takes a shortcut of its own, on its menu item")
+        try composition.runner.persist([])
+        _ = spinUntil("V8 the Run Commands menu was rebuilt without the command") { !listed().isEmpty }
+        try choosePane("shortcuts", in: window)
+        check(
+            try settings.ignoredShortcutBindings.isEmpty && settings.value.shortcuts.count == 2
+                && !listed().contains(saved) && text(try row("Tools › Run Commands › Manage Commands…"), 1) == "⌃⌥M",
+            "V8 deleting that Run command leaves its shortcut dormant: nothing is reported and nothing else changes")
+        try select("Tools › Run Commands › Manage Commands…")
+        try press("u", [.control, .option], code: 32)
+        check(
+            settings.value.shortcuts.count == 1 && settings.value.shortcuts.values.first == "ctrl+opt+u",
+            "V8 the dormant key is free, and taking it drops the dormant entry")
+        try button("default").performClick(nil)
+        check(settings.value.shortcuts.isEmpty, "V8 fixture: defaults again")
+
+        // Two commands the menu bar itself puts on one key are both marked.
+        let previous = NSApp.mainMenu
+        defer { NSApp.mainMenu = previous }
+        let small = NSMenu()
+        let fixture = NSMenu(title: "Fixture")
+        small.addItem(title: "Fixture", action: nil).submenu = fixture
+        fixture.addItem(title: "First", action: #selector(NSText.selectAll(_:)), keyEquivalent: "j", representedObject: "one")
+        fixture.addItem(title: "Second", action: #selector(NSText.selectAll(_:)), keyEquivalent: "j", representedObject: "two")
+        NSApp.mainMenu = small
+        settings.showSettings(nil)
+        try choosePane("files", in: window)
+        try choosePane("shortcuts", in: window)
+        check(
+            try text(try row("Fixture › First"), 2) == "Default · Same key as “Fixture › Second”"
+                && text(try row("Fixture › Second"), 2) == "Default · Same key as “Fixture › First”",
+            "V8 commands on the same key are marked in words: \(text(try row("Fixture › First"), 2))")
     }
     static func maintenanceSheetChecks(root: URL) throws {
         let url = root.appendingPathComponent("maintenance-settings.json")
@@ -865,6 +1232,10 @@ extension DesignSettingsChecks {
                 menu.items.first { $0.action == NSSelectorFromString(selector) }, "DG AX native menu route \(selector)")
             _ = NSApp.sendAction(item.action!, to: item.target, from: item)
         }
+        // The panes and the Shortcuts pane are driven here, in this process, and not in
+        // document-checks: every window shown from a check executable keeps an AppKit animation
+        // worker, and that long process has few left (see docs/BUILDING.md).
+        try settingsPaneChecks(root: isolated.url)
         let settings = SettingsController(url: isolated.url.appendingPathComponent("Settings.json"))
         settings.showSettings(nil)
         // Each pane is checked while it is the one shown; a hidden pane is not in the tree.
@@ -890,17 +1261,10 @@ extension DesignSettingsChecks {
             focus: true)
         try choosePane("shortcuts", in: settingsForm.window)
         _ = try checkInputs(
-            "TextTank.Settings", [("Command shortcut to assign", "AXPopUpButton"), ("Shortcut key", "AXTextField")],
-            focus: true)
-        let shortcut = try field("settings.shortcut.key", settingsForm.window)
-        let commands = try requireValue(
-            descendants(settingsForm.window.contentView!).compactMap { $0 as? NSPopUpButton }.first {
-                $0.identifier?.rawValue == "settings.shortcut.command"
-            }, "DG AX shortcut choices")
-        commands.selectItem(at: min(1, commands.numberOfItems - 1))
-        _ = NSApp.sendAction(commands.action!, to: commands.target, from: commands)
-        inputName(shortcut, "Shortcut key", role: "AXTextField", in: settingsForm, focus: true)
+            "TextTank.Settings",
+            [("Search commands by name, menu or shortcut", "AXTextField"), ("Commands and their shortcuts", "AXTable")])
         settingsForm.close()
+        try shortcutPaneChecks(composition: composition)
 
         let document = DocumentFactory.makeUntitled()
         defer { document.close() }

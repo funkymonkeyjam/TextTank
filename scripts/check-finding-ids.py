@@ -22,6 +22,9 @@ def other_label(token, path, line, start):
         return line[max(0, start - 3):start] == "\\u{" and line[start + len(token):].startswith("}")
     if token in {"G2", "G3", "G4"}:
         return path == "Tests/TabGroupNativeChecks.swift" and ('"T3 ' in line)
+    if token in {"F5", "F9"} and path == "Tests/SettingsShortcutValidationChecks.swift":
+        # Function keys, as a shortcut is stored, shown and said.
+        return "MenuShortcut(f5" in line or "MenuShortcut(f9" in line
     if token == "F9":
         return ((path == "Sources/Documents/EditorCommandCatalog.swift" and "// F9" in line)
                 or (path == "Tests/MacroChecks.swift" and ('"F9 starts recording' in line or '"Shift-F9 runs' in line)))

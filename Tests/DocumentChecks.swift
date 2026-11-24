@@ -264,8 +264,10 @@ import NativeSearch
                 }
                 check(try Data(contentsOf: editURL) == duplicateFont, "ambiguous font keys remain intact")
                 // F199: a settings file that failed to load is never overwritten without explicit confirmation.
+                // Version 2 became a known settings version with shortcuts for any command; 3 is the
+                // next one this build does not know.
                 var futureSettings = configured
-                futureSettings.version = 2
+                futureSettings.version = 3
                 let futureJSON = String(decoding: try JSONEncoder().encode(futureSettings), as: UTF8.self)
                 for (label, contents) in [
                     ("future version", futureJSON), ("malformed JSON", "{not json")

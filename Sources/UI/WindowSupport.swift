@@ -13,12 +13,11 @@ extension MenuShortcut {
         if modifiers.contains(.shift) { flags.insert(.shift) }
         return flags
     }
-    /// Settings v1 stores editable Command equivalents as single printable ASCII characters.
-    var settingsKey: String? {
-        modifiers == [.command] ? key : nil
-    }
 }
 
+/// A menu item whose shortcut is a default that gives way: when the person assigns the same
+/// key to another command in Settings, this item gives it up without a question, and takes it
+/// back when that assignment goes. `ShortcutCatalog.apply` is what sets the key.
 final class DefaultShortcutItem: NSMenuItem {
     let shortcut: MenuShortcut
     init(_ title: String, action: Selector?, shortcut: MenuShortcut) {
@@ -27,15 +26,6 @@ final class DefaultShortcutItem: NSMenuItem {
         keyEquivalentModifierMask = shortcut.appKitModifiers
     }
     required init(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    func applyEditorOverrides(_ settings: EditorSettings) {
-        if let id = representedObject as? String, let custom = settings.shortcuts[id] {
-            keyEquivalent = custom
-            keyEquivalentModifierMask = .command
-        } else {
-            keyEquivalent = shortcut.settingsKey.map(settings.shortcuts.values.contains) == true ? "" : shortcut.key
-            keyEquivalentModifierMask = shortcut.appKitModifiers
-        }
-    }
 }
 extension NSMenu {
     /// Adds one item without hiding its dispatch, shortcut or validation metadata in positional

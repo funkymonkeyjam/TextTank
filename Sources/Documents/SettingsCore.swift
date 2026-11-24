@@ -5,8 +5,10 @@ package enum ExternalChangePolicy: String, Codable, Sendable, CaseIterable {
     case ask, reloadIfUnmodified, ignore
 }
 
-/// Persisted format, version 1; see "Persisted formats" in docs/architecture.md. A new field
+/// Persisted format, version 1 or 2; see "Persisted formats" in docs/architecture.md. A new field
 /// must be Optional or decoded with decodeIfPresent in an extension, or old files stop loading.
+/// Version 2 differs only in what `shortcuts` may hold (`ShortcutCore.swift`), and a file is
+/// written as version 2 only while it holds such an entry.
 package struct EditorSettings: Codable, Equatable {
     package init(
         version: Int = 1, tabWidth: Int = 4, useTabs: Bool = true, wrap: Bool = false, appearance: String = "system",
@@ -70,7 +72,10 @@ package struct EditorSettings: Codable, Equatable {
     package var toggledPreviewMode: DocumentViewMode {
         lastRenderedPreviewMode == DocumentViewMode.preview.rawValue ? .preview : .both
     }
-    // Key equivalents use AppKit's uppercase convention for Shift.
+    /// A command identifier to its shortcut. Version 1: one of the twelve editor commands to one
+    /// printable character, meaning Command, with AppKit's uppercase convention for Shift.
+    /// Version 2 also allows any command of the menu bar, text such as `ctrl+opt+k` (see
+    /// `MenuShortcut.init(storedText:)`), and an empty value for a default that was taken away.
     package var shortcuts: [String: String]
     static package let commands = EditorCommand.shortcutIdentifiers
     static package let reserved: Set<String> = [
@@ -78,12 +83,14 @@ package struct EditorSettings: Codable, Equatable {
         "-", ",", "h", "l"
     ]
     /// Empty/default removes an override; the version-1 wire vocabulary never stores an empty key.
+    /// `assignShortcut` is the route for the commands and keys version 1 cannot hold.
     mutating package func setShortcut(_ key: String, for id: String) {
         if key.isEmpty || key == EditorCommand.defaultShortcuts[id] {
             shortcuts.removeValue(forKey: id)
         } else {
             shortcuts[id] = key
         }
+        if (1...2).contains(version) { version = requiredVersion }
     }
     package func shortcut(for id: String) -> String { shortcuts[id] ?? EditorCommand.defaultShortcuts[id] ?? "" }
     static package func validShortcutKey(_ key: String) -> Bool {
@@ -92,36 +99,12 @@ package struct EditorSettings: Codable, Equatable {
     // System Find selection and window cycling are protected even before a main menu exists.
     static package let protectedShortcuts = reserved.union(["e", "`"])
     package func validate(reservedKeys: Set<String> = Self.protectedShortcuts) throws {
-        guard version == 1, (1...32).contains(tabWidth), ["system", "light", "dark"].contains(appearance) else {
-            throw SettingsError.invalid
-        }
-        if let fontName {
-            guard !fontName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, fontName.utf8.count <= 200,
-                fontName.rangeOfCharacter(from: .controlCharacters) == nil
-            else { throw SettingsError.invalidFont }
-        }
-        guard basePointSize.isFinite, (6...72).contains(basePointSize), (-10...60).contains(initialZoom)
-        else { throw SettingsError.invalidFont }
-        if let failure = shortcutValidationFailure(reservedKeys: reservedKeys) { throw failure.error }
+        try validate(context: ShortcutContext(reservedKeys: reservedKeys))
     }
     /// The same deterministic validation supplies identity to editors and errors to strict saves.
     /// An implicit default cannot be edited in isolation; identify its conflicting explicit override.
     package func shortcutValidationFailure(reservedKeys: Set<String>) -> ShortcutValidationFailure? {
-        var effective = EditorCommand.defaultShortcuts
-        effective.merge(shortcuts) { _, new in new }
-        var owners: [String: String] = [:]
-        for id in effective.keys.sorted() {
-            let key = effective[id] ?? ""
-            guard Self.commands.contains(id) else { return .init(command: id, error: .unknownShortcut) }
-            guard Self.validShortcutKey(key) else { return .init(command: id, error: .invalidShortcut) }
-            guard !reservedKeys.contains(key) else { return .init(command: id, error: .conflict) }
-            if let owner = owners[key] {
-                let command = shortcuts[id] == nil ? owner : id
-                return .init(command: command, error: .duplicateShortcut(first: owner, second: id, key: key))
-            }
-            owners[key] = id
-        }
-        return nil
+        shortcutValidationFailure(context: ShortcutContext(reservedKeys: reservedKeys))
     }
     /// Strict decode remains available to validation/import callers; tolerant startup is explicit.
     static package func decode(_ data: Data) throws -> Self {
@@ -133,83 +116,47 @@ package struct EditorSettings: Codable, Equatable {
     static package func load(_ data: Data, reservedKeys: Set<String>) throws -> (
         settings: Self, issues: [ShortcutLoadIssue]
     ) {
-        try PersistedFormat.check(data, context: "Editor settings")
-        return try JSONDecoder().decode(Self.self, from: data).toleratingShortcuts(reservedKeys: reservedKeys)
+        try load(data, context: ShortcutContext(reservedKeys: reservedKeys))
     }
     package func toleratingShortcuts(reservedKeys: Set<String>) throws -> (settings: Self, issues: [ShortcutLoadIssue])
     {
-        var result = self
-        result.shortcuts = [:]
-        // Core schema/values are never repaired, guessed or made lenient.
-        try result.validate(reservedKeys: reservedKeys)
-        var issues: [String: ShortcutLoadIssue] = [:]
-        for id in shortcuts.keys.sorted() {
-            guard let key = shortcuts[id] else { continue }
-            let reason: ShortcutLoadIssue.Reason?
-            if !Self.commands.contains(id) {
-                reason = .unavailable
-            } else if !Self.validShortcutKey(key) {
-                reason = .invalid
-            } else if reservedKeys.contains(key) {
-                reason = .reserved
-            } else {
-                reason = nil
-            }
-            if let reason {
-                issues[id] = .init(command: id, key: key, reason: reason)
-            } else {
-                result.shortcuts[id] = key
-            }
-        }
-        // Removing a conflicting override can restore a default key. Re-evaluate until stable;
-        // there are only twelve assignable commands, and every iteration removes an override.
-        while true {
-            var effective = EditorCommand.defaultShortcuts
-            effective.merge(result.shortcuts) { _, new in new }
-            let groups = Dictionary(grouping: effective.keys, by: { effective[$0] ?? "" })
-            var removed = false
-            for key in groups.keys.sorted() {
-                let ids = (groups[key] ?? []).sorted()
-                guard ids.count > 1 else { continue }
-                let winner = ids.first { result.shortcuts[$0] == nil } ?? ids[0]
-                for id in ids where id != winner {
-                    if result.shortcuts.removeValue(forKey: id) != nil {
-                        issues[id] = .init(command: id, key: key, reason: .duplicate(winner))
-                        removed = true
-                    }
-                }
-            }
-            if !removed { break }
-        }
-        try result.validate(reservedKeys: reservedKeys)
-        return (result, issues.values.sorted { $0.command < $1.command })
+        try toleratingShortcuts(context: ShortcutContext(reservedKeys: reservedKeys))
     }
 }
 package struct ShortcutLoadIssue: Equatable {
-    package init(command: String, key: String, reason: Reason) {
+    package init(
+        command: String, key: String, reason: Reason, title: String? = nil, ownerTitle: String? = nil,
+        detail: String? = nil
+    ) {
         self.command = command
         self.key = key
         self.reason = reason
+        self.title = title
+        self.ownerTitle = ownerTitle
+        self.detail = detail
     }
 
     package enum Reason: Equatable { case unavailable, invalid, reserved, duplicate(String) }
     package let command: String, key: String, reason: Reason
+    /// Where the menu bar lists the command and the one it conflicts with, when that is known.
+    package let title: String?, ownerTitle: String?
+    /// Why the key cannot be used, in whole sentences, when the reason is the key itself.
+    package let detail: String?
     package var message: String {
-        let title = EditorCommand(rawValue: command)?.title ?? "Unavailable command"
+        let title = title ?? EditorCommand(rawValue: command)?.title ?? "Unavailable command"
+        let kept = "Other settings remain in use. The settings file has not been changed."
         switch reason {
         case .unavailable:
-            return
-                "A saved shortcut for a command that is no longer available was ignored. Other settings remain in use. The settings file has not been changed."
+            return "A saved shortcut for a command that is no longer available was ignored. " + kept
         case .invalid:
-            return
-                "The saved shortcut for “\(title)” is not one supported printable character and was ignored. Other settings remain in use. The settings file has not been changed."
+            if let detail { return "The saved shortcut for “\(title)” was ignored. \(detail) " + kept }
+            return "The saved shortcut for “\(title)” is not a shortcut TextTank can use and was ignored. " + kept
         case .reserved:
-            return
-                "The saved shortcut for “\(title)” is reserved for another action and was ignored. Other settings remain in use. The settings file has not been changed."
+            if let detail { return "The saved shortcut for “\(title)” was ignored. \(detail) " + kept }
+            return "The saved shortcut for “\(title)” is reserved for another action and was ignored. " + kept
         case .duplicate(let owner):
-            let ownerTitle = EditorCommand(rawValue: owner)?.title ?? "another command"
-            return
-                "The saved shortcut for “\(title)” conflicts with “\(ownerTitle)” and was ignored. Other settings remain in use. The settings file has not been changed."
+            let ownerTitle = ownerTitle ?? EditorCommand(rawValue: owner)?.title ?? "another command"
+            return "The saved shortcut for “\(title)” conflicts with “\(ownerTitle)” and was ignored. " + kept
         }
     }
 }
@@ -217,8 +164,14 @@ package enum SettingsError: Error, LocalizedError, Equatable {
     case invalid, invalidFont, conflict, unreadable, tabWidth, unknownShortcut, invalidShortcut, changedOnDisk,
         ambiguousViewPreference
     case duplicateShortcut(first: String, second: String, key: String)
+    /// Two commands on one key. `first` and `second` are the commands as the menu bar lists
+    /// them and `shortcut` is the key in words.
+    case shortcutClash(first: String, second: String, shortcut: String)
     package var errorDescription: String? {
         switch self {
+        case .shortcutClash(let first, let second, let shortcut):
+            return
+                "\(shortcut) is assigned to both “\(first)” and “\(second)”. Choose a different shortcut. The settings were not changed."
         case .ambiguousViewPreference:
             return
                 "The saved preference is ambiguous. Check Settings.json for duplicate preference keys, then try again."
@@ -230,7 +183,9 @@ package enum SettingsError: Error, LocalizedError, Equatable {
             return
                 "That shortcut is reserved for another action. Choose a different key. The settings were not changed."
         case .unknownShortcut: return "This command cannot be assigned a shortcut. The settings were not changed."
-        case .invalidShortcut: return "A shortcut must be one printable ASCII character. The settings were not changed."
+        case .invalidShortcut:
+            return
+                "That is not a shortcut TextTank can use. Record it again with Command or Control and a key. The settings were not changed."
         case .duplicateShortcut(let first, let second, let key):
             let firstTitle = EditorCommand(rawValue: first)?.title ?? "another command"
             let secondTitle = EditorCommand(rawValue: second)?.title ?? "another command"
@@ -242,46 +197,31 @@ package enum SettingsError: Error, LocalizedError, Equatable {
 }
 
 package struct ShortcutValidationFailure: LocalizedError {
-    package init(command: String, error: SettingsError) {
+    package init(command: String, error: SettingsError, title: String? = nil, detail: String? = nil) {
         self.command = command
         self.error = error
+        self.title = title
+        self.detail = detail
     }
 
     package let command: String
     package let error: SettingsError
+    /// The command as the menu bar lists it, and why its key was refused, when known.
+    package let title: String?, detail: String?
     package var errorDescription: String? {
-        let title = EditorCommand(rawValue: command)?.title ?? "Unavailable command"
+        let title = title ?? EditorCommand(rawValue: command)?.title ?? "Unavailable command"
         switch error {
         case .invalidShortcut:
-            return "The shortcut for “\(title)” must be one printable ASCII character. The settings were not changed."
+            return "The shortcut for “\(title)” cannot be used. "
+                + (detail ?? "Record it again with Command or Control and a key.") + " The settings were not changed."
         case .conflict:
-            return
-                "The shortcut for “\(title)” is reserved for another action. Choose a different key. The settings were not changed."
+            return "The shortcut for “\(title)” is reserved for another action. "
+                + (detail ?? "Choose a different key.") + " The settings were not changed."
         default: return error.localizedDescription
         }
     }
 }
 
-/// A working copy keeps edits made for earlier popup rows; selection is never inferred from a title.
-package struct SettingsShortcutDraft {
-    private(set) package var settings: EditorSettings
-    private(set) package var selected: String
-    package init(_ settings: EditorSettings) {
-        self.settings = settings
-        selected =
-            EditorCommand.allCases.filter(\.isShortcutAssignable).sorted { $0.title < $1.title }.first?.rawValue ?? ""
-    }
-    mutating package func select(_ id: String, committing key: String) -> String {
-        settings.setShortcut(key, for: selected)
-        selected = id
-        return settings.shortcut(for: id)
-    }
-    mutating package func commit(_ key: String) { settings.setShortcut(key, for: selected) }
-    mutating package func clear() -> String {
-        settings.setShortcut("", for: selected)
-        return settings.shortcut(for: selected)
-    }
-}
 package enum EditorViewPreference: String {
     case autoIndent, autoPair, braceHighlight, currentLineHighlight, indentGuides
     fileprivate func enabled(in settings: EditorSettings) -> Bool {
@@ -449,10 +389,17 @@ final package class SettingsStore {
     package var shortcutLoadNotice: String? {
         ignoredShortcutBindings.isEmpty ? nil : ignoredShortcutBindings.map(\.message).joined(separator: "\n\n")
     }
+    /// The commands of the menu bar, once the caller knows them. While this is set it replaces
+    /// the version-1 `reservedKeys` every call still names, so each of them checks shortcuts
+    /// against the same commands.
+    package var shortcutContext: ShortcutContext?
+    private func context(_ reservedKeys: Set<String>) -> ShortcutContext {
+        shortcutContext ?? ShortcutContext(reservedKeys: reservedKeys)
+    }
     package func reconcileShortcuts(reservedKeys: Set<String>) {
         guard loadError == nil else { return }
         do {
-            let loaded = try value.toleratingShortcuts(reservedKeys: reservedKeys)
+            let loaded = try value.toleratingShortcuts(context: context(reservedKeys))
             value = loaded.settings
             ignoredShortcutBindings += loaded.issues
         } catch { loadError = error }
@@ -463,13 +410,17 @@ final package class SettingsStore {
         set { loadState.error = newValue }
     }
     package let url: URL
-    package init(url: URL? = nil, reservedKeys: Set<String> = EditorSettings.protectedShortcuts) {
+    package init(
+        url: URL? = nil, reservedKeys: Set<String> = EditorSettings.protectedShortcuts,
+        context: ShortcutContext? = nil
+    ) {
+        shortcutContext = context
         self.url = url ?? AppStorage.url(.settings)
         loadState = StoreLoadState(url: self.url, displayName: "Editor settings")
         do {
             let data = try WorkspaceStore.readRegularFile(self.url, maximumBytes: SizePolicy.standard.editorSettings)
             diskBytes = data
-            let loaded = try EditorSettings.load(data, reservedKeys: reservedKeys)
+            let loaded = try EditorSettings.load(data, context: context ?? ShortcutContext(reservedKeys: reservedKeys))
             value = loaded.settings
             ignoredShortcutBindings = loaded.issues
         } catch  where error.isFileNotFound {} catch {
@@ -541,7 +492,7 @@ final package class SettingsStore {
         let source = try currentBytes()
         let data = try source ?? JSONEncoder().encode(EditorSettings())
         func validated(_ bytes: Data) throws -> EditorSettings {
-            let loaded = try EditorSettings.load(bytes, reservedKeys: reservedKeys)
+            let loaded = try EditorSettings.load(bytes, context: context(reservedKeys))
             guard loaded.issues.isEmpty else { throw SettingsError.unreadable }
             return loaded.settings
         }
@@ -580,7 +531,12 @@ final package class SettingsStore {
         _ settings: EditorSettings, replacingUnreadable: Bool = false, requiringCurrent: Bool = false,
         reservedKeys: Set<String> = EditorSettings.protectedShortcuts
     ) throws -> URL? {
-        try settings.validate(reservedKeys: reservedKeys)
+        // The file says version 2 only while a shortcut needs it, so a file an older TextTank
+        // could read stays one it can read.
+        var settings = settings
+        if (1...2).contains(settings.version) { settings.version = settings.requiredVersion }
+        let context = context(reservedKeys)
+        try settings.validate(context: context)
         if loadError != nil && !replacingUnreadable { throw SettingsError.unreadable }
         try PrivateFileStore.prepareDirectory(url.deletingLastPathComponent())
         let ordinary = loadError == nil && ignoredShortcutBindings.isEmpty
@@ -590,10 +546,10 @@ final package class SettingsStore {
         if ordinary && requiringCurrent && source != diskBytes { throw SettingsError.changedOnDisk }
         let data: Data
         if let source {
-            let prior = try EditorSettings.load(source, reservedKeys: reservedKeys)
+            let prior = try EditorSettings.load(source, context: context)
             guard prior.issues.isEmpty else { throw SettingsError.unreadable }
             data = try SettingsJSON.updating(prior.settings, to: settings, in: source)
-            let loaded = try EditorSettings.load(data, reservedKeys: reservedKeys)
+            let loaded = try EditorSettings.load(data, context: context)
             guard loaded.settings == settings && loaded.issues.isEmpty else { throw SettingsError.invalid }
         } else {
             data = try JSONEncoder().encode(settings)

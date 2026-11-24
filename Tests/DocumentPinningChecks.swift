@@ -988,7 +988,9 @@ extension DocumentChecks {
             let present = Set(try FileManager.default.contentsOfDirectory(atPath: folder.path))
             check(
                 present == [
-                    "Settings.json", "SearchOptions.json", "FolderSearchSettings.json", "WorkspaceBrowser.json",
+                    // Settings-v2.json is decoded value by value in SettingsShortcutValidationChecks.versionStep.
+                    "Settings.json", "Settings-v2.json", "SearchOptions.json", "FolderSearchSettings.json",
+                    "WorkspaceBrowser.json",
                     "RunLibrary.json", "Session.texttanksession", "SessionLayout.texttanksession",
                     "RecoverySnapshot.json", "ReminderBatch.json",
                     "MacroLibrary.json", "Automations.json", "Automations-before-flags.json", "LanguageCatalog.json",

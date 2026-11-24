@@ -174,7 +174,9 @@ import EditorBridge
                 let (scope, destination) = Self.scope(item, menu: route.first ?? "", selector: selector)
                 entries.append(
                     Entry(
-                        row: .init(id: id, title: pathLabel, detail: scope, enabled: enabled),
+                        row: .init(
+                            id: id, title: pathLabel, detail: scope, enabled: enabled,
+                            shortcut: ShortcutCatalog.displayText(for: item)),
                         item: item, target: target, externalNotice: destination,
                         legacyPath: Self.legacyPath(for: route)))
             }

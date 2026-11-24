@@ -19,12 +19,7 @@ import AppKit
     static func shortcut(for action: Selector, in menu: NSMenu?) -> String? {
         guard let menu else { return nil }
         for item in menu.items {
-            if item.action == action, !item.keyEquivalent.isEmpty {
-                let modifiers = item.keyEquivalentModifierMask
-                return (modifiers.contains(.control) ? "⌃" : "") + (modifiers.contains(.option) ? "⌥" : "")
-                    + (modifiers.contains(.shift) ? "⇧" : "") + (modifiers.contains(.command) ? "⌘" : "")
-                    + item.keyEquivalent.uppercased()
-            }
+            if item.action == action, let shortcut = MenuShortcut(item) { return shortcut.displayText }
             if let found = shortcut(for: action, in: item.submenu) { return found }
         }
         return nil

@@ -47,17 +47,5 @@ import AppKit
         }
         if let menu = NSApp.mainMenu { applyShortcuts(value, to: menu) }
     }
-    static func applyShortcuts(_ value: EditorSettings, to menu: NSMenu) {
-        @MainActor func update(_ menu: NSMenu) {
-            for item in menu.items {
-                if let fallback = item as? DefaultShortcutItem {
-                    if fallback.shortcut != .saveAll { fallback.applyEditorOverrides(value) }
-                } else if let id = item.representedObject as? String, EditorSettings.commands.contains(id) {
-                    item.keyEquivalent = value.shortcuts[id] ?? EditorCommand.defaultShortcuts[id] ?? ""
-                }
-                if let child = item.submenu { update(child) }
-            }
-        }
-        update(menu)
-    }
+    static func applyShortcuts(_ value: EditorSettings, to menu: NSMenu) { ShortcutCatalog.apply(value, to: menu) }
 }

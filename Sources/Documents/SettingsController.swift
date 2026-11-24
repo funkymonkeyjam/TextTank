@@ -5,59 +5,6 @@ import NativeSearch
 import AppKit
 import os
 
-@MainActor private final class SettingsShortcutEditor: NSObject {
-    var draft: SettingsShortcutDraft
-    let popup = NSPopUpButton()
-    let key = NSTextField(string: "")
-    init(_ settings: EditorSettings) {
-        draft = .init(settings)
-        super.init()
-        for command in EditorCommand.allCases.filter(\.isShortcutAssignable).sorted(by: { $0.title < $1.title }) {
-            popup.addItem(withTitle: command.title)
-            popup.lastItem?.representedObject = command.rawValue
-        }
-        popup.target = self
-        popup.action = #selector(selectCommand(_:))
-        ControlPresentation.label("Command shortcut to assign", control: popup)
-        popup.identifier = NSUserInterfaceItemIdentifier("settings.shortcut.command")
-        key.stringValue = settings.shortcut(for: draft.selected)
-        key.placeholderString = "No custom shortcut"
-        ControlPresentation.label("Shortcut key", control: key)
-        key.identifier = NSUserInterfaceItemIdentifier("settings.shortcut.key")
-    }
-    @objc func selectCommand(_ sender: NSPopUpButton) {
-        guard let id = sender.selectedItem?.representedObject as? String else { return }
-        let pending = key.currentEditor()?.string ?? key.stringValue
-        sender.window?.makeFirstResponder(sender)
-        if draft.selected != id {
-            key.setAccessibilityHelp(nil)
-            key.toolTip = nil
-        }
-        key.stringValue = draft.select(id, committing: pending)
-    }
-    @objc func clearShortcut(_ sender: Any?) {
-        key.window?.makeFirstResponder(popup)
-        key.stringValue = draft.clear()
-    }
-    func revealValidation(_ failure: ShortcutValidationFailure) -> NSView? {
-        guard let item = popup.itemArray.first(where: { $0.representedObject as? String == failure.command }) else {
-            return nil
-        }
-        popup.select(item)
-        key.stringValue = draft.select(failure.command, committing: key.stringValue)
-        return key
-    }
-    func rebase(_ value: EditorSettings) {
-        let selected = draft.selected
-        draft = SettingsShortcutDraft(value)
-        key.stringValue = draft.select(selected, committing: value.shortcut(for: draft.selected))
-    }
-    func settings() -> EditorSettings {
-        draft.commit(key.stringValue)
-        return draft.settings
-    }
-}
-
 extension EditorSettings {
     @MainActor var resolvedBaseFont: NSFont {
         NSFont(name: fontName ?? "Menlo", size: basePointSize)
@@ -72,27 +19,65 @@ extension EditorSettings {
 }
 
 @MainActor final class SettingsController: NSObject, NSMenuItemValidation {
-    fileprivate var store: SettingsStore
-    var value: EditorSettings { store.value }
-    var ignoredShortcutBindings: [ShortcutLoadIssue] { store.ignoredShortcutBindings }
-    var shortcutLoadNotice: String? { store.shortcutLoadNotice }
-    var loadState: StoreLoadState { store.loadState }
-    var loadError: Error? { store.loadError }
-    var url: URL { store.url }
-    var loadFailureMessage: String? { store.loadFailureMessage }
+    private var backing: SettingsStore
+    /// The store, told which commands the menu bar has now before it checks or writes anything.
+    /// Reading a value does not need that and goes to `backing`.
+    fileprivate var store: SettingsStore {
+        backing.shortcutContext = NSApp?.mainMenu.map { ShortcutCatalog.context(in: $0) }
+        return backing
+    }
+    /// What saved shortcuts are checked against: the menu bar's commands, once it exists.
+    var shortcutContext: ShortcutContext { ShortcutCatalog.context(in: NSApp?.mainMenu) }
+    var value: EditorSettings { backing.value }
+    var ignoredShortcutBindings: [ShortcutLoadIssue] { backing.ignoredShortcutBindings }
+    var shortcutLoadNotice: String? { backing.shortcutLoadNotice }
+    var loadState: StoreLoadState { backing.loadState }
+    var loadError: Error? { backing.loadError }
+    var url: URL { backing.url }
+    var loadFailureMessage: String? { backing.loadFailureMessage }
     private let onApply: @MainActor (EditorSettings, EditorSettings?) -> Void
     fileprivate let onStatus: @MainActor (String) -> Void
     init(
         url: URL? = nil, onApply: @escaping @MainActor (EditorSettings, EditorSettings?) -> Void = { _, _ in },
         onStatus: @escaping @MainActor (String) -> Void = { _ in }
     ) {
-        store = SettingsStore(url: url, reservedKeys: Self.reservedShortcuts(in: NSApp?.mainMenu))
+        backing = SettingsStore(
+            url: url, reservedKeys: Self.reservedShortcuts(in: NSApp?.mainMenu),
+            context: NSApp?.mainMenu.map { ShortcutCatalog.context(in: $0) })
         self.onApply = onApply
         self.onStatus = onStatus
         super.init()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(menuItemAdded(_:)), name: NSMenu.didAddItemNotification, object: nil)
     }
     func reconcileShortcuts(with menu: NSMenu) {
-        store.reconcileShortcuts(reservedKeys: Self.reservedShortcuts(in: menu))
+        backing.shortcutContext = ShortcutCatalog.context(in: menu)
+        backing.reconcileShortcuts(reservedKeys: Self.reservedShortcuts(in: menu))
+    }
+    private var reapplyPending = false
+    /// A menu its owner rebuilds (Run Commands) gets new items with their default keys. The
+    /// saved shortcuts are put back on the next turn of the run loop, once for any number of
+    /// items, and only by the application's own settings.
+    @objc private func menuItemAdded(_ note: Notification) {
+        guard !reapplyPending, !value.shortcuts.isEmpty, EditorServices.current?.settings === self,
+            let bar = NSApp?.mainMenu, var menu = note.object as? NSMenu
+        else { return }
+        while let parent = menu.supermenu { menu = parent }
+        guard menu === bar else { return }
+        reapplyPending = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.reapplyPending = false
+            if let bar = NSApp?.mainMenu { ShortcutCatalog.apply(self.value, to: bar) }
+        }
+    }
+    /// The key the menu bar shows for an editor command now, for a menu that repeats the
+    /// command elsewhere (DS-20). Nil when the menu bar does not list the command.
+    func menuShortcut(for command: EditorCommand) -> (key: String, modifiers: NSEvent.ModifierFlags)? {
+        let context = shortcutContext
+        guard context.commands[command.rawValue] != nil else { return nil }
+        let shortcut = value.effectiveShortcut(for: command.rawValue, in: context)
+        return (shortcut?.key ?? "", shortcut?.appKitModifiers ?? [.command])
     }
     @discardableResult func save(
         _ settings: EditorSettings, replacingUnreadable: Bool = false, requiringCurrent: Bool = false
@@ -209,12 +194,15 @@ extension EditorSettings {
         }
         // Reopening is the recovery path after an external change, including an unreadable file.
         let previous = value
-        store = SettingsStore(url: url, reservedKeys: Self.reservedShortcuts(in: NSApp?.mainMenu))
+        backing = SettingsStore(
+            url: url, reservedKeys: Self.reservedShortcuts(in: NSApp?.mainMenu),
+            context: NSApp?.mainMenu.map { ShortcutCatalog.context(in: $0) })
         if value != previous { apply(replacing: previous) }
         let live = LiveSettingsForm(owner: self)
         liveForm = live
         live.form.onClose = { [weak self, weak live] in
             live?.releaseFontPanel()
+            live?.retireShortcuts()
             self?.liveForm = nil
         }
         live.form.show()
@@ -283,9 +271,10 @@ private final class SettingsKeyEquivalents: NSView {
     var find: (() -> Void)?
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
-        guard flags == .command, event.charactersIgnoringModifiers == "f", let find else {
-            return super.performKeyEquivalent(with: event)
-        }
+        // A key that is being recorded as a shortcut belongs to the recorder, which refuses this one.
+        guard flags == .command, event.charactersIgnoringModifiers == "f", let find,
+            (window?.firstResponder as? ShortcutRecorder)?.isRecording != true
+        else { return super.performKeyEquivalent(with: event) }
         find()
         return true
     }
@@ -338,7 +327,7 @@ private final class SettingsKeyEquivalents: NSView {
     private let previewOpenMode = NSPopUpButton()
     private let face = NSTextField(labelWithString: "")
     private let fontButton = NSButton(title: "Font…", target: nil, action: nil)
-    private let shortcuts: SettingsShortcutEditor
+    private var shortcuts: ShortcutsPane!
     private var maintenancePending = false
     private var presentingError = false
     private var displayed: EditorSettings
@@ -358,7 +347,6 @@ private final class SettingsKeyEquivalents: NSView {
     init(owner: SettingsController) {
         self.owner = owner
         displayed = owner.value
-        shortcuts = SettingsShortcutEditor(owner.value)
         super.init()
         build()
     }
@@ -514,7 +502,7 @@ private final class SettingsKeyEquivalents: NSView {
         NumericInput.configure(width)
         NumericInput.configure(size, fractional: true)
         NumericInput.configure(zoom)
-        for field in [width, size, zoom, shortcuts.key] {
+        for field in [width, size, zoom] {
             field.target = self
             field.action = #selector(commitField(_:))
             field.delegate = self
@@ -669,30 +657,19 @@ private final class SettingsKeyEquivalents: NSView {
             reset: { [unowned self] in try self.write { $0.previewOpenModes = nil } })
         // SETTINGS-ROW-EXTENSION (Previews): Sync scrolling in Both goes here, one `toggleRow`.
 
-        // Shortcuts
-        addNote("Shortcut keys use Command. An uppercase shortcut adds Shift.", to: .shortcuts)
-        addRow(
-            "settings.shortcut.command", .shortcuts, "Command shortcut to assign",
-            keywords: ["keyboard", "key", "hotkey", "key binding", "shortcuts"],
-            views: [
-                caption("Command shortcut to assign", for: shortcuts.popup, identifier: "settings.shortcut.command"),
-                shortcuts.popup
-            ],
-            differs: { !$0.shortcuts.isEmpty },
-            reset: { [unowned self] in
-                try self.write { $0.shortcuts = [:] }
-                self.displayed.shortcuts = self.owner.value.shortcuts
-                self.shortcuts.rebase(self.owner.value)
-            })
-        shortcuts.key.widthAnchor.constraint(equalToConstant: 56).isActive = true
-        let clear = NSButton(title: "Clear Custom Shortcut", target: self, action: #selector(clearShortcut(_:)))
-        clear.bezelStyle = .rounded
-        clear.identifier = .init("settings.shortcut.clear")
-        ControlPresentation.label("Clear the selected command's custom shortcut", control: clear)
-        addRow(
-            "settings.shortcut.key", .shortcuts, "Shortcut key",
-            keywords: ["keyboard", "hotkey", "key binding", "shortcuts"],
-            views: [caption("Shortcut key", for: shortcuts.key, identifier: "settings.shortcut.key"), shortcuts.key, clear])
+        // Shortcuts: one row that is the whole list. Changed from default narrows the list to
+        // the commands whose shortcut was changed, and each has Use Default there.
+        shortcuts = ShortcutsPane(
+            width: Self.contentWidth - 40, settings: { [unowned self] in self.owner.value },
+            write: { [unowned self] update in try self.write(update) },
+            confirmResetAll: { [unowned self] in self.confirmMaintenance(.resetShortcuts) },
+            layoutChanged: { [unowned self] in self.resizeToContent() })
+        let list = addRow(
+            "settings.shortcuts", .shortcuts, "Keyboard shortcuts",
+            keywords: ["shortcut", "key", "hotkey", "key binding", "key equivalent", "command"],
+            views: [shortcuts.view], differs: { !$0.shortcuts.isEmpty })
+        // The list is as wide as the pane; nothing follows it in its row.
+        list.view.setCustomSpacing(0, after: shortcuts.view)
 
         for section in sections { form.add(section.stack) }
         form.add(note("Changes apply when you finish editing a control."))
@@ -700,8 +677,6 @@ private final class SettingsKeyEquivalents: NSView {
             form.button("Repair Settings…", identifier: "settings.repair") { [weak self] in
                 self?.confirmMaintenance(.repair)
             }
-        }
-        form.button("Apply Shortcuts", identifier: "settings.shortcuts.apply") { [weak self] in self?.commitShortcuts()
         }
         form.button("Reset Defaults…", identifier: "settings.reset") { [weak self] in self?.confirmMaintenance(.reset) }
         form.button("Close", identifier: "settings.close", cancel: true) { [weak self] in self?.form.close() }
@@ -754,6 +729,8 @@ private final class SettingsKeyEquivalents: NSView {
         pane = chosen
         filter.stringValue = ""
         changedOnly.state = .off
+        // Menus that list saved items may have changed since the list was last read.
+        if chosen == .shortcuts { shortcuts.reload() }
         refreshRows()
     }
     @objc private func filterChanged(_ sender: Any?) { refreshRows() }
@@ -776,6 +753,7 @@ private final class SettingsKeyEquivalents: NSView {
                 if show { visible += 1 }
             }
             for view in section.notes { view.isHidden = filtering || section.pane != pane }
+            if section.pane == .shortcuts { shortcuts.changedOnly = onlyChanged }
             section.heading.isHidden = !filtering
             section.stack.isHidden = visible == 0
             shown += visible
@@ -876,6 +854,7 @@ private final class SettingsKeyEquivalents: NSView {
             showError(LiveError.noFile)
         }
     }
+    func retireShortcuts() { shortcuts.retire() }
     /// Preserve partial field-editor input and compare it with its own last displayed setting.
     func valuesChanged() {
         let latest = owner.value
@@ -910,13 +889,8 @@ private final class SettingsKeyEquivalents: NSView {
         displayed.externalChangePolicy = latest.externalChangePolicy
         face.stringValue =
             latest.unavailableFontNotice ?? (latest.resolvedBaseFont.displayName ?? latest.resolvedBaseFont.fontName)
-        if shortcuts.key.currentEditor() == nil,
-            shortcuts.key.stringValue == shortcuts.draft.settings.shortcut(for: shortcuts.draft.selected),
-            shortcuts.draft.settings.shortcuts == displayed.shortcuts
-        {
-            shortcuts.rebase(latest)
-            displayed.shortcuts = latest.shortcuts
-        }
+        displayed.shortcuts = latest.shortcuts
+        shortcuts.reload()
         refreshRows()
     }
     func showViewPreferenceError(_ error: Error) { showError(error) }
@@ -949,10 +923,6 @@ private final class SettingsKeyEquivalents: NSView {
     }
     @objc private func commitField(_ field: NSTextField) {
         guard form.acceptsActions else { return }
-        if field === shortcuts.key {
-            commitShortcuts()
-            return
-        }
         do {
             try write { latest in
                 if field === width {
@@ -993,7 +963,7 @@ private final class SettingsKeyEquivalents: NSView {
             let field = notification.object as? NSTextField, field !== filter,
             notification.userInfo?["NSTextMovement"] as? Int != NSTextMovement.cancel.rawValue
         else { return }
-        if field === shortcuts.key { commitShortcuts(reveal: false) } else { commitField(field) }
+        commitField(field)
     }
     func controlTextDidChange(_ notification: Notification) {
         if notification.object as? NSTextField === filter { refreshRows() }
@@ -1097,35 +1067,7 @@ private final class SettingsKeyEquivalents: NSView {
             showError(error, field: sender)
         }
     }
-    @objc private func clearShortcut(_ sender: Any?) {
-        shortcuts.clearShortcut(sender)
-        commitShortcuts(reveal: false)
-    }
-    private func commitShortcuts(reveal: Bool = true) {
-        let candidate = shortcuts.settings(), initial = displayed.shortcuts
-        do {
-            try write { latest in
-                for command in Set(candidate.shortcuts.keys).union(initial.keys)
-                where candidate.shortcuts[command] != initial[command] {
-                    guard
-                        latest.shortcuts[command] == initial[command]
-                            || latest.shortcuts[command] == candidate.shortcuts[command]
-                    else { throw LiveError.changed }
-                    latest.shortcuts[command] = candidate.shortcuts[command]
-                }
-                if let failure = latest.shortcutValidationFailure(
-                    reservedKeys: SettingsController.reservedShortcuts(in: NSApp.mainMenu))
-                {
-                    throw failure
-                }
-            }
-            displayed.shortcuts = owner.value.shortcuts
-            shortcuts.rebase(owner.value)
-        } catch let failure as ShortcutValidationFailure {
-            showError(failure, field: reveal ? shortcuts.revealValidation(failure) : nil)
-        } catch { showError(error, field: shortcuts.key) }
-    }
-    private enum Maintenance { case repair, reset }
+    private enum Maintenance { case repair, reset, resetShortcuts }
     private func confirmMaintenance(_ action: Maintenance) {
         guard form.acceptsActions, !maintenancePending, form.window.attachedSheet == nil else { return }
         let prior = owner.value
@@ -1152,6 +1094,14 @@ private final class SettingsKeyEquivalents: NSView {
             alert.informativeText =
                 "This resets font, zoom, indentation, view preferences, how documents with a preview open, launch behavior, appearance and assigned shortcuts."
             title = "Reset Defaults"
+        case .resetShortcuts:
+            let count = prior.shortcuts.count
+            alert.messageText = "Reset all shortcuts to their defaults?"
+            alert.informativeText =
+                count == 1
+                ? "This removes the 1 shortcut you changed. Other settings stay as they are. Undo does not bring it back."
+                : "This removes the \(Strings.number(count)) shortcuts you changed. Other settings stay as they are. Undo does not bring them back."
+            title = "Reset Shortcuts"
         }
         alert.addButton(withTitle: "Cancel", role: .cancel)
         alert.addButton(withTitle: title).hasDestructiveAction = true
@@ -1172,6 +1122,13 @@ private final class SettingsKeyEquivalents: NSView {
                     }
                 case .reset:
                     try self.write { $0 = EditorSettings() }
+                case .resetShortcuts:
+                    try self.write {
+                        $0.shortcuts = [:]
+                        $0.version = $0.requiredVersion
+                    }
+                    self.shortcuts.didResetAll()
+                    return
                 }
                 guard self.form.acceptsActions else { return }
                 self.form.close()

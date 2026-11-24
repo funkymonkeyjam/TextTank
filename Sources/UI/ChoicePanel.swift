@@ -10,6 +10,8 @@ import AppKit
         let id: String, title: String
         var detail: String = ""
         var enabled = true
+        /// The command's key as the menu bar shows it, drawn at the trailing edge. Empty for none.
+        var shortcut: String = ""
     }
     let form: FormPanel
     let filter = NSTextField(string: "")
@@ -114,7 +116,7 @@ import AppKit
         label.identifier = NSUserInterfaceItemIdentifier(value.id)
         label.setAccessibilityLabel(value.title)
         label.toolTip = value.title
-        guard !value.detail.isEmpty else { return label }
+        guard !value.detail.isEmpty else { return withShortcut(label, value) }
         if !value.enabled { label.textColor = .disabledControlTextColor }
         let detail = NSTextField(labelWithString: value.detail)
         detail.font = .preferredFont(forTextStyle: .caption1)
@@ -124,6 +126,21 @@ import AppKit
         pair.alignment = .leading
         pair.spacing = 1
         pair.toolTip = value.detail
-        return pair
+        return withShortcut(pair, value)
+    }
+    /// Puts the row's shortcut, when it has one, at the trailing edge in the menu bar's form.
+    private func withShortcut(_ view: NSView, _ value: Row) -> NSView {
+        guard !value.shortcut.isEmpty else { return view }
+        let key = NSTextField(labelWithString: value.shortcut)
+        key.textColor = .secondaryLabelColor
+        key.identifier = NSUserInterfaceItemIdentifier(value.id + ".shortcut")
+        key.setContentHuggingPriority(.required, for: .horizontal)
+        key.setContentCompressionResistancePriority(.required, for: .horizontal)
+        let space = NSView()
+        space.setContentHuggingPriority(.init(1), for: .horizontal)
+        let row = NSStackView(views: [view, space, key])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        return row
     }
 }
