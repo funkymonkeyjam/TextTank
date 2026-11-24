@@ -210,7 +210,13 @@ extension EditorWindowController {
             documentURL: { [weak self] in
                 guard let url = (self?.document as? TextDocument)?.fileURL, url.isFileURL else { return nil }
                 return url
-            })
+            },
+            syncEditors: { [weak self] in
+                guard let self, self.viewMode == .both else { return [] }
+                let inUse = self.activeEditor
+                return [inUse] + self.views.filter { $0 !== inUse }
+            },
+            wantsScrollSync: { EditorServices.current?.settings?.value.syncsPreviewScrolling ?? true })
         let coordinator = PreviewCoordinator(pane: pane, tab: tab)
         previewCoordinator = coordinator
         return coordinator

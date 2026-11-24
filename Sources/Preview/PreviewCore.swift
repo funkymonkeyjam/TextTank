@@ -349,3 +349,121 @@ package enum PreviewURLPolicy {
         return allowedSchemes.contains(scheme)
     }
 }
+
+/// Which source lines each top-level block of a rendered Markdown document was made from, in
+/// document order. The renderer writes exactly one element into the page's `<body>` for each
+/// entry, so entry `n` is the body's `n`th child: the page carries no marks for this, and the
+/// map never leaves the application.
+///
+/// It serves two things: scroll sync in Both (a source line to a block and back), and keeping
+/// the reader's place across a new rendering (the same block in the next map).
+package struct PreviewScrollMap: Sendable, Equatable {
+    package struct Block: Sendable, Equatable {
+        /// The zero-based source line the block starts on.
+        package var firstLine: Int
+        /// How many source lines the block is made from, at least one. Blank lines after it
+        /// belong to no block.
+        package var lineCount: Int
+        /// A hash of the block's source lines. Two blocks with the same text have the same
+        /// value, in this map and in the map of a later rendering.
+        package var fingerprint: UInt64
+
+        package init(firstLine: Int, lineCount: Int, fingerprint: UInt64) {
+            self.firstLine = firstLine
+            self.lineCount = max(1, lineCount)
+            self.fingerprint = fingerprint
+        }
+    }
+
+    /// A place in the rendered document: a block, and how far through it from 0 (its top) to
+    /// 1 (the top of the block after it).
+    package struct Position: Sendable, Equatable {
+        package var block: Int
+        package var fraction: Double
+        package init(block: Int, fraction: Double) {
+            self.block = block
+            self.fraction = fraction
+        }
+    }
+
+    package private(set) var blocks: [Block]
+    package var count: Int { blocks.count }
+
+    package init(blocks: [Block] = []) { self.blocks = blocks }
+
+    /// How many blocks after the one in question are compared to decide where it went.
+    package static let matchWindow = 8
+
+    /// The place that shows zero-based source `line` at the top. A line before the first block
+    /// is the top of the first block; a blank line after a block is that block's end. Nil for
+    /// an empty map. Costs a binary search.
+    package func position(forLine line: Int) -> Position? {
+        guard !blocks.isEmpty else { return nil }
+        var low = 0
+        var high = blocks.count - 1
+        while low < high {
+            let middle = (low + high + 1) / 2
+            if blocks[middle].firstLine <= line { low = middle } else { high = middle - 1 }
+        }
+        let block = blocks[low]
+        let fraction = Double(line - block.firstLine) / Double(block.lineCount)
+        return Position(block: low, fraction: min(1, max(0, fraction)))
+    }
+
+    /// The zero-based source line for a place, always one of the block's own lines. Nil when
+    /// the map has no such block or the fraction is not a number from 0 to 1.
+    package func line(for position: Position) -> Int? {
+        guard blocks.indices.contains(position.block), position.fraction.isFinite,
+            (0...1).contains(position.fraction)
+        else { return nil }
+        let block = blocks[position.block]
+        // The margin keeps a fraction made from a line (`position(forLine:)`) on that line:
+        // k / n * n can come out a hair under k.
+        let offset = Int((position.fraction * Double(block.lineCount) + 1e-9).rounded(.down))
+        return block.firstLine + min(block.lineCount - 1, max(0, offset))
+    }
+
+    /// The block of `newer` that is block `block` of this map after an edit, or nil when either
+    /// map has no such block.
+    ///
+    /// An edit below the block leaves its number alone; an edit above it moves it by the change
+    /// in the number of blocks. Those are the two candidates. The block's own text decides
+    /// between them, and when that does not (the block itself was edited, or its text repeats)
+    /// the `matchWindow` blocks after it do. The cost does not depend on the document's size.
+    package func counterpart(of block: Int, in newer: PreviewScrollMap) -> Int? {
+        guard blocks.indices.contains(block), !newer.blocks.isEmpty else { return nil }
+        let moved = block + newer.count - count
+        func matches(_ candidate: Int, offset: Int) -> Bool {
+            let old = block + offset
+            let new = candidate + offset
+            return old < count && newer.blocks.indices.contains(new)
+                && blocks[old].fingerprint == newer.blocks[new].fingerprint
+        }
+        var chosen = block
+        if moved != block {
+            let staysPut = matches(block, offset: 0)
+            let wasMoved = matches(moved, offset: 0)
+            if staysPut != wasMoved {
+                chosen = wasMoved ? moved : block
+            } else {
+                let following = 1..<Self.matchWindow
+                let unmovedScore = following.filter { matches(block, offset: $0) }.count
+                let movedScore = following.filter { matches(moved, offset: $0) }.count
+                if movedScore > unmovedScore { chosen = moved }
+            }
+        }
+        return min(newer.count - 1, max(0, chosen))
+    }
+
+    /// FNV-1a over the bytes of each line, with a line feed after every line.
+    static func fingerprint(of lines: ArraySlice<ArraySlice<UInt8>>) -> UInt64 {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for line in lines {
+            for byte in line {
+                hash = (hash ^ UInt64(byte)) &* 0x0000_0100_0000_01b3
+            }
+            hash = (hash ^ 0x0A) &* 0x0000_0100_0000_01b3
+        }
+        return hash
+    }
+}

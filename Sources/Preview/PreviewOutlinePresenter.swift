@@ -158,6 +158,30 @@ private struct JSONNodeMatcher {
         }
     }
 
+    // MARK: Following the source
+
+    /// The zero-based source line the value in row `row` starts on.
+    func sourceLine(ofRow row: Int) -> Int? {
+        guard let tree, row >= 0, row < outlineView.numberOfRows,
+            let item = outlineView.item(atRow: row) as? JSONOutlineItem
+        else { return nil }
+        return tree.nodes[item.node].line - 1
+    }
+
+    /// The last row that is showing whose value starts on or before zero-based source `line`.
+    /// Rows are in document order whichever of them are open, so this is a binary search over
+    /// the rows that exist; a value inside a closed row is found as that row.
+    func row(forSourceLine line: Int) -> Int? {
+        var low = 0
+        var high = outlineView.numberOfRows - 1
+        guard high >= 0 else { return nil }
+        while low < high {
+            let middle = (low + high + 1) / 2
+            if (sourceLine(ofRow: middle) ?? Int.max) <= line { low = middle } else { high = middle - 1 }
+        }
+        return low
+    }
+
     // MARK: Open rows
 
     func outlineViewItemDidExpand(_ notification: Notification) {
