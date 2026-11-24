@@ -19,14 +19,15 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     let findCount = AnnouncingLabel(labelWithString: "")
     private var findPreview: InlineFindPreview?
     let replaceField = NSTextField()
-    let caseBox = NSButton(checkboxWithTitle: "Match case", target: nil, action: nil)
-    let wordBox = NSButton(checkboxWithTitle: "Whole word", target: nil, action: nil)
-    let regexBox = NSButton(checkboxWithTitle: "Regex", target: nil, action: nil)
+    /// Match case, Whole word and Regex: the shared options the Find and Replace window shows.
+    let findOptions = FindOptionsControl()
+    /// Shows or hides the Replace row of the find bar.
+    let replaceDisclosure = NSButton(title: "", target: nil, action: nil)
     let findNavigation = NSSegmentedControl(
         labels: ["Previous", "Next"], trackingMode: .momentary, target: nil, action: nil)
     let replaceMatchButton = NSButton(title: "Replace", target: nil, action: nil)
     let replaceAllButton = NSButton(title: "Replace All", target: nil, action: nil)
-    private(set) var findBar: NSView?
+    private(set) var findBar: EditorFindBar?
     /// DS-35, one Find: what this bar last sent to or took from the shared Find text. A field
     /// that no longer matches was changed here and is shared; otherwise the shared text is shown.
     private var sharedQuerySeen = "", sharedReplacementSeen = ""
@@ -260,22 +261,22 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         replaceAllButton.setAccessibilityLabel("Replace all matches in current document")
         let doneButton = NSButton(title: "Done", target: self, action: #selector(hideFind(_:)))
         doneButton.setAccessibilityLabel("Close Find in document")
-        caseBox.setAccessibilityLabel("Match case in document search")
-        wordBox.setAccessibilityLabel("Match whole words in document")
-        regexBox.setAccessibilityLabel("Use regular expressions in document")
         let more = NSButton(title: "More…", target: self, action: #selector(showMoreFindOptions(_:)))
         more.setAccessibilityLabel("Open Find and Replace with these options")
         let search = EditorFindBar(
-            find: findField, replace: replaceField, navigation: findNavigation,
-            count: findCount, flags: [caseBox, wordBox, regexBox],
+            disclosure: replaceDisclosure, find: findField, replace: replaceField, navigation: findNavigation,
+            count: findCount, options: findOptions,
             replaceActions: [replaceMatchButton, replaceAllButton], more: more, done: doneButton)
+        search.onDisclose = { [weak self] shown in
+            // The person's own choice is what the next Find opens with, in every tab.
+            EditorFindBar.rememberedShowsReplace = shown
+            self?.setReplaceRow(shown: shown)
+        }
         // Return in the field finds the next match, Shift-Return the previous one, Escape closes.
         findField.delegate = self
         replaceField.delegate = self
-        for option in [caseBox, wordBox, regexBox] {
-            option.target = self
-            option.action = #selector(inlineFindOptionsChanged(_:))
-        }
+        findOptions.target = self
+        findOptions.action = #selector(inlineFindOptionsChanged(_:))
         findField.target = self
         findField.action = #selector(findFieldAction(_:))
         findField.sendsWholeSearchString = true
@@ -964,6 +965,24 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         findBar.isHidden = !visible
         splitBelowFindBar?.isActive = visible
     }
+    /// A bar that appears or grows takes its height from the editor. The line at the top of each
+    /// view of the text is the same line afterwards.
+    private func keepingScroll(_ change: () -> Void) {
+        let tops = views.map { ($0, $0.firstVisibleDocumentLine, $0.firstVisibleSubline) }
+        change()
+        guard !statusClosed else { return }
+        presentationRoot.layoutSubtreeIfNeeded()
+        for (view, line, subline) in tops
+        where view.firstVisibleDocumentLine != line || view.firstVisibleSubline != subline {
+            view.scrollTo(documentLine: line, subline: subline)
+        }
+    }
+    /// The Replace row of the find bar. The bar's height follows and the text does not scroll.
+    func setReplaceRow(shown: Bool) {
+        guard let findBar, findBar.showsReplace != shown else { return }
+        if findBarVisible { keepingScroll { findBar.setShowsReplace(shown) } } else { findBar.setShowsReplace(shown) }
+    }
+    var replaceRowShown: Bool { findBar?.showsReplace == true }
     /// The text other apps and the Find and Replace hostWindow last searched for.
     static var findPasteboardText: String {
         get { RuntimeEnvironment.current.readFindText() }
@@ -1074,6 +1093,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             sharedReplacementSeen = entry
             EditorServices.current?.searchController?.setSharedReplacement(entry, from: self)
             cancelInlineSearch()
+            // A replacement chosen from the Find field's history is shown, not put in a hidden field.
+            setReplaceRow(shown: true)
         } else {
             findField.stringValue = entry
             sharedQuerySeen = entry
@@ -1133,9 +1154,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     private func syncFindFlags() {
         guard let search = EditorServices.current?.searchController else { return }
         let flags = search.sharedOptions(query: "", replacement: "")
-        caseBox.state = flags.matchCase ? .on : .off
-        wordBox.state = flags.wholeWord ? .on : .off
-        regexBox.state = flags.mode == .regularExpression ? .on : .off
+        findOptions.show(matchCase: flags.matchCase, wholeWord: flags.wholeWord, mode: flags.mode)
     }
     func acceptSharedFindFlags() {
         guard findBarVisible || inlineSearchPending else { return }
@@ -1186,7 +1205,11 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 self.updateInlineFindValidation()
             })
     }
-    @objc func showFind(_ sender: Any?) {
+    /// Find… (Command-F): one row, unless the Replace row was left open or a replacement is in use.
+    @objc func showFind(_ sender: Any?) { showFindBar(replacing: false) }
+    /// The find bar with its Replace row open.
+    @objc func showFindWithReplace(_ sender: Any?) { showFindBar(replacing: true) }
+    private func showFindBar(replacing: Bool) {
         guard (document as? TextDocument)?.isOpen == true else { return }
         revealSource()
         host.activate(self, focus: false)
@@ -1199,6 +1222,10 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         findPreview = InlineFindPreview(activeEditor)
         reconcileSharedFindText()
         importFindPasteboardIfEmpty()
+        // The person's own choice with the disclosure control lasts for the session. Until there
+        // is one, the row is shown only for a replacement that is in use.
+        setReplaceRow(
+            shown: replacing || (EditorFindBar.rememberedShowsReplace ?? !replaceField.stringValue.isEmpty))
         hostWindow?.makeFirstResponder(findField)
         findField.selectText(nil)
         updateInlineFindValidation()
@@ -1272,13 +1299,22 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             }
         }
     }
+    /// A segment was clicked. Each option that now differs from the shared one is set there, and
+    /// the control then shows the shared options again (with the mode, for the Regex segment).
     @objc private func inlineFindOptionsChanged(_ sender: Any?) {
-        guard let button = sender as? NSButton else { return }
-        let enabled = button.state == .on
-        guard focusPresentationChrome(), let search = EditorServices.current?.searchController else { return }
-        let flag: SearchController.InlineFlag =
-            button === regexBox ? .regex : (button === wordBox ? .wholeWord : .matchCase)
-        search.setInlineFlag(flag, enabled: enabled)
+        guard focusPresentationChrome(), let search = EditorServices.current?.searchController else {
+            syncFindFlags()
+            return
+        }
+        let shared = search.sharedOptions(query: "", replacement: "")
+        let changes: [(FindOptionsControl.Option, SearchController.InlineFlag, Bool)] = [
+            (.matchCase, .matchCase, shared.matchCase), (.wholeWord, .wholeWord, shared.wholeWord),
+            (.regex, .regex, shared.mode == .regularExpression)
+        ]
+        for (option, flag, current) in changes where findOptions.isOn(option) != current {
+            search.setInlineFlag(flag, enabled: !current)
+        }
+        syncFindFlags()
     }
     @objc private func navigateFromBar(_ sender: NSSegmentedControl) {
         guard sender.selectedSegment >= 0 else { return }

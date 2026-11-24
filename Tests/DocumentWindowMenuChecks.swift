@@ -1881,18 +1881,18 @@ extension DocumentChecks {
             // Passive typing may select a result. Escape restores the exact opening direction.
             let priorQuery = controller.findField.stringValue
             controller.showFind(nil)
-            let previousWord = controller.wordBox.state
-            controller.wordBox.performClick(nil)
-            check(sessionDelegate.searchController.wordButton.state == controller.wordBox.state
-                    && controller.wordBox.state != previousWord,
+            let previousWord = controller.findOptions.isOn(.wholeWord)
+            controller.findOptions.toggle(.wholeWord)
+            check((sessionDelegate.searchController.wordButton.state == .on) == controller.findOptions.isOn(.wholeWord)
+                    && controller.findOptions.isOn(.wholeWord) != previousWord,
                   "a whole-word change uses the same option in the bar and Find window")
-            controller.wordBox.performClick(nil)
+            controller.findOptions.toggle(.wholeWord)
             let priorMode = sessionDelegate.searchController.mode.indexOfSelectedItem
-            if controller.regexBox.state != .on { controller.regexBox.performClick(nil) }
+            if !controller.findOptions.isOn(.regex) { controller.findOptions.toggle(.regex) }
             controller.findField.stringValue = "["
             controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: controller.findField))
             spinUntil("inline regex error") { !controller.findCount.stringValue.isEmpty }
-            check(controller.regexBox.state == .on && controller.findCount.stringValue != "No matches"
+            check(controller.findOptions.isOn(.regex) && controller.findCount.stringValue != "No matches"
                     && !controller.findCount.stringValue.contains(" of ") && NSApp.modalWindow == nil,
                   "a malformed bar regex reports its error in the Find bar")
             // DS-45: the field is marked and the whole message is shown, not a clipped count label.
@@ -2092,6 +2092,7 @@ extension DocumentChecks {
             let allController = try requireValue(allDocument.presentation, "fixture: current-document Replace All")
             _ = allDocument.editor.loadDocumentText("x x x")
             allController.showFind(nil)
+            allController.setReplaceRow(shown: true)
             allController.findField.stringValue = "x"
             allController.replaceField.stringValue = "yy"
             allController.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: allController.findField))
