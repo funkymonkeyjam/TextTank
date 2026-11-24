@@ -228,7 +228,8 @@ extension AppDelegate {
     }
 
     /// How the document is shown. The first section is left for the Source, Preview and Both
-    /// choices; the items here stay within DS-23 with those three added.
+    /// choices and Toggle Preview; with those four the menu lists twenty items, the DS-23 limit,
+    /// so the next addition belongs in a submenu.
     private func viewMenu() -> NSMenu {
         let view = NSMenu(title: "View")
         DocumentViewCommands.addItems(to: view)

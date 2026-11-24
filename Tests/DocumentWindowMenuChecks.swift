@@ -291,6 +291,22 @@ extension DocumentChecks {
                     && detail("View › Guides and Highlights › Highlight Current Line")
                         == "Reads active view • Changes display or view settings",
                 "DS-20 a palette row describes what its command works on, wherever the menu bar lists it")
+            // Toggle Preview is an ordinary menu item, so the palette lists and validates it
+            // exactly as it does Source, Preview and Both.
+            let toggleRow = try requireValue(
+                entries.first { $0.row.title == "View › Toggle Preview" }, "palette row for View › Toggle Preview")
+            let previewRow = try requireValue(
+                entries.first { $0.row.title == "View › Preview" }, "palette row for View › Preview")
+            let previewable = sessionDelegate.currentDocumentController?.previewKind != nil
+            check(
+                found("toggle preview") == ["View › Toggle Preview"]
+                    && toggleRow.row.detail == "Reads active view • Changes display or view settings"
+                    && toggleRow.row.detail == previewRow.row.detail,
+                "DS-20 the palette finds Toggle Preview and describes it as it does the three mode commands")
+            check(
+                toggleRow.row.enabled == previewRow.row.enabled && toggleRow.row.enabled == previewable
+                    && (previewable || !palette.perform(toggleRow, in: bar)),
+                "DS-21 Toggle Preview is enabled in the palette exactly when Preview is (\(previewable))")
             let aliased = try requireValue(
                 entries.first { $0.row.id == CommandDiscovery.rows(entries, matching: "view auto-indent").first?.id },
                 "fixture: Auto-Indent on Return found by its former View menu")

@@ -743,6 +743,9 @@ import UniformTypeIdentifiers
         let adapter = EditorWindowController(document: self)
         addWindowController(adapter)
         adapter.host.register(adapter, document: self)
+        // A document read from a file opens in the mode Settings gives its format. A reopened
+        // session restores each tab's own mode instead, and an untitled document stays in Source.
+        if fileURL != nil, !PreviewOpenDefault.isSuspended { adapter.applyOpenDefault() }
         externalFile.setApplicationActive(NSApp.isActive)
         NotificationCenter.default.post(name: .textTankDocumentsDidChange, object: self)
     }

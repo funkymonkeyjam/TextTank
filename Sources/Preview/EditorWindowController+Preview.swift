@@ -45,14 +45,37 @@ extension EditorWindowController {
 
     /// View > Source, Preview, Both. The item's represented object is the mode's raw value.
     @objc func setDocumentViewMode(_ sender: NSMenuItem) {
-        guard !CompareCommandScope.blocksWorkspace, let raw = sender.representedObject as? String,
-            let mode = DocumentViewMode(rawValue: raw)
+        guard let raw = sender.representedObject as? String, let mode = DocumentViewMode(rawValue: raw)
         else { return }
+        chooseViewMode(mode)
+    }
+
+    /// The one path for a mode the person chose for this tab: the View menu, the tab's context
+    /// menu, the mark on the tab and Toggle Preview all come here (DS-20). Choosing the mode that
+    /// is showing moves the keyboard instead. A rendered mode is remembered for Toggle Preview.
+    /// `movingFocus` is false for a tab that is not the active one, which must not take the
+    /// keyboard. Returns false, with nothing changed, when the mode cannot be shown.
+    @discardableResult func chooseViewMode(_ mode: DocumentViewMode, movingFocus: Bool = true) -> Bool {
+        guard !CompareCommandScope.blocksWorkspace else { return false }
         if mode == viewMode {
-            moveFocusWithinCurrentMode()
-        } else {
-            setViewMode(mode)
+            if movingFocus { moveFocusWithinCurrentMode() }
+            return true
         }
+        guard setViewMode(mode, movingFocus: movingFocus) else { return false }
+        if mode != .source { EditorServices.current?.settings?.noteRenderedMode(mode) }
+        return true
+    }
+
+    /// View > Toggle Preview. From Source it shows the rendered mode the person used last
+    /// (Both until they have chosen one); from Preview or Both it returns to Source.
+    @objc func toggleDocumentPreview(_ sender: Any?) {
+        guard previewKind != nil else { return }
+        chooseViewMode(viewMode == .source ? Self.toggledPreviewMode : .source)
+    }
+
+    /// Preview or Both, whichever the person chose last; Both without a settings store.
+    static var toggledPreviewMode: DocumentViewMode {
+        EditorServices.current?.settings?.toggledPreviewMode ?? .both
     }
 
     /// Checkmark on the mode that is showing (DS-22); all three are disabled for a document that
@@ -61,6 +84,22 @@ extension EditorWindowController {
         let mode = (item.representedObject as? String).flatMap(DocumentViewMode.init(rawValue:))
         item.state = mode == viewMode ? .on : .off
         return previewKind != nil
+    }
+
+    /// Toggle Preview is disabled for a document that has no preview (DS-21). It carries no
+    /// checkmark of its own: the three items above it show which mode is on (DS-22).
+    func validateToggleDocumentPreview(_ item: NSMenuItem) -> Bool { previewKind != nil }
+
+    /// Shows what Settings says a document of this format opens in. Called once, when a document
+    /// read from a file gets its first tab; never for a tab restored from a session, an untitled
+    /// document, or a tab that is already open (see "Opening in Preview or Both" in
+    /// docs/preview-model.md). The keyboard is not moved here: the tab is activated afterwards
+    /// and takes it then.
+    func applyOpenDefault() {
+        guard viewMode == .source, let kind = previewKind,
+            let mode = EditorServices.current?.settings?.value.previewOpenMode(for: kind.format), mode != .source
+        else { return }
+        setViewMode(mode, movingFocus: false)
     }
 
     /// Choosing the mode that is already showing moves the keyboard instead: in Both it goes
@@ -88,8 +127,10 @@ extension EditorWindowController {
 
         let focusWasInPreview = previewHasFocus
         let focusWasInTab = (hostWindow?.firstResponder as? NSView)?.isDescendant(of: presentationRoot) == true
-        // The find bar acts on the source, which Preview hides.
-        if mode == .preview, findBarVisible { hideFind(nil) }
+        // The find bar acts on the source, which Preview hides. Closing it returns the keyboard
+        // to the editor only when this tab holds the keyboard and the change may move it: a tab
+        // changed from its own menu or mark while another is in use must not take the keyboard.
+        if mode == .preview, findBarVisible { closeFindBar(returningKeyboard: movingFocus && focusWasInTab) }
 
         viewMode = mode
         if mode == .source {
@@ -113,6 +154,8 @@ extension EditorWindowController {
             }
             hostWindow?.makeFirstResponder(target)
         }
+        // The tab carries a mark for Preview and Both, whichever route changed the mode.
+        host.tabViewModeChanged()
         return true
     }
 
@@ -127,6 +170,8 @@ extension EditorWindowController {
     /// The document's language or location changed. A document that no longer has a preview
     /// returns to Source and says so quietly in the status line; otherwise the preview follows.
     func previewKindMayHaveChanged() {
+        // A tab in Source offers the preview on its tab only while the document has one.
+        defer { host.tabViewModeChanged() }
         guard viewMode != .source else { return }
         guard previewKind != nil else {
             setViewMode(.source)
@@ -210,5 +255,17 @@ extension EditorWindowController {
         if let fraction = tab.previewSourceFraction { viewContainer.sourceFraction = fraction }
         let wanted = tab.viewMode ?? .source
         setViewMode(wanted != .source && previewKind == nil ? .source : wanted, movingFocus: false)
+    }
+}
+
+/// While a saved session is being reopened, a document's tab keeps the mode the session
+/// recorded for it; the Settings choice for its format is not applied first.
+@MainActor enum PreviewOpenDefault {
+    private(set) static var isSuspended = false
+    static func suspended<Result>(_ body: () throws -> Result) rethrows -> Result {
+        let before = isSuspended
+        isSuspended = true
+        defer { isSuspended = before }
+        return try body()
     }
 }

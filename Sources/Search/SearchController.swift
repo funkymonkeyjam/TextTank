@@ -926,7 +926,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         {
         case .noMatch: return false
         case .select(let bytes):
-            guard editor.setSelectionAnchor(bytes.location, caret: NSMaxRange(bytes)) else {
+            guard Self.selectResult(bytes, in: editor) else {
                 throw Self.recordedSearchStopped("the match could not be selected")
             }
             return true
@@ -1010,6 +1010,13 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     /// Replaces `hits` (ascending, found in `text` at `revision`) in one bridge call under one undo
     /// action, or changes nothing and says why. The selection the command began with is kept around
     /// the text it covered.
+    /// The one place a search selects a match. A tab that shows Preview alone shows its source
+    /// first, without the keyboard moving, so the selection is never made out of sight.
+    private static func selectResult(_ bytes: NSRange, in editor: TTEditor) -> Bool {
+        guard editor.setSelectionAnchor(bytes.location, caret: NSMaxRange(bytes)) else { return false }
+        EditorLifetime.revealSource(of: editor)
+        return true
+    }
     static func replace(_ hits: [SearchHit], text: String, revision: UInt, in editor: TTEditor) -> ReplaceOutcome {
         guard EditorLifetime.isOpen(editor) else { return .closed }
         guard !editor.readOnly else { return .readOnly }
@@ -1029,6 +1036,8 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         }
         let carried = SearchSession.carriedSelection(anchor: anchor, caret: caret, edits: edits)
         _ = editor.setSelectionAnchor(carried.anchor, caret: carried.caret)
+        // The text changed: show where, as for a selected match.
+        EditorLifetime.revealSource(of: editor)
         return .applied(hits.count)
     }
     /// All open documents: the buffer of the document the person is in, for Next, Previous and
@@ -1139,7 +1148,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         guard resultBuffers.indices.contains(row.buffer), let editor = resultBuffers[row.buffer].editor,
             EditorLifetime.isOpen(editor), editor.revision == resultBuffers[row.buffer].revision,
             let range = SearchCore.byteRange(row.hit.range, in: resultBuffers[row.buffer].text),
-            editor.setSelectionAnchor(range.location, caret: NSMaxRange(range))
+            Self.selectResult(range, in: editor)
         else {
             fail("Result is stale; search again. Selection unchanged.", .staleResult, audible: audible)
             return false

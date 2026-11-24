@@ -42,6 +42,25 @@ package enum PreviewKind: Sendable, Hashable {
         if fileExtension == "json" { return .json }
         return nil
     }
+
+    /// The format this preview belongs to in Settings, where comma- and tab-separated text are
+    /// one choice.
+    package var format: PreviewFormat {
+        switch self {
+        case .markdown: return .markdown
+        case .html: return .html
+        case .delimited: return .delimited
+        case .svg: return .svg
+        case .json: return .json
+        }
+    }
+}
+
+/// The five kinds of document that have a preview, as Settings lists them. The raw values are
+/// keys of `previewOpenModes` in the version-1 settings file (docs/architecture.md, "Persisted
+/// formats"); never rename one.
+package enum PreviewFormat: String, CaseIterable, Sendable {
+    case markdown, html, delimited, svg, json
 }
 
 /// The custom URL scheme the preview web view loads everything from. The presentation layer

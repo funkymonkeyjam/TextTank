@@ -37,12 +37,26 @@ import EditorBridge
         }
         return editor.window?.isVisible == true
     }
+    /// Puts the source of `editor`'s tab on screen when the tab shows Preview alone (it then
+    /// shows Both). Every search action that moves the selection or changes the text of an
+    /// editor calls this first, so the result is never in a hidden source. The keyboard stays
+    /// where it is: Find Next from the Find window must not take it from that window.
+    static func revealSource(of editor: TTEditor) {
+        guard document(for: editor) != nil else { return }
+        binding(editor)?.presentation?.revealSource()
+    }
     static func activate(_ editor: TTEditor, focus: Bool = true) {
         guard isOpen(editor) else { return }
         if let presentation = binding(editor)?.presentation, document(for: editor) != nil {
             presentation.host.activate(presentation, focus: focus)
             presentation.hostWindow?.makeKeyAndOrderFront(nil)
-            if focus { presentation.hostWindow?.makeFirstResponder(editor) }
+            if focus {
+                // The caller is about to show a place in the source (a search result, a jump).
+                // A tab that shows Preview alone puts the source beside it first, so the caret
+                // and the keyboard are never in a hidden editor.
+                presentation.revealSource()
+                presentation.hostWindow?.makeFirstResponder(editor)
+            }
         } else {
             editor.window?.makeKeyAndOrderFront(nil)
             if focus { editor.window?.makeFirstResponder(editor) }

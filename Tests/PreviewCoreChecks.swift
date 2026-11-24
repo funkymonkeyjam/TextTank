@@ -177,6 +177,7 @@ private func seconds(_ work: () -> Void) -> Double {
         await Checks.run("PreviewCoreChecks") {
             Checks.section("preview kind") { checkKinds() }
             Checks.section("limits") { checkLimits() }
+            Checks.section("open-in settings") { try checkOpenInSettings() }
             Checks.section("Markdown fixtures") { try checkMarkdownFixtures() }
             Checks.section("Markdown constructs") { checkMarkdownConstructs() }
             Checks.section("Markdown safety") { try checkMarkdownSafety() }
@@ -194,6 +195,165 @@ private func seconds(_ work: () -> Void) -> Double {
             Checks.section("SVG") { try checkSVG() }
             Checks.summary { "PASS PreviewCoreChecks: \(Checks.count) assertions" }
         }
+    }
+
+    // MARK: Settings: what a format opens in, and the mode Toggle Preview returns to
+
+    static func checkOpenInSettings() throws {
+        let kinds: [(PreviewKind, PreviewFormat)] = [
+            (.markdown, .markdown), (.html, .html), (.delimited(","), .delimited), (.delimited("\t"), .delimited),
+            (.svg, .svg), (.json, .json)
+        ]
+        check(
+            kinds.allSatisfy { $0.0.format == $0.1 }
+                && PreviewFormat.allCases.map(\.rawValue) == ["markdown", "html", "delimited", "svg", "json"],
+            "each preview kind belongs to one of five formats, with comma and tab text as one")
+
+        let fresh = EditorSettings()
+        check(
+            PreviewFormat.allCases.allSatisfy { fresh.previewOpenMode(for: $0) == .source }
+                && fresh.toggledPreviewMode == .both && fresh.previewOpenModes == nil
+                && fresh.lastRenderedPreviewMode == nil,
+            "default settings open every format in Source and toggle to Both")
+        let freshJSON = try JSONSerialization.jsonObject(with: JSONEncoder().encode(fresh)) as? [String: Any]
+        check(
+            freshJSON?["previewOpenModes"] == nil && freshJSON?["lastRenderedPreviewMode"] == nil,
+            "default settings are written without either member, exactly as before")
+
+        // A settings file from before the members existed.
+        let older = try Data(contentsOf: TestPaths.fixtures.appendingPathComponent("persistence/Settings.json"))
+        check(
+            !String(decoding: older, as: UTF8.self).contains("preview"),
+            "fixture: the earlier settings file has no preview member")
+        let decoded = try EditorSettings.decode(older)
+        check(
+            PreviewFormat.allCases.allSatisfy { decoded.previewOpenMode(for: $0) == .source }
+                && decoded.toggledPreviewMode == .both && decoded.tabWidth == 8,
+            "an earlier settings file with no such key reads as Source for every format")
+
+        // Values this build does not know read as Source; the rest of the file still loads.
+        let garbage = Data(
+            #"{"tabWidth":4,"wrap":false,"useTabs":true,"version":1,"appearance":"system","shortcuts":{},"previewOpenModes":{"markdown":"sideways","html":"both","json":"","hologram":"preview","svg":"PREVIEW"},"lastRenderedPreviewMode":"source"}"#
+                .utf8)
+        let tolerant = try EditorSettings.decode(garbage)
+        check(
+            tolerant.previewOpenMode(for: .markdown) == .source && tolerant.previewOpenMode(for: .json) == .source
+                && tolerant.previewOpenMode(for: .svg) == .source && tolerant.previewOpenMode(for: .delimited) == .source,
+            "an unknown, empty or differently cased value reads as Source")
+        check(tolerant.previewOpenMode(for: .html) == .both, "and a known value beside it is still honoured")
+        check(
+            tolerant.toggledPreviewMode == .both,
+            "a remembered mode that is not Preview reads as Both, including a stored Source")
+
+        // The wrong JSON type is not tolerated: as for any other member, the whole file fails.
+        func settings(_ members: String) -> Data {
+            Data(
+                (#"{"tabWidth":4,"wrap":false,"useTabs":true,"version":1,"appearance":"system","shortcuts":{},"#
+                    + members + "}").utf8)
+        }
+        for (label, members) in [
+            ("a number for previewOpenModes", #""previewOpenModes":5"#),
+            ("a list for previewOpenModes", #""previewOpenModes":["preview"]"#),
+            ("an entry that is not text", #""previewOpenModes":{"markdown":3}"#),
+            ("a number for lastRenderedPreviewMode", #""lastRenderedPreviewMode":1"#)
+        ] {
+            rejects("\(label) fails the settings file, as any member of the wrong type does") {
+                _ = try EditorSettings.decode(settings(members))
+            }
+        }
+        let nulls = try EditorSettings.decode(settings(#""previewOpenModes":null,"lastRenderedPreviewMode":null"#))
+        check(
+            nulls.previewOpenModes == nil && nulls.previewOpenMode(for: .markdown) == .source
+                && nulls.toggledPreviewMode == .both, "null for either member reads as the member being absent")
+
+        var edited = EditorSettings()
+        edited.setPreviewOpenMode(.preview, for: .markdown)
+        edited.setPreviewOpenMode(.both, for: .delimited)
+        check(
+            edited.previewOpenModes == ["markdown": "preview", "delimited": "both"]
+                && edited.previewOpenMode(for: .markdown) == .preview && edited.previewOpenMode(for: .html) == .source,
+            "a choice is stored by format; the others stay Source")
+        edited.setPreviewOpenMode(.source, for: .markdown)
+        edited.setPreviewOpenMode(.source, for: .delimited)
+        check(edited.previewOpenModes == nil && edited == EditorSettings(), "choosing Source again removes the entry")
+
+        // The store: each choice is one member written atomically into the existing file.
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "PreviewOpenIn-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appendingPathComponent("Settings.json")
+        try older.write(to: url)
+        let store = SettingsStore(url: url)
+        check(store.loadError == nil && store.value.toggledPreviewMode == .both, "fixture: the earlier file loads")
+        try store.updateLastRenderedPreviewMode(.preview)
+        check(
+            store.value.toggledPreviewMode == .preview && SettingsStore(url: url).value.toggledPreviewMode == .preview,
+            "the rendered mode used last survives a settings round trip")
+        let afterMode = try Data(contentsOf: url)
+        try store.updateLastRenderedPreviewMode(.preview)
+        try store.updateLastRenderedPreviewMode(.source)
+        check(
+            try Data(contentsOf: url) == afterMode && store.value.toggledPreviewMode == .preview,
+            "remembering the same mode again, or Source, writes nothing")
+        try store.updateLastRenderedPreviewMode(.both)
+        check(SettingsStore(url: url).value.toggledPreviewMode == .both, "and Both replaces Preview")
+
+        for (format, mode) in zip(PreviewFormat.allCases, [DocumentViewMode.preview, .both, .preview, .both, .preview]) {
+            try store.updatePreviewOpenMode(for: format, from: .source, to: mode)
+        }
+        let reread = SettingsStore(url: url)
+        check(
+            reread.loadError == nil
+                && PreviewFormat.allCases.map { reread.value.previewOpenMode(for: $0) }
+                    == [.preview, .both, .preview, .both, .preview],
+            "a choice for each of the five formats survives a settings round trip")
+        check(
+            reread.value.tabWidth == 8 && reread.value.appearance == "dark"
+                && reread.value.shortcuts == ["joinLines": "J", "upper": "u"] && reread.value.version == 1,
+            "the other settings and the format version are as they were")
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        let siblings = try FileManager.default.contentsOfDirectory(atPath: folder.path)
+        check(
+            (attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600 && siblings == ["Settings.json"],
+            "the file is replaced privately and atomically: no temporary file is left beside it")
+        rejects("a choice made from a value that is no longer the saved one is refused", expecting: SettingsError.changedOnDisk) {
+            try store.updatePreviewOpenMode(for: .markdown, from: .both, to: .source)
+        }
+        try store.updatePreviewOpenMode(for: .markdown, from: .preview, to: .source)
+        check(
+            SettingsStore(url: url).value.previewOpenMode(for: .markdown) == .source
+                && SettingsStore(url: url).value.previewOpenMode(for: .html) == .both,
+            "choosing Source again changes that format alone")
+
+        // A format written by a later build is kept when another format is changed.
+        try garbage.write(to: url)
+        let later = SettingsStore(url: url)
+        try later.updatePreviewOpenMode(for: .markdown, from: .source, to: .both)
+        let kept = SettingsStore(url: url).value
+        check(
+            kept.previewOpenModes?["hologram"] == "preview" && kept.previewOpenMode(for: .markdown) == .both
+                && kept.previewOpenMode(for: .html) == .both,
+            "changing one format keeps entries this build does not recognise")
+
+        // A full save (the Settings window's other controls) keeps both members.
+        var whole = kept
+        whole.tabWidth = 3
+        try later.save(whole)
+        let saved = SettingsStore(url: url).value
+        check(
+            saved == whole && saved.previewOpenMode(for: .markdown) == .both,
+            "saving another setting leaves the preview choices in place")
+
+        // An unreadable file is never rewritten for these either.
+        let invalid = Data("{\"version\":2}".utf8)
+        try invalid.write(to: url)
+        let unreadable = SettingsStore(url: url)
+        rejects("an unreadable settings file refuses a new Open in choice") {
+            try unreadable.updatePreviewOpenMode(for: .json, from: .source, to: .both)
+        }
+        rejects("and refuses to record the rendered mode") { try unreadable.updateLastRenderedPreviewMode(.preview) }
+        check(try Data(contentsOf: url) == invalid, "its bytes are left as they were")
     }
 
     // MARK: Kind and limits

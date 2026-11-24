@@ -300,7 +300,8 @@ Every tab shows one of three modes of its document. **Source** is the editor, an
 **Preview** is the read-only preview alone. **Both** is the editor and the preview side by side
 with a divider that can be dragged. The View menu has the three commands, with a checkmark on the
 one that is showing (DS-22). They have no shortcut. They are disabled for a document that
-`PreviewKind.kind` gives no preview (DS-21). When a document stops having one, because its
+`PreviewKind.kind` gives no preview (DS-21). The other ways to change the mode are described
+under "Switching the mode" below; all of them end in the same `chooseViewMode` (DS-20). When a document stops having one, because its
 language was changed or it was saved under another extension, its tab returns to Source and the
 status line says "This kind of document has no preview. The tab shows Source again."
 
@@ -330,6 +331,103 @@ The mode is part of a tab's session record (see [tab-model](tab-model.md)). A re
 applied only to a document that still has a preview. When a whole layout is restored, the keyboard
 goes to the pane the session recorded as the one in use (the clone pane when that was it), or to
 the preview of a tab that shows Preview alone.
+
+### Switching the mode
+
+Besides the three View commands there are four routes. None of them changes what a preview may
+load or run.
+
+**Toggle Preview** (View, directly under Both; Shift-Command-V). From Source it shows the
+rendered mode the person chose last, Preview or Both, and from either of those it returns to
+Source. Until one has been chosen it shows Both. It is disabled for a document with no preview
+(DS-21) and carries no checkmark: the three items above it show the mode (DS-22). The shortcut is
+a default of the kind Save All and Actual Size have (`DefaultShortcutItem`): a shortcut the person
+assigned to the same key in Settings keeps the key, and the menu item then has none. The Command
+Palette lists the command because it is a menu item. Like the three mode commands it is a view
+change that a macro recording neither records nor is discarded by. With it View lists twenty
+items, the DS-23 limit.
+
+**The tab's context menu.** A tab whose document has a preview has a section with Source,
+Preview and Both, titled as in the View menu, with a checkmark on what that tab shows
+(identifiers `tabs.command.viewMode.source`, `.preview`, `.both`). A tab with no preview has no
+such section. For the active tab an item behaves as the View command does. For any other tab it
+changes that tab where it is: the tab is not selected, the keyboard does not move, and the change
+is announced ("notes.md now shows Preview.", DS-72); if that tab's find bar is open, Preview
+closes it without giving the keyboard to the editor it hides, and the tab strip does not scroll.
+The items are disabled while a comparison
+window is in front, while a tab operation or a sheet is in progress, and for a tab that has
+closed, as the other tab commands are.
+
+**The mark on the tab.** A tab in Preview or Both shows an eye (`eye.fill`) between its title and
+its close button; pressing it returns the tab to Source. A tab in Source whose document has a
+preview shows an outlined eye only while the pointer is over the tab; pressing it shows Both. A
+tab with no preview has no mark and its title keeps the full width. The mark is a 28 by 28 point
+button with four points between it and the title and between it and the close button
+(DS-14, DS-74); the title gives up 32 points and truncates at its tail. A press on it never
+reaches the tab's own button, so it cannot select the tab or start a reorder. A Control-click or
+secondary click on it opens the tab's menu instead. The hovered tab is worked out again when the
+tabs move under a still pointer (a tab closes, tabs are reordered) and is
+dropped when the window stops being key or TextTank stops being active. A tab narrower
+than 162 points does not show the mark that only appears under the pointer, so its title never
+has less than the 82 points a tab at the 130-point minimum width has always had; the mark of a
+tab in Preview or Both is state and is shown at every width, leaving 50 points of title at the
+minimum. The mark's label and tooltip name the document and the result ("Show source for
+notes.md", "Show preview beside source for notes.md", DS-70), and while it is shown it is one of
+the strip's accessibility children, between the tab and its close button. The tab's own label
+ends ", showing Preview" or ", showing Source and Preview", as one whole label for each
+combination with pinned and edited (DS-84). Without a pointer the same step is
+the tab's accessibility action "Show Preview Beside Source" or "Show Source", and the context
+menu (DS-73). The strip brings the mark up to date whenever a mode changes, by any route, and
+whenever a document gains or loses its preview.
+
+**The remembered mode.** `lastRenderedPreviewMode` in the settings file is `preview` or `both`.
+It is written, as one member, only when the person chooses Preview or Both by hand (the View
+commands, the tab's menu, the mark, the accessibility action) and the choice differs from the one
+stored. A mode the app sets itself is not remembered: a restored session, a format's Open in
+setting, or Find putting the source beside a preview. If the settings file cannot be written the
+choice is kept until TextTank quits and no alert is shown (DS-40).
+
+### Opening in Preview or Both
+
+Settings has one choice for each of the five formats (Markdown, HTML, CSV and TSV, SVG, JSON):
+Open in Source, Preview or Both. It is a pair of pop-ups, Preview format and Open in, as the
+shortcut rows are a pair, because five more rows would not fit a small screen. Every format
+starts at Source, so nothing changes until the person changes it. The choice is
+`previewOpenModes` in the settings file, a `PreviewFormat` raw value to a `DocumentViewMode` raw
+value, with Source recorded by leaving the format out. A file without the member, a format
+without an entry and a value this build does not know all read as Source; an entry for a format
+this build does not know is kept when another is changed. Both members are Optional additions to
+the version-1 settings format (see "Persisted formats" in [architecture](architecture.md)) and
+are written atomically like the other settings.
+
+The rule is applied once, by `TextDocument.makeWindowControllers`, when a document that has a
+file gets its first tab: File → Open, Quick Open and the Workspace Browser, a file dropped in,
+a file named on the command line or opened by URL, and Reopen Closed Tab, whose history records
+no mode. It is not applied:
+
+- to a tab reopened from the last session. `AutomaticSession.reopen` suspends the rule
+  (`PreviewOpenDefault.suspended`) and the tab's own record decides, including a record of Source;
+- to a tab that is already open when the setting changes, or that the person has switched by hand:
+  nothing looks at the setting after the tab exists;
+- to an untitled document, including a recovery copy, a restored session snapshot and the bundled
+  guides. Setting its language to a previewable one later does not switch it;
+- on Save As to a previewable extension. The tab stays as it is and gains the mark under the
+  pointer;
+- to a second view of a document opened in another editor group, which starts in Source as before.
+
+The keyboard goes to what the new tab shows when it is activated: the preview for Preview, the
+source for Both. A jump into the source of a tab that shows Preview alone puts the source beside
+it first and gives the editor the keyboard: a file opened with a line (the command line or a
+`texttank://open` address), and a Find in Folder or Find and Replace result
+(`EditorLifetime.activate`), as Find and Go to Line already did. A search action that selects a
+match or replaces text without activating the editor (Find Next, Find Previous, Replace and
+Replace All from the Find and Replace window, a recorded search) also shows the source first,
+through `EditorLifetime.revealSource(of:)`, and leaves the keyboard in the Find window.
+Bookmark Matches and Mark do not move the selection and leave the tab as it is.
+
+A value of the wrong JSON type for either member (a number, a list, an entry that is not text)
+is not tolerated: like any other member it fails the whole settings file, which is left
+unchanged behind the usual notice. Only text is read leniently.
 
 ### When the preview is rendered
 
@@ -474,4 +572,19 @@ the others are left closed.
 - A load started through the web view's own API with an `http` address is cancelled by the
   navigation rule, but WebKit opens a connection to the server before it asks. Nothing in the
   application makes such a load.
+- The mark on the tab under a real pointer: the tracking area's enter, move and exit events, a
+  physical click, and how the eye looks beside a truncated title. The checks tell the strip
+  where the pointer is and press the button through `performClick`. Pressing Shift-Command-V on
+  a keyboard is not exercised either; the checks send the menu item's action.
+- The tab menu's Source, Preview and Both while a sheet or a comparison window blocks them. They
+  share one test (`blockedReason`) with the tab commands, and a check observes it for a tab
+  operation in progress; no check opens a sheet or a comparison window for it, because a check
+  must not put a dialog on the desktop and this check process never holds the key window.
+- Shift-Command-V pressed with the keyboard in a preview. From the table, the tree and the find
+  field no view takes the key equivalent and the action's responder chain reaches the tab. The
+  web view (Markdown, HTML, SVG) answers every key equivalent itself and passes on what the
+  page does not use, as it does for Command-F; that hand-back needs a key window and was not
+  observed.
+- `NSDocumentController.openDocument` itself with a format set to Preview or Both. The check
+  process has no document types, so it performs the same three steps (read, register, show).
 - Release-build timings.

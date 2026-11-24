@@ -97,7 +97,7 @@ import TextTankCore
     }
 }
 
-/// The three View menu commands that choose what a tab shows.
+/// The View menu commands that choose what a tab shows.
 @MainActor enum DocumentViewCommands {
     static func title(_ mode: DocumentViewMode) -> String {
         switch mode {
@@ -107,14 +107,24 @@ import TextTankCore
         }
     }
 
-    /// Adds Source, Preview and Both, then a separator. The items go to the first responder; the
-    /// active tab validates them, with a checkmark on the mode it shows (DS-22).
+    static let toggleTitle = Strings.text("view.mode.toggle", "Toggle Preview")
+    /// Shift-Command-V. It is a default that gives way to a shortcut the person assigned to the
+    /// same key in Settings, as Save All and Actual Size do, so a settings file that already
+    /// uses Shift-Command-V keeps working (DS-25 is not involved: no system shortcut has this key).
+    static let toggleShortcut = MenuShortcut("V")
+
+    /// Adds Source, Preview and Both, then Toggle Preview and a separator. The items go to the
+    /// first responder; the active tab validates them, with a checkmark on the mode it shows
+    /// (DS-22) and all four disabled for a document with no preview (DS-21).
     static func addItems(to menu: NSMenu) {
         for mode in DocumentViewMode.allCases {
             menu.addItem(
                 title: title(mode), action: #selector(EditorWindowController.setDocumentViewMode(_:)),
                 representedObject: mode.rawValue)
         }
+        menu.addItem(
+            title: toggleTitle, action: #selector(EditorWindowController.toggleDocumentPreview(_:)),
+            fallback: toggleShortcut)
         menu.addItem(.separator())
     }
 }

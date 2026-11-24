@@ -365,9 +365,12 @@ final class SessionCheckCancellation: @unchecked Sendable {
                     mapping[item.id] = doc
                 } else {
                     let read = try WorkspaceStore.captureRegularFile(disk, maximumBytes: Int.max)
-                    mapping[item.id] = try DocumentFactory.openCaptured(
-                        read, from: url, expectedDiskURL: disk,
-                        as: item.encoding, display: false)
+                    // The session's own record of Source, Preview or Both is applied below.
+                    mapping[item.id] = try PreviewOpenDefault.suspended {
+                        try DocumentFactory.openCaptured(
+                            read, from: url, expectedDiskURL: disk,
+                            as: item.encoding, display: false)
+                    }
                 }
                 originals[url] = mapping[item.id]
             } catch { notices.append(url.path + " — " + error.localizedDescription) }

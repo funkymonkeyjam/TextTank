@@ -660,6 +660,13 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         refreshLayoutPicker()
         groupSurfaces.values.forEach { $0.refresh() }
     }
+    /// A tab changed between Source, Preview and Both, or its document gained or lost a preview.
+    /// Only the strips are brought up to date; their controls are reused, so focus stays put.
+    func tabViewModeChanged() {
+        guard !isMutatingGroups else { return }
+        // Without scrolling: the tab that was clicked must stay under the pointer.
+        groupSurfaces.values.forEach { $0.strip.refresh(revealingActive: false) }
+    }
     func visibilityChanged() { presentations.forEach { $0.visibilityChanged() } }
     func validateToolbar() {
         for item in window?.toolbar?.items ?? [] { item.isEnabled = validateToolbarItem(item) }

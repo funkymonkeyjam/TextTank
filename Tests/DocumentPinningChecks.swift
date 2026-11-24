@@ -1100,7 +1100,15 @@ extension DocumentChecks {
                     "target": "responder",
                 ]
             }
-            var accounted = identities(formerCommands + deliberatelyAdded)
+            // Added on 23 November 2026: View > Toggle Preview, Shift-Command-V, one command
+            // for the same per-tab mode. Nothing was removed for it.
+            let togglePreviewAdded: [[String: String]] = [
+                [
+                    "action": "toggleDocumentPreview:", "object": "", "key": "V", "modifiers": "1048576",
+                    "target": "responder",
+                ]
+            ]
+            var accounted = identities(formerCommands + deliberatelyAdded + togglePreviewAdded)
             var removedRowsInFixture = 0
             for removed in identities(deliberatelyRemoved) {
                 if let index = accounted.firstIndex(of: removed) {
