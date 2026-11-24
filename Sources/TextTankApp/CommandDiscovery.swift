@@ -381,6 +381,8 @@ struct CommandRecents: Equatable {
             case TabCommand.copyPath.rawValue: return ("Reads active file path • Writes clipboard", nil)
             default: return ("Reads workspace tabs • Changes tab order, selection or open documents", nil)
             }
+        case "moveFocusToNextArea:", "moveFocusToPreviousArea:":
+            return ("Moves the keyboard to another area of the window • Changes no document", nil)
         case "selectLanguage:": return ("Reads language profile • Changes active editor highlighting", nil)
         case "startRecording", "stopRecording": return ("Reads editor commands • Changes recording state", nil)
         case "playLast", "playSaved:", "playAgain": return ("Reads recorded commands • Changes active editor", nil)

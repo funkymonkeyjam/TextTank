@@ -455,7 +455,8 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
             refresh(nil)
         } catch { TTAlert.present(error) }
     }
-    @objc private func openRecent(_ sender: NSMenuItem) {
+    /// File > Workspace > Reopen Recent File, and a recent file's button in an empty editor group.
+    @objc func openRecent(_ sender: NSMenuItem) {
         guard !CompareCommandScope.blocksWorkspace else { return }
         guard let url = sender.representedObject as? URL else { return }
         do { _ = try openOfferingEncoding(url) } catch { present(error) }

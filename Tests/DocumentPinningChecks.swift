@@ -1139,6 +1139,13 @@ extension DocumentChecks {
                     "target": "explicit",
                 ],
             ]
+            // Added on 23 November 2026 (DS-73): Window > Move Focus > Move Focus to Next Area and
+            // Move Focus to Previous Area, F6 and Shift-F6, each listed once more as a hidden item
+            // for its second key, Option-Command-` and Shift-Option-Command-`. Nothing was removed.
+            let moveFocusAdded: [[String: String]] = [
+                ("moveFocusToNextArea:", "\u{f709}", "0"), ("moveFocusToPreviousArea:", "\u{f709}", "131072"),
+                ("moveFocusToNextArea:", "`", "1572864"), ("moveFocusToPreviousArea:", "~", "1572864"),
+            ].map { ["action": $0.0, "object": "", "key": $0.1, "modifiers": $0.2, "target": "explicit"] }
             // Merged on 23 November 2026 (DS-D13): View > Close Split View has no row of its own.
             // View > Split Tab View is the one toggle that splits and closes; `closeSplit:` is
             // still an action. This is the only command the regrouped View menu stopped listing.
@@ -1165,7 +1172,7 @@ extension DocumentChecks {
             ]
             var accounted = identities(
                 formerCommands + deliberatelyAdded + togglePreviewAdded + quickOpenWithKey + localHistoryAdded
-                    + viewRegroupAdded + chooseLanguageAdded)
+                    + viewRegroupAdded + chooseLanguageAdded + moveFocusAdded)
             var removedRowsInFixture = 0
             for removed in identities(deliberatelyRemoved + quickOpenWithoutKey + closeSplitMerged) {
                 if let index = accounted.firstIndex(of: removed) {

@@ -60,6 +60,30 @@ enum EditorToolbarCommand: String, CaseIterable {
     }
 }
 
+/// The toolbar's Editor Layout item (owner decision DS-D12): a standard menu toolbar item that
+/// lists the editor group layouts. Its menu is the one View > Editor Groups > Editor Group Layout
+/// shows, built by the same command owner, so the two never disagree (DS-20). The menu bar keeps
+/// every group command: a person may remove this item from the toolbar.
+@MainActor enum EditorLayoutToolbarItem {
+    static let identifier = NSToolbarItem.Identifier("TextTank.EditorLayout")
+    static var title: String { Strings.text("toolbar.layout", "Editor Layout") }
+    static var scope: String {
+        Strings.text(
+            "toolbar.layout.help",
+            "Choose how many editor groups the window shows: one, two columns, two rows or a grid of four.")
+    }
+    static func make(commands: GroupCommandController) -> NSMenuToolbarItem {
+        let item = NSMenuToolbarItem(itemIdentifier: identifier)
+        item.label = title
+        item.paletteLabel = title
+        item.image = NSImage(systemSymbolName: "square.split.2x2", accessibilityDescription: scope)
+        item.toolTip = scope
+        item.showsIndicator = true
+        item.menu = commands.layoutMenu()
+        return item
+    }
+}
+
 /// AppKit autosave is production-only: it writes standard defaults directly. An explicit owned
 /// defaults domain can exercise the same arrangement round trip without reading the owner's domain.
 @MainActor enum EditorToolbarPreferences {
@@ -84,6 +108,22 @@ enum EditorToolbarCommand: String, CaseIterable {
                 identifiers: toolbar.items.map { $0.itemIdentifier.rawValue },
                 displayMode: toolbar.displayMode.rawValue, visible: toolbar.isVisible)
         }
+    }
+    /// Set once the Editor Layout item has been offered in this person's toolbar.
+    static let layoutItemOfferedKey = "TextTank.ToolbarLayoutItemOffered.v1"
+    /// DS-D12 moved the layout choice from its own row into the toolbar. A toolbar arranged
+    /// before then has no such item, so it is added once, after the standard commands. It is
+    /// offered a single time: a person who then removes it keeps it removed, and View > Editor
+    /// Groups still has every layout. `defaults` is nil for an isolated host, which is left alone.
+    static func offerLayoutItemOnce(in toolbar: NSToolbar, defaults: UserDefaults?) {
+        guard let defaults, !defaults.bool(forKey: layoutItemOfferedKey) else { return }
+        defaults.set(true, forKey: layoutItemOfferedKey)
+        guard !toolbar.items.contains(where: { $0.itemIdentifier == EditorLayoutToolbarItem.identifier }) else {
+            return
+        }
+        let last = toolbar.items.lastIndex { EditorToolbarCommand(rawValue: $0.itemIdentifier.rawValue) != nil }
+        toolbar.insertItem(
+            withItemIdentifier: EditorLayoutToolbarItem.identifier, at: last.map { $0 + 1 } ?? toolbar.items.count)
     }
     static func load() -> Arrangement? {
         guard let data = isolatedDefaults?.data(forKey: key), data.count <= SizePolicy.standard.toolbarArrangement,

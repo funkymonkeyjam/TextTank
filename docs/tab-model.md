@@ -33,7 +33,7 @@ Only the mounted active tab in a visible, non-minimized host runs recurring stat
 
 ## Empty state and persistence boundary
 
-Closing the final tab keeps the host open and TextTank running, without creating an untitled document. The empty host offers New/Open in the toolbar and menu; document commands are disabled. Its red close button still invokes Quit. Stage 1 adds the context commands, bulk close and reopen history described below. Stage 2 adds pin/reorder/multiselection UI below; additional visible groups and a layout picker remain excluded.
+Closing the final tab keeps the host open and TextTank running, without creating an untitled document. The empty host offers New/Open in the toolbar and menu; document commands are disabled. A group with no tabs shows more than its sentence and its New and Open buttons: see “Empty group” below. Its red close button still invokes Quit. Stage 1 adds the context commands, bulk close and reopen history described below. Stage 2 adds pin/reorder/multiselection UI below; additional visible groups and a layout choice remain excluded from that stage.
 
 WorkspaceLayoutState requires version 1, layout, focused slot and ordered group states. Each group has its slot, active-tab index and ordered tab records containing DocumentID, pinned flag, UTF-8 anchor/caret and first visible line. Validation rejects unknown or missing version, wrong counts/order/slots, duplicate documents per group, broken pin prefix, invalid active/focused references and negative offsets. No text or bytes are stored. A tab record may also carry `viewMode` (`preview` or `both`) and `previewSourceFraction` (the source's share of the width in Both, 0 to 1). Both are optional and are left out for a tab that shows Source, so records written before the fields existed read as Source and a Source tab is written exactly as before. An unknown mode or a fraction outside 0 to 1 is rejected. A tab record may carry `zoom`, the active pane's zoom level, and its split record `otherZoom` for the other pane, each −10 through 60. Both are optional and written only for a pane zoomed away from the Editor Settings default; a pane without one is restored at that default and follows it, so earlier records and unzoomed tabs are unchanged. A level outside the range is rejected. The mode is applied on restore only if the document still has a preview (see [preview-model](preview-model.md#presentation)). All four layout shapes round-trip in codec tests. Nothing writes this value to disk, and existing session/recovery schema and golden fixture bytes stay unchanged.
 
@@ -169,11 +169,21 @@ region-clamped index and UTF-8-clamped viewport; an existing destination stays u
 Session/recovery/all-document search stay one per document; capture selection from
 focused or per-document MRU live editor. Chooser rows use TabID plus group identity.
 
-The trailing layout picker stays outside scrolling strips. Native dividers enforce
+Owner decision DS-D12 (23 November 2026): the layout is chosen from the toolbar's Editor Layout
+item, a standard menu toolbar item in the default, customisable toolbar, and from View > Editor
+Groups > Editor Group Layout, which stays when the item is removed from the toolbar. Both menus are
+built by the group command owner and show one checkmark. No row sits between the toolbar and the
+tab strips: the group container starts at the top of the editor area. The earlier trailing layout
+picker and its 36-point row are gone, and `TabGroupGeometry.minimumContent` no longer reserves them:
+the bare minimum of a two-row or grid layout is 401 points high (two 200-point panes and a divider),
+where it was 437. The window's minimum is still 800 by 500, the larger normal size. Native dividers enforce
 320 x 200 total group bounds with responsive Find/status, shared chrome counted once,
 and screen-aware content/frame fit. Unfittable layout refuses atomically with status
 and announcement. Single retains its normal minimum; no gratuitous shrink. Same layout
-preserves divider ratios; layout changes reset equal shares, with aligned Grid columns.
+preserves divider ratios; layout changes reset equal shares, with aligned Grid columns. When the
+window is resized the Grid's two rows are aligned again after both have their new width, at the first
+row's divider, held between the 320-point minimums: a position is never copied from a row already
+resized to one still at its old width (that left the columns out of line and one under 320 points).
 Visible group-active status work is bounded (no per-Clone job); hidden/retired work stops,
 while recovery/monitoring remain per document. Reference shortcuts remain unassigned
 until conflict verification. Stage 4 extends explicit session persistence below; extra
@@ -252,7 +262,7 @@ Browser, the Command Palette, Add Folder to Workspace and Monitor Current File a
 docked view. The browser's store, lists, open route and encoding offer are unchanged; only the view moved.
 
 The window's content is one root split, `WorkspaceSidebarSplit`. Its last pane is the editor area (the
-layout picker and the editor group container), which is never removed or rebuilt. The sidebar is
+editor group container), which is never removed or rebuilt. The sidebar is
 inserted before it when shown and removed when hidden, so 1, 2 or 4 groups, their dividers, Clone
 panes and each tab's Source, Preview or Both share whatever width remains, exactly as they shared the
 whole window before. The sidebar draws on the window's background: no `NSVisualEffectView`, no
@@ -369,3 +379,74 @@ The native checks for this section are `Tests/TabStripChecks.swift`, run by
 synthetic events in an owned window. Not observed: a physical pointer, middle button and tooltip
 display, VoiceOver, Full Keyboard Access, and the review sheet of an edited tab closed by the dot or
 the other mouse button (a check may not present a sheet; the route is the close button's own).
+## Keyboard areas of the window
+
+DS-73 (23 November 2026); DS-20/23/70-72/84 apply. Window > Move Focus holds two commands, Move Focus
+to Next Area and Move Focus to Previous Area. Their default keys are F6 and Shift-F6; each also
+answers Option-Command-` and Shift-Option-Command-`, for keyboards whose function keys need the Fn
+key. All four are yielding defaults (`DefaultShortcutItem`), and no menu command, editor key binding
+or reserved system shortcut uses them. The submenu keeps the Window menu at twenty items (DS-23).
+
+The areas form one ring, visited in this order and back:
+
+1. the Workspace Browser, while it is shown (its list takes the keyboard);
+2. for each editor group in its usual order: the tab strip (the active tab's title), the find bar
+   or Go to Line, whichever is shown (its field), the text, and the status row (its first item);
+3. a group with no tabs is one area: its New button.
+
+The text is each pane of a split view in turn. A tab that shows Both offers its source and then its
+preview. A tab that shows Preview alone offers only the preview: its hidden source is never given the
+keyboard, because that would change the tab to Both. With the keyboard in no area, the first move
+reaches the focused group's text.
+
+Moving the keyboard changes no selection, no scroll position and no group's active tab. The group
+that receives the keyboard becomes the focused group, as it does when it is clicked, so commands act
+where the focus ring is. Each move is announced by the area's name, with the group's name when there
+is more than one ("Tabs in Group 2, Right."), and the control that has the keyboard draws the
+standard focus ring (DS-71, DS-72).
+
+Inside an area the group surface handles the keys its controls pass up:
+
+- Tab strip: Left and Right Arrow move from tab to tab without selecting; Tab and Shift-Tab step
+  through every control, so a tab's mark and close button are reached, and after the last tab the
+  list of open tabs while the tabs overflow; Space or Return presses the control (a title selects
+  its tab and puts the keyboard in its text); the strip scrolls only to show the control that has
+  the keyboard.
+- Status row: Left and Right Arrow, or Tab and Shift-Tab, move between the items, including More,
+  an operation's Cancel and a follow-up button while they are shown. Space or Return presses a
+  button (position opens Go to Line, language opens the chooser).
+- A pull-down (a status field, More, the list of open tabs) opens with Space only.
+- Empty group: the arrow keys or Tab move between its buttons; Space or Return presses one.
+- Tab past the last control of an area, or Shift-Tab before the first, moves to the next or previous
+  area.
+- Escape returns the keyboard to the group's text. In a group with no tabs it returns to the text of
+  a group that has some. The two bars keep their own Escape on every control: the find bar closes
+  (DS-35), and Go to Line puts the caret, selection and scroll position back and closes.
+
+## Empty group
+
+DS-10/20/67/70/73/84/85/100 apply. A group with no tabs shows, from the top: one sentence, the New
+and Open… buttons, a message when a command reported one there, then a hint.
+
+The hint names up to four commands in secondary label style, one whole sentence each: New, Open,
+Quick Open and the Command Palette. Each sentence carries the key its menu item has at that moment,
+read from the menu bar, so a shortcut assigned in Settings, or a default that gave way to one, is
+what is shown; a command with no key is named by its menu instead ("Choose File > Quick Open… to
+find a file by name."). VoiceOver hears the key in words. The rows are brought up to date when the
+group becomes empty, when tabs change and when the window becomes key again.
+
+Below the hint come up to five recent files, newest first, under the heading "Recent files". Each
+is a button named for the file, with the path as its tooltip; two files with one name also show
+their folders. Activating one focuses that group and opens the file there by the Workspace Browser's
+route, the one File > Workspace > Reopen Recent File uses. The list is the one File > Open Recent
+shows. Files that no longer exist, and folders, are left out: at most twenty entries are checked,
+on a utility queue, and an answer that arrives after a newer question is dropped. A host whose
+support directory is isolated reads no list of the person's and shows none unless it supplies one.
+
+Nothing is clipped. The sentence, the buttons and a message always stay. Hint rows, then recent
+files, are added while they fit the group's height; the first that does not fit, and everything
+after it, is hidden, and so is a sentence wider than the group. A hidden row takes neither the
+keyboard nor VoiceOver. At the least group size, 320 by 200 points, the four commands fit and no
+recent file does. The buttons are keyboard stops of the group's area (see “Keyboard areas of the
+window”): the arrow keys or Tab move between them and Space or Return presses one.
+

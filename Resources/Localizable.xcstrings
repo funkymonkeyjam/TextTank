@@ -2599,6 +2599,369 @@
           }
         }
       }
+    },
+    "toolbar.layout": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Editor Layout"
+          }
+        }
+      }
+    },
+    "toolbar.layout.help": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose how many editor groups the window shows: one, two columns, two rows or a grid of four."
+          }
+        }
+      }
+    },
+    "areas.sidebar": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Workspace Browser."
+          }
+        }
+      }
+    },
+    "areas.tabs": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tabs."
+          }
+        }
+      }
+    },
+    "areas.tabs.group": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tabs in %@."
+          }
+        }
+      }
+    },
+    "areas.find": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Find bar."
+          }
+        }
+      }
+    },
+    "areas.find.group": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Find bar in %@."
+          }
+        }
+      }
+    },
+    "areas.text": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Text of %@."
+          }
+        }
+      }
+    },
+    "areas.text.group": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Text of %1$@ in %2$@."
+          }
+        }
+      }
+    },
+    "areas.preview": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preview of %@."
+          }
+        }
+      }
+    },
+    "areas.preview.group": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preview of %1$@ in %2$@."
+          }
+        }
+      }
+    },
+    "areas.status": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Document status."
+          }
+        }
+      }
+    },
+    "areas.status.group": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Document status in %@."
+          }
+        }
+      }
+    },
+    "areas.empty": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Empty editor group."
+          }
+        }
+      }
+    },
+    "areas.empty.group": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@, empty."
+          }
+        }
+      }
+    },
+    "emptyGroup.prompt": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open a document or create a new one."
+          }
+        }
+      }
+    },
+    "emptyGroup.new": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New"
+          }
+        }
+      }
+    },
+    "emptyGroup.open": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open…"
+          }
+        }
+      }
+    },
+    "emptyGroup.new.label": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New document in this group"
+          }
+        }
+      }
+    },
+    "emptyGroup.open.label": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open a document in this group"
+          }
+        }
+      }
+    },
+    "emptyGroup.hint.new": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Press %@ for a new document."
+          }
+        }
+      }
+    },
+    "emptyGroup.hint.new.menu": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose File > New for a new document."
+          }
+        }
+      }
+    },
+    "emptyGroup.hint.open": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Press %@ to open a document."
+          }
+        }
+      }
+    },
+    "emptyGroup.hint.open.menu": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose File > Open… to open a document."
+          }
+        }
+      }
+    },
+    "emptyGroup.hint.quickOpen": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Press %@ for Quick Open, to find a file by name."
+          }
+        }
+      }
+    },
+    "emptyGroup.hint.quickOpen.menu": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose File > Quick Open… to find a file by name."
+          }
+        }
+      }
+    },
+    "emptyGroup.hint.palette": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Press %@ for the Command Palette."
+          }
+        }
+      }
+    },
+    "emptyGroup.hint.palette.menu": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose Help > Command Palette… to run any command."
+          }
+        }
+      }
+    },
+    "emptyGroup.recent": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recent files"
+          }
+        }
+      }
+    },
+    "emptyGroup.recent.nameInFolder": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ — %2$@"
+          }
+        }
+      }
+    },
+    "emptyGroup.recent.open": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open recent file %@"
+          }
+        }
+      }
+    },
+    "areas.goToLine": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Go to Line."
+          }
+        }
+      }
+    },
+    "areas.goToLine.group": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Go to Line in %@."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

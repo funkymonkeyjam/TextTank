@@ -216,11 +216,10 @@ import EditorBridge
                 && abs(frame(groups).maxX - window.contentView!.bounds.maxX) < 0.5,
             "it sits at the left edge at its default width and the editor groups take the rest")
         check(
-            host.layoutPicker.nextKeyView === browser.firstKeyView
-                && sequence(first: browser.firstKeyView, next: { $0.nextKeyView }).prefix(8).contains {
-                    $0 === browser.outline
-                },
-            "the sidebar's controls are in the window's key-view order")
+            sequence(first: browser.firstKeyView, next: { $0.nextKeyView }).prefix(8).contains {
+                $0 === browser.outline
+            } && browser.lastKeyView.nextKeyView === plainTab.keyboardFocusView,
+            "the sidebar's controls are in key-view order and Tab from the last one reaches the text")
         check(
             window.contentMinSize.width == 800 + 1 + CGFloat(WorkspaceSidebarGeometry.minimumWidth)
                 && window.contentMinSize.height == 500,

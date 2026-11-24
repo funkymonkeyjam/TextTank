@@ -946,20 +946,18 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         guard EditorLifetime.isOpen(editor) else { return false }
         return goToLine(line, in: editor, macros: nil)
     }
+    // The workspace window owns the toolbar; a tab answers with the same definitions (DS-20).
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        EditorToolbarCommand.allCases.map(\.identifier) + [.flexibleSpace, .init("TextTank.Automations")]
+        host.toolbarAllowedItemIdentifiers(toolbar)
     }
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        // The tab strip keeps its close controls; New has one toolbar home.
-        toolbarAllowedItemIdentifiers(toolbar)
+        host.toolbarDefaultItemIdentifiers(toolbar)
     }
     func toolbar(
         _ toolbar: NSToolbar, itemForItemIdentifier identifier: NSToolbarItem.Identifier,
         willBeInsertedIntoToolbar: Bool
     ) -> NSToolbarItem? {
-        if let command = EditorToolbarCommand(rawValue: identifier.rawValue) { return command.makeItem() }
-        guard identifier.rawValue == "TextTank.Automations" else { return nil }
-        return EditorServices.current?.automations?.makeToolbarItem()
+        host.toolbar(toolbar, itemForItemIdentifier: identifier, willBeInsertedIntoToolbar: willBeInsertedIntoToolbar)
     }
     func validateToolbarItem(_ item: NSToolbarItem) -> Bool {
         let menu = NSMenuItem(title: item.label, action: item.action, keyEquivalent: "")

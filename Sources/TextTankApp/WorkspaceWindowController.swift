@@ -58,14 +58,14 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     private weak var sidebarBrowser: WorkspaceBrowserController?
     /// What had the keyboard when the sidebar took it by command.
     private weak var sidebarReturnResponder: NSResponder?
-    private weak var keyViewAfterSidebar: NSView?
     private var observations: [NSKeyValueObservation] = []
     private var automationObserver: NSObjectProtocol?
     private var savingArrangement = false
     private var saveScheduled = false
     lazy var tabCommands = TabCommandController(host: self)
     lazy var groupCommands = GroupCommandController(host: self)
-    let layoutPicker = NSPopUpButton(frame: .zero, pullsDown: true)
+    /// Window > Move Focus: the keyboard route between the window's areas (DS-73).
+    lazy var areaFocus = WindowAreaFocusController(host: self)
     private var removingTabs = false
     private var returnTab: TabID?
     private var returnSelection: (TabSelectionState, TabWorkspace)?
@@ -87,17 +87,11 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         sidebarSplit.autoresizingMask = [.width, .height]
         root.addSubview(sidebarSplit)
         groupContainer.translatesAutoresizingMaskIntoConstraints = false
-        layoutPicker.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(groupContainer)
-        content.addSubview(layoutPicker)
-        layoutPicker.setAccessibilityLabel("Editor group layout")
-        refreshLayoutPicker()
+        // DS-D12: nothing sits between the toolbar and the tab strips. The layout choice is the
+        // toolbar's Editor Layout item and View > Editor Groups.
         NSLayoutConstraint.activate([
-            layoutPicker.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -8),
-            layoutPicker.topAnchor.constraint(equalTo: content.topAnchor, constant: 3),
-            layoutPicker.heightAnchor.constraint(equalToConstant: 30),
-            layoutPicker.widthAnchor.constraint(equalToConstant: 160),
-            groupContainer.topAnchor.constraint(equalTo: content.topAnchor, constant: 36),
+            groupContainer.topAnchor.constraint(equalTo: content.topAnchor),
             groupContainer.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             groupContainer.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             groupContainer.bottomAnchor.constraint(equalTo: content.bottomAnchor)
@@ -113,6 +107,9 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         toolbar.autosavesConfiguration = EditorToolbarPreferences.nativeAutosaveAllowed
         window.toolbar = toolbar
         restoreToolbarArrangement()
+        EditorToolbarPreferences.offerLayoutItemOnce(
+            in: toolbar,
+            defaults: EditorToolbarPreferences.nativeAutosaveAllowed ? RuntimeEnvironment.legacyDefaults : nil)
         refreshAutomationToolbar()
         observations = [
             toolbar.observe(\.displayMode) { [weak self] _, _ in MainActor.assumeIsolated { self?.scheduleSave() } },
@@ -168,16 +165,18 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         validateToolbar()
         if focus { window?.makeFirstResponder(presentation.keyboardFocusView) }
     }
-    func focusGroup(_ slot: GroupSlot) {
+    /// `focus` is false when the caller places the keyboard itself, in the group's tab strip or
+    /// status row (Window > Move Focus): the group is focused and the keyboard is left alone.
+    func focusGroup(_ slot: GroupSlot, focus: Bool = true) {
         guard !isMutatingGroups, !tabCommands.isBusy, window?.attachedSheet == nil else { return }
         tabCommands.cancelReopen()
         endBackgroundCloseReturn()
         do { try model.focusGroup(slot, openDocuments: openIDs) } catch { return }
         if let active {
-            activate(active, preserveSelection: true)
+            activate(active, focus: focus, preserveSelection: true)
         } else {
             window?.nextResponder = NSApp
-            window?.makeFirstResponder(nil)
+            if focus { window?.makeFirstResponder(nil) }
             metadataChanged()
             validateToolbar()
         }
@@ -193,11 +192,6 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         for group in model.groups {
             if let id = group.activeTab { entries[id]?.applyRestoredSplitIfMounted() }
         }
-    }
-    private func refreshLayoutPicker() {
-        let menu = groupCommands.layoutMenu(picker: true)
-        layoutPicker.menu = menu
-        groupCommands.menuNeedsUpdate(menu)
     }
     func groupLabel(_ slot: GroupSlot) -> String {
         let position: String
@@ -306,10 +300,9 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
             isSidebarShown = true
             sidebarWasUsed = true
             applyContentMinimum(keepingOnScreen: true)
-            // The sidebar joins the key-view order after the layout picker.
-            keyViewAfterSidebar = layoutPicker.nextKeyView
-            layoutPicker.nextKeyView = browser.firstKeyView
-            browser.lastKeyView.nextKeyView = keyViewAfterSidebar ?? active?.keyboardFocusView
+            // Tab from the sidebar's last control reaches the text. Move Focus to Next Area and
+            // View > Workspace Browser are the routes into the sidebar.
+            browser.lastKeyView.nextKeyView = active?.keyboardFocusView
             window?.contentView?.layoutSubtreeIfNeeded()
             browser.sidebarDidShow()
         }
@@ -323,9 +316,6 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         guard isSidebarShown else { return }
         let hadKeyboard = sidebarHasKeyboard
         let target = keyboardTargetAfterSidebar()
-        if let browser = sidebarBrowser, layoutPicker.nextKeyView === browser.firstKeyView {
-            layoutPicker.nextKeyView = keyViewAfterSidebar
-        }
         sidebarSplit.setSidebar(nil)
         isSidebarShown = false
         applyContentMinimum()
@@ -334,6 +324,11 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         if hadKeyboard { window?.makeFirstResponder(target) }
         sidebarReturnResponder = nil
     }
+    /// The sidebar's list, which takes the keyboard when the sidebar is entered.
+    var sidebarFocusView: NSView? { isSidebarShown ? sidebarBrowser?.outline : nil }
+    /// Window > Move Focus is about to put the keyboard in the sidebar. Escape there then returns
+    /// to the text, not to a control an earlier command remembered.
+    func sidebarWillTakeKeyboardByArea() { sidebarReturnResponder = nil }
     /// Escape in the sidebar: the keyboard goes back to the text and the sidebar stays.
     func returnKeyboardFromSidebar() {
         guard sidebarHasKeyboard else { return }
@@ -705,10 +700,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         if let active {
             active.showTransientStatus(message, seconds: 8, announce: true)
         } else {
-            if let status = groupSurfaces[model.focusedGroup]?.emptyStatus {
-                status.stringValue = message
-                ControlPresentation.label(message, control: status)
-            }
+            groupSurfaces[model.focusedGroup]?.showEmptyStatus(message)
             Announce.say(message, from: window)
         }
     }
@@ -776,7 +768,6 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
             window?.representedURL = nil
             window?.isDocumentEdited = false
         }
-        refreshLayoutPicker()
         groupSurfaces.values.forEach { $0.refresh() }
     }
     /// A tab changed between Source, Preview and Both, or its document gained or lost a preview.
@@ -793,7 +784,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         EditorToolbarCommand.allCases.map { NSToolbarItem.Identifier($0.rawValue) } + [
-            .flexibleSpace, NSToolbarItem.Identifier("TextTank.Automations")
+            EditorLayoutToolbarItem.identifier, .flexibleSpace, NSToolbarItem.Identifier("TextTank.Automations")
         ]
     }
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -803,6 +794,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         _ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier, willBeInsertedIntoToolbar: Bool
     ) -> NSToolbarItem? {
         if let command = EditorToolbarCommand(rawValue: id.rawValue) { return command.makeItem() }
+        if id == EditorLayoutToolbarItem.identifier { return EditorLayoutToolbarItem.make(commands: groupCommands) }
         return id.rawValue == "TextTank.Automations" ? EditorServices.current?.automations?.makeToolbarItem() : nil
     }
     func validateToolbarItem(_ item: NSToolbarItem) -> Bool {
@@ -810,6 +802,8 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
             return true
         }
         if item.itemIdentifier.rawValue == "TextTank.Automations" { return true }
+        // The layout can be chosen with no document open; its menu items validate themselves.
+        if item.itemIdentifier == EditorLayoutToolbarItem.identifier { return groupCommands.commandsAvailable }
         guard let active else {
             if item.action == #selector(EditorWindowController.clone(_:)) {
                 item.menuFormRepresentation?.state = .off
