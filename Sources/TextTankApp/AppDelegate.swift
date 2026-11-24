@@ -132,10 +132,19 @@ import AppKit
                 document.presentations.forEach { $0.acceptSharedFindFlags() }
             }
         }
-        controller.writeFindText = { [weak self] text in
-            EditorWindowController.findPasteboardText = text
-            self?.currentDocumentController?.acceptSharedFindText(text)
+        controller.writeFindText = { text in EditorWindowController.findPasteboardText = text }
+        // DS-35, one Find: text typed in the window or in any find bar is shown by all the others.
+        controller.sharedTextChanged = { source in
+            for case let document as TextDocument in NSDocumentController.shared.documents {
+                document.presentations.forEach { if $0 !== source { $0.acceptSharedFindText() } }
+            }
         }
+        controller.historyChanged = {
+            for case let document as TextDocument in NSDocumentController.shared.documents {
+                document.presentations.forEach { $0.refreshFindHistory() }
+            }
+        }
+        controller.adoptFindPasteboard()
         controller.currentEditor = { [weak self] in self?.currentEditor }
         // One view per document, and the one the person last worked in: Find Next compares
         // these with the current editor, and a replace reads that view's selection.

@@ -69,6 +69,15 @@ final class EditorFindBar: NSView {
     }
 }
 
+/// What a live preview shows in the bar's count label: a count, or why there is none.
+struct InlineFindPublication {
+    var count = ""
+    var detail: String?
+    /// The whole document holds no match of the Find text.
+    var foundNothing = false
+    var failure: Error?
+}
+
 /// A preview owns only its temporary indicator and a selection it can still identify.
 @MainActor final class InlineFindPreview {
     weak var editor: TTEditor?
@@ -121,9 +130,18 @@ final class EditorFindBar: NSView {
         if restore { restoreSelection() }
     }
     func search(options: SearchOptions, isCurrent: @escaping @MainActor () -> Bool,
-                publish: @escaping @MainActor (String, String?) -> Void) {
+        publish: @escaping @MainActor (InlineFindPublication) -> Void
+    ) {
         cancelPending()
-        guard !options.query.isEmpty else { clearHighlights(); restoreSelection(); publish("", nil); return }
+        guard !options.query.isEmpty else {
+            clearHighlights()
+            restoreSelection()
+            publish(InlineFindPublication())
+            return
+        }
+        let controller = EditorServices.current?.searchController
+        let unitLimit = controller?.largeDocumentUnits ?? SearchCore.maximumTextUnits
+        let chunkBytes = controller?.largeChunkBytes ?? SearchCore.largeChunkBytes
         // Replace the previous paint in one publication. Clearing and repainting on separate
         // frames would ask Scintilla to lay out a long physical line twice on each keystroke.
         let flag = TTSearchCancellation()
@@ -140,16 +158,20 @@ final class EditorFindBar: NSView {
                 if self.snapshot == nil { self.snapshot = editor.checkedUTF8Data }
                 guard let data = self.snapshot else { throw SearchFailure.positionMapping }
                 let result = try await Task.detached(priority: .userInitiated) {
-                    try SearchController.preview(data, options: options, openingCaret: caret, cancellation: flag)
+                    try SearchController.preview(
+                        data, options: options, openingCaret: caret, cancellation: flag, unitLimit: unitLimit,
+                        chunkBytes: chunkBytes)
                 }.value
                 guard !flag.cancelled, isCurrent(), EditorLifetime.isOpen(editor), editor.revision == self.revision else { return }
                 let detail = self.show(result, in: editor, openingLineLength: lineLength)
-                publish(result.countText, detail)
+                publish(
+                    InlineFindPublication(
+                        count: result.countText, detail: detail, foundNothing: result.foundNothing))
             } catch {
                 guard !flag.cancelled, isCurrent() else { return }
                 self?.clearHighlights()
                 self?.restoreSelection()
-                publish(error.localizedDescription, nil)
+                publish(InlineFindPublication(count: error.localizedDescription, failure: error))
             }
         }
     }

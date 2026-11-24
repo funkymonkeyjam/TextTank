@@ -47,6 +47,29 @@ __attribute__((objc_subclassing_restricted))
     cancellation:(TTSearchCancellation *)cancellation maximumMatches:(NSInteger)maximumMatches
     overlappingLiterals:(BOOL)overlappingLiterals timeLimit:(NSTimeInterval)timeLimit error:(NSError **)error;
 + (NSString *)decodeExtended:(NSString *)text;
+/// YES when the error reports a regular expression that could not be compiled, as opposed to a
+/// search that failed for another reason. Callers mark the Find field for this one (DS-45).
++ (BOOL)isInvalidPatternError:(NSError *)error NS_SWIFT_NAME(invalidPattern(_:));
+/// The longest text, in UTF-16 units, that searchText: accepts (64 Mi).
++ (NSUInteger)maximumTextUnits;
+/// The UTF-16 length `data` has once decoded as UTF-8: one pass, no decoding and no buffer.
++ (NSUInteger)utf16LengthOfUTF8:(NSData *)data NS_SWIFT_NAME(utf16Length(ofUTF8:));
+/// Literal and extended search over a document's UTF-8 bytes, for text above maximumTextUnits.
+/// The bytes are read in windows of about `chunkBytes`; a window overlaps the next by the
+/// longest possible match, and a match belongs to the window its first byte is in, so a match
+/// that straddles two windows is reported exactly once. Working memory follows `chunkBytes`,
+/// not the document. Ranges in the result are UTF-8 BYTE ranges in `data`, not UTF-16 ranges.
+/// Matching is the same as searchText: literal comparison, Unicode case folding without
+/// `matchCase`, and whole-word tests that see the bytes around `byteRange`. `backwards` reports
+/// matches from the end of the range towards its start. A regular expression is refused.
+/// `progress` is called on the calling thread after each window with the bytes covered so far.
++ (nullable TTSearchResult *)searchUTF8:(NSData *)data range:(NSRange)byteRange
+    query:(NSString *)query replacement:(NSString *)replacement mode:(TTSearchMode)mode
+    matchCase:(BOOL)matchCase wholeWord:(BOOL)wholeWord backwards:(BOOL)backwards
+    overlapping:(BOOL)overlapping maximumMatches:(NSInteger)maximumMatches
+    chunkBytes:(NSUInteger)chunkBytes cancellation:(TTSearchCancellation *)cancellation
+    timeLimit:(NSTimeInterval)timeLimit
+    progress:(nullable void (NS_NOESCAPE ^)(NSUInteger coveredBytes))progress error:(NSError **)error;
 /// Regular expressions compiled so far in this process (not served from the cache); for checks.
 + (NSUInteger)regexCompilationCount;
 @end

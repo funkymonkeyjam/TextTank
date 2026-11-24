@@ -684,11 +684,16 @@ extension DocumentChecks {
             let finder = SearchController(defaults: defaults)
             check(
                 try JSONDecoder().decode(SearchOptions.self, from: searchBytes) == search
-                    && finder.queryField.stringValue == search.query
-                    && finder.replacementField.stringValue == search.replacement && finder.mode.indexOfSelectedItem == 2
                     && finder.caseButton.state == .on && finder.wordButton.state == .on && finder.dotButton.state == .on
                     && finder.wrapButton.state == .off,
-                "golden Find options decode and restore every Find-window control")
+                "golden Find options decode and restore every Find-window option flag")
+            // V3: the text and the Regex mode an older file would have restored are offered as
+            // history; a new launch starts in Normal mode with both fields empty.
+            check(
+                finder.queryField.stringValue.isEmpty && finder.replacementField.stringValue.isEmpty
+                    && finder.mode.indexOfSelectedItem == 0 && finder.findHistory.queries == [search.query]
+                    && finder.findHistory.replacements == [search.replacement],
+                "golden Find options start a launch in Normal mode, with their text offered as history")
 
             var folderSettings = FolderSearchSettings()
             folderSettings.folder = URL(fileURLWithPath: "/Users/Shared/TextTank Fixture/project", isDirectory: true)
