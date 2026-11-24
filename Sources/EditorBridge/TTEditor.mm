@@ -1546,7 +1546,7 @@ static constexpr int TTNamedHistoryBase = 0x54540000;
     _cachedRedoCursor = -1;
     return loaded;
 }
-- (BOOL)goToLine:(NSInteger)line {
+- (BOOL)moveCaretToLine:(NSInteger)line {
     [self assertThread];
     if (line < 1 || line > [_engine message:SCI_GETLINECOUNT]) return NO;
     [_engine message:SCI_ENSUREVISIBLE wParam:line - 1];

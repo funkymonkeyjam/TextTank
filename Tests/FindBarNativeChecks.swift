@@ -513,6 +513,18 @@ import EditorBridge
         let bar = tab.goToLineBar, field = bar.field
         window.makeFirstResponder(editor)
 
+        // Find > Go to Line… has no target: it goes to the first object after the text that takes
+        // it. The text view is ahead of the tab there, so it must not answer the same selector.
+        let menuAction = #selector(EditorWindowController.goToLine(_:))
+        var taker: NSResponder? = window.firstResponder
+        while let candidate = taker, !candidate.responds(to: menuAction) { taker = candidate.nextResponder }
+        check(taker === tab, "the Go to Line menu command sent from the text reaches the tab, not the text view")
+        check(!tab.goToLineBarVisible, "fixture: Go to Line is closed before the menu command")
+        _ = taker?.perform(menuAction, with: nil)
+        check(tab.goToLineBarVisible && field.currentEditor() != nil, "the Go to Line menu command opens the bar with the keyboard in its field")
+        tab.cancelGoToLine(nil)
+        window.makeFirstResponder(editor)
+
         // Find is open with text and a live selection; Go to Line takes its place.
         _ = editor.setSelectionAnchor(0, caret: 0)
         tab.showFind(nil)
