@@ -269,7 +269,7 @@ __attribute__((objc_subclassing_restricted))
 /// redraws. Never touches the lexer, keyword lists, properties, text, undo or the revision.
 - (void)adoptSyntaxStylesFrom:(TTEditor *)other;
 /// View scope only: adoptSyntaxStylesFrom: plus automatic indentation, live brace feedback, current-line framing, indentation guides, zoom, wrap, whitespace and line-ending
-/// visibility and margin widths. Selection and scroll position are not copied.
+/// visibility, margin widths, change bars and the centred text column. Selection and scroll position are not copied.
 - (void)adoptViewStateFrom:(TTEditor *)other;
 /// Announces that this view is leaving its window while `successor` keeps showing the same
 /// document, so holders of results that do not depend on this view's selection can retarget
@@ -320,6 +320,37 @@ __attribute__((objc_subclassing_restricted))
 @property(nonatomic) BOOL whitespaceVisible;
 @property(nonatomic) BOOL lineEndingsVisible;
 - (BOOL)setSyntaxFont:(NSInteger)index faceOverride:(nullable NSString *)name sizeOverride:(nullable NSNumber *)size;
+/// View > Show > Change Bars. A narrow margin beside the text marks the lines changed since the
+/// document was opened, with Scintilla's own change history: a wide solid bar for a change that is
+/// not saved, a narrow bar at the left for a saved one, a hollow bar in the middle for a line undone to
+/// its original text after a save. Scintilla starts recording only while the document's Undo history is empty, so
+/// turning this on for a document that already has edits shows the margin and no bars; see
+/// `changeTrackingActive`. Turning it off hides the margin and keeps recording, so the bars are
+/// complete when it is turned on again. Always off in a comparison pane. Defaults to NO.
+@property(nonatomic) BOOL changeBarsVisible;
+/// YES while this view's document records its changes. A load, reload or revert through this view
+/// starts the record again from the loaded text.
+@property(nonatomic, readonly) BOOL changeTrackingActive;
+/// Hides the bars and discards the document's change record: for a large-file document, which
+/// never records changes. Undo history is not touched.
+- (void)stopChangeTracking;
+/// The bar colours for the current appearance, as 0xBBGGRR. The engine has no query for them.
+@property(nonatomic, readonly) NSInteger unsavedChangeColour;
+@property(nonatomic, readonly) NSInteger savedChangeColour;
+/// View > Centered Text Column: the text is laid out as a centred column this many characters
+/// wide in the default style's font at the current zoom, with equal blank margins either side,
+/// recomputed whenever the text area's width, the font or the zoom changes. Zero, the default,
+/// is the ordinary layout. A text area narrower than the column, and a comparison pane, use the
+/// ordinary layout. The margins are view state: text, selection, wrapping mode and the line-number
+/// gutter are not changed, and a click in either margin acts as a click at the line's start or end.
+@property(nonatomic) NSInteger centeredColumnCharacters;
+/// The blank margins left and right of the text now, in points.
+@property(nonatomic, readonly) NSInteger textMarginLeft;
+@property(nonatomic, readonly) NSInteger textMarginRight;
+/// The width of the text area, beside the gutter, that the margins and the column share.
+@property(nonatomic, readonly) NSInteger textAreaWidth;
+/// The width of that many zeros in the default style at the current zoom: the column's measure.
+- (NSInteger)textWidthOfColumns:(NSInteger)columns NS_SWIFT_NAME(textWidth(ofColumns:));
 /// Comparison-only presentation primitives; callers use independent snapshot renderers.
 /// No method below edits text, Undo, savepoint or selections. Indicator21/22 and marker2/3/4
 /// are distinct from search20/bookmark1. Main-thread only; all batches prevalidate.

@@ -264,8 +264,10 @@ import NativeSearch
                 }
                 check(try Data(contentsOf: editURL) == duplicateFont, "ambiguous font keys remain intact")
                 // F199: a settings file that failed to load is never overwritten without explicit confirmation.
+                // Version 2 became a known settings version with shortcuts for any command; 3 is the
+                // next one this build does not know.
                 var futureSettings = configured
-                futureSettings.version = 2
+                futureSettings.version = 3
                 let futureJSON = String(decoding: try JSONEncoder().encode(futureSettings), as: UTF8.self)
                 for (label, contents) in [
                     ("future version", futureJSON), ("malformed JSON", "{not json")
@@ -1528,14 +1530,15 @@ import NativeSearch
                 }
                 let controller = visible.windowControllers[0] as! EditorWindowController
                 let hiddenController = hidden.windowControllers[0] as! EditorWindowController
-                let buttons = { descendants(controller.hostWindow!.contentView!).compactMap { $0 as? NSPopUpButton } }
+                // Every status field is a native button: a pull-down, or a plain button for the
+                // position and the language, which run one command.
+                let buttons = { descendants(controller.hostWindow!.contentView!).compactMap { $0 as? NSButton } }
                 let badges = {
-                    // DB-R3: totals, wrap and access state moved to the position menu. These
-                    // retain the original asynchronous metrics/state assertions at that surface.
+                    // DB-R3: totals, wrap and access state are the position field's statistics,
+                    // shown in its tooltip. These retain the original asynchronous metrics/state
+                    // assertions at that surface.
                     buttons().filter { $0.identifier?.rawValue.hasPrefix("status.") == true }.map(\.title)
-                        + (controller.statusOptionsMenu(.position)?.items.filter {
-                            $0.action == nil && $0.submenu == nil
-                        }.map(\.title) ?? [])
+                        + controller.statusStatistics
                 }
                 let badge = { (identifier: String) in buttons().first { $0.identifier?.rawValue == identifier }?.title }
                 try require(
@@ -1557,7 +1560,7 @@ import NativeSearch
                 }
                 check(
                     badgeMismatches.isEmpty,
-                    "the position-menu character totals and line-ending field reach the previous implementation's values with no explicit refresh \(badgeMismatches)"
+                    "the position field's character totals and the line-ending field reach the previous implementation's values with no explicit refresh \(badgeMismatches)"
                 )
                 visible.editor.text = "a\r\nb\nc\u{1F600}"
                 spinUntil("exact character count and Mixed EOL") {
@@ -1607,15 +1610,16 @@ import NativeSearch
                     "wrap, bookmark and read-only details reach the position menu with no explicit refresh \(badges())")
                 visible.editor.readOnly = false
                 controller.toggleWrap(nil)
-                let hiddenTabTitle = {
-                    descendants(controller.hostWindow!.contentView!).compactMap { $0 as? NSButton }
-                        .first { $0.toolTip == hidden.displayName }?.title
+                // The edited mark is the dot in the tab's close button, not a character in its title.
+                let hiddenTabEdited = { () -> Bool? in
+                    guard let id = hiddenController.tabID else { return nil }
+                    return controller.host.tabStrips.compactMap { $0.tabAppearance(id) }.first?.closeShowsEditedDot
                 }
-                try require(hiddenTabTitle()?.hasSuffix("•") == false, "fixture: the hidden tab starts unedited")
+                try require(hiddenTabEdited() == false, "fixture: the hidden tab starts unedited")
                 _ = hidden.editor.replaceSelection("edited while hidden")
-                spinUntil("the hidden tab's edited marker") { hiddenTabTitle()?.hasSuffix("•") == true }
+                spinUntil("the hidden tab's edited marker") { hiddenTabEdited() == true }
                 check(
-                    hiddenTabTitle()?.hasSuffix("•") == true,
+                    hiddenTabEdited() == true,
                     "editing a hidden document marks its tab in the visible window's tab strip")
                 let idleRefreshes = controller.statusRefreshCount, hiddenRefreshes = hiddenController.statusRefreshCount
                 spinUntil("idle recurring refreshes") { controller.statusRefreshCount >= idleRefreshes + 2 }

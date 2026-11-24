@@ -118,7 +118,8 @@ extension DocumentChecks {
             let window = try requireValue(FormPanel.frontWindow, "fixture: Settings modeless window")
             let views = descendants(try requireValue(window.contentView, "fixture: Settings content"))
             let field = try requireValue(
-                views.compactMap { $0 as? NSTextField }.first { $0.isEditable }, "fixture: tab width")
+                views.compactMap { $0 as? NSTextField }.first { $0.identifier?.rawValue == "settings.width" },
+                "fixture: tab width")
             window.makeFirstResponder(nil)
             field.stringValue = "7"
             var intervening = settings.value
@@ -147,10 +148,10 @@ extension DocumentChecks {
             document.editor.text = "one\ntwo"
             document.editor.setSavePoint()
             controller.goToLine(nil)
-            let form = try requireValue(FormPanel.visible.last, "fixture: owned Go to Line form")
+            try require(controller.goToLineBarVisible, "fixture: Go to Line is open in the document's tab")
             let caret = document.editor.selectionCaret
             document.close()
-            check(!form.window.isVisible, "DG closing the captured document closes its Go to Line form")
+            check(!controller.goToLineBarVisible, "DG closing the captured document closes its Go to Line field")
             check(
                 document.editor.selectionCaret == caret,
                 "DG closing a Go to Line target never navigates a retired editor")
@@ -217,7 +218,9 @@ extension DocumentChecks {
                 "View → Editor Groups → Show Tab in Another Group", "Tools → Automations → Manage Automations…",
                 "File → Quick Open…", "Find → Find and Replace…", "Tools → Macros", "Tools → Run Commands",
                 "View → Syntax Highlighting", "Help → TextTank User Guide", "Help → Welcome to TextTank",
-                "Edit → Undo", "File → New", "File → Save"
+                "Edit → Undo", "File → New", "File → Save", "View → Split Tab View", "View → Show → Change Bars",
+                "View → Centered Text Column", "View → Preview → Toggle Preview",
+                "View → Preview → Sync Scrolling in Both"
             ]
             let listed = Set(walk(try requireValue(NSApp.mainMenu, "actual menu bar")).map(\.path))
             let unlisted = helpPaths.filter { !listed.contains($0.replacingOccurrences(of: " → ", with: " > ")) }
@@ -260,7 +263,17 @@ extension DocumentChecks {
                 ("Language Function List", "Find › Function List…"),
                 ("Search Bookmarked Lines Invert", "Find › Bookmarks › Invert Bookmarks"),
                 ("File Compare with Saved", "Compare › Compare with Saved Version"),
-                ("View Auto-Pair", "Edit › Typing › Auto-Pair Brackets and Quotes")
+                ("View Auto-Pair", "Edit › Typing › Auto-Pair Brackets and Quotes"),
+                // DS-D13: the View menu before it was regrouped on 23 November 2026.
+                ("View › Source", "View › Preview › Source"), ("View › Both", "View › Preview › Both"),
+                ("View › Toggle Preview", "View › Preview › Toggle Preview"),
+                ("Close Split View", "View › Split Tab View"),
+                ("View › Show Line Numbers", "View › Show › Line Numbers"),
+                ("View › Show Whitespace", "View › Show › Whitespace"),
+                ("View › Show Line Endings", "View › Show › Line Endings"),
+                ("Guides and Highlights Show Indentation Guides", "View › Show › Indentation Guides"),
+                ("Guides and Highlights › Highlight Current Line", "View › Show › Current Line Highlight"),
+                ("Highlight Matching Braces", "View › Show › Matching Braces")
             ]
             let unfound = formerPlaces.filter { !found($0.0).contains($0.1) }.map(\.0)
             check(unfound.isEmpty, "palette finds each command by its former menu or name: \(unfound)")
@@ -289,24 +302,36 @@ extension DocumentChecks {
                     && detail("Find › Matching Brace") == "Search, bookmarks or editor selection"
                     && detail("File › Reload with Encoding › UTF-8…")
                         == "Reads saved file • Reloads document contents after the normal review"
-                    && detail("View › Guides and Highlights › Highlight Current Line")
+                    && detail("View › Show › Current Line Highlight")
                         == "Reads active view • Changes display or view settings",
                 "DS-20 a palette entry records what its command works on, wherever the menu bar lists it")
             check(
                 !entries.contains { $0.row.detail == $0.scope || $0.row.title.contains(" › ") }
-                    && entries.allSatisfy { $0.path == ($0.row.detail.isEmpty ? "" : $0.row.detail + " › ") + $0.row.title },
+                    && entries.allSatisfy {
+                        $0.path == ($0.row.detail.isEmpty ? "" : $0.row.detail + " › ") + $0.item.title
+                            && $0.row.title == $0.name
+                            // DS-D13: an item of View › Show is titled by what it shows, and the
+                            // palette names the command in full.
+                            && ($0.name == $0.item.title
+                                || ($0.row.detail == "View › Show" && $0.name == "Show " + $0.item.title))
+                    }
+                    && entries.filter { $0.row.detail == "View › Show" }.map(\.row.title) == [
+                        "Show Line Numbers", "Show Whitespace", "Show Line Endings", "Show Indentation Guides",
+                        "Show Current Line Highlight", "Show Matching Braces", "Show Change Bars"
+                    ],
                 "a palette row shows the command's name and the menu that holds it, never the internal description")
             // Toggle Preview is an ordinary menu item, so the palette lists and validates it
             // exactly as it does Source, Preview and Both.
             let toggleRow = try requireValue(
-                entries.first { $0.path == "View › Toggle Preview" }, "palette row for View › Toggle Preview")
+                entries.first { $0.path == "View › Preview › Toggle Preview" },
+                "palette row for View › Preview › Toggle Preview")
             let previewRow = try requireValue(
-                entries.first { $0.path == "View › Preview" }, "palette row for View › Preview")
+                entries.first { $0.path == "View › Preview › Preview" }, "palette row for View › Preview › Preview")
             let previewable = sessionDelegate.currentDocumentController?.previewKind != nil
             check(
-                found("toggle preview") == ["View › Toggle Preview"]
+                found("toggle preview") == ["View › Preview › Toggle Preview"]
                     && toggleRow.scope == "Reads active view • Changes display or view settings"
-                    && toggleRow.scope == previewRow.scope && toggleRow.row.detail == "View"
+                    && toggleRow.scope == previewRow.scope && toggleRow.row.detail == "View › Preview"
                     && toggleRow.row.detail == previewRow.row.detail,
                 "DS-20 the palette finds Toggle Preview and describes it as it does the three mode commands")
             check(
@@ -485,11 +510,11 @@ extension DocumentChecks {
                     && entries.allSatisfy { $0.row.accessory == (ControlPresentation.shortcut(of: $0.item) ?? "") },
                 "every palette row whose command has a key shows it, and no other row shows one")
             check(
-                key("File › Save") == "⌘S" && key("File › Save All") == "⌥⌘S" && key("View › Toggle Preview") == "⇧⌘V"
+                key("File › Save") == "⌘S" && key("File › Save All") == "⌥⌘S" && key("View › Preview › Toggle Preview") == "⇧⌘V"
                     && key("File › Quick Open…") == "⇧⌘O" && key("Window › Next Tab") == "⌃⇥"
                     && key("Edit › Undo") == "⌘Z" && key("Edit › Redo") == "⇧⌘Z"
                     && key("Find › Bookmarks › Toggle Bookmark") == functionKeyTwo
-                    && entries.first { $0.path == "View › Toggle Preview" }?.row.accessoryLabel == "Shortcut Shift-Command-V",
+                    && entries.first { $0.path == "View › Preview › Toggle Preview" }?.row.accessoryLabel == "Shortcut Shift-Command-V",
                 "keys read as the menu bar draws them: \(["File › Save All", "Window › Next Tab", "Find › Bookmarks › Toggle Bookmark"].map { key($0) ?? "none" })")
             let upper = EditorCommand.upper.rawValue
             let before = sessionDelegate.settings.value
@@ -780,9 +805,14 @@ extension DocumentChecks {
             check(shifted.count == 1, "Shift-Command-P is assigned once in the menus")
 
             let (document, controller, window) = try tab("p21-goto")
+            // The position field is a button whose one command is Go to Line; it has no menu.
+            let positionField = descendants(try requireValue(window.contentView, "fixture: window content"))
+                .compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "status.position.0" }
             check(
                 controller.responds(to: #selector(EditorWindowController.goToLine(_:)))
-                    && controller.statusOptionsMenu("position")?.items.first?.title == "Go to Line…",
+                    && controller.statusOptionsMenu("position") == nil && positionField != nil
+                    && !(positionField is NSPopUpButton) && positionField?.action != nil
+                    && positionField?.accessibilityLabel()?.hasSuffix("Go to line.") == true,
                 "the document window implements Go to Line and the status bar keeps its own entry")
             let text = "één\r\ntwo 😀\rthree\nfour"
             document.editor.text = text
@@ -807,35 +837,19 @@ extension DocumentChecks {
                     && document.editor.selectionCaret == held && document.editor.revision == revision
                     && document.editor.text == text,
                 "a line the document does not have moves nothing and edits nothing")
-            // The dialog itself, answered as a person would.
+            // The inline field itself, answered as a person would.
             _ = document.editor.setSelectionAnchor(0, caret: 0)
-            var answered = false
-            let giveUp = Date().addingTimeInterval(10)
-            let answerAction: @MainActor @Sendable () -> Void = {
-                guard !answered, let modal = presentedFormWindow, let content = modal.contentView else { return }
-                let views = descendants(content)
-                if let field = views.compactMap({ $0 as? NSTextField }).first(where: { $0.isEditable }),
-                    let go = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Go" })
-                {
-                    answered = true
-                    modal.makeFirstResponder(nil)
-                    field.stringValue = "2"
-                    go.performClick(nil)
-                } else if Date() > giveUp {
-                    NSApp.abortModal()
-                }
-            }
-            let answer = Timer(timeInterval: 0.05, repeats: true) { _ in
-                MainActor.assumeIsolated { answerAction() }
-            }
-            RunLoop.main.add(answer, forMode: .modalPanel)
             controller.goToLine(nil)
-            waitForModelessForms()
-            answer.invalidate()
+            let lineField = controller.goToLineBar.field
+            let answered = controller.goToLineBarVisible && presentedFormWindow == nil
+            lineField.stringValue = "2"
+            controller.controlTextDidChange(
+                Notification(name: NSControl.textDidChangeNotification, object: lineField))
+            controller.goToLineBar.goButton.performClick(nil)
             check(
-                answered && document.editor.statusInfo.line == 2
+                answered && !controller.goToLineBarVisible && document.editor.statusInfo.line == 2
                     && (window.firstResponder as? NSView)?.isDescendant(of: document.editor) == true,
-                "the Go to Line dialog moves the caret to the line entered and returns to the editor")
+                "the Go to Line field moves the caret to the line entered and returns to the editor")
             document.close()
         }
 
@@ -885,12 +899,14 @@ extension DocumentChecks {
             check(
                 edited.shortcuts["duplicateLine"] == nil,
                 "G396 assigning the built-in default never pollutes persisted overrides")
-            var draft = SettingsShortcutDraft(EditorSettings())
-            _ = draft.select("upper", committing: "")
-            _ = draft.select("deleteLine", committing: "u")
+            // V8: the pop-up and its drafts are gone; each assignment is saved when it is recorded.
+            var several = EditorSettings()
+            several.setShortcut("u", for: "upper")
+            several.setShortcut("k", for: "deleteLine")
+            several.setShortcut("u", for: "upper")
             check(
-                draft.select("upper", committing: "k") == "u" && draft.settings.shortcuts["deleteLine"] == "k",
-                "G396 changing popup commands commits and retains every previous draft")
+                several.shortcuts == ["upper": "u", "deleteLine": "k"] && several.shortcut(for: "upper") == "u",
+                "G396 a later assignment keeps every earlier one")
             var collision = EditorSettings()
             collision.setShortcut("j", for: "duplicateLine")
             collision.setShortcut("d", for: "upper")
@@ -944,50 +960,11 @@ extension DocumentChecks {
                     && unchangedMenuBytes == changedBytes,
                 "G362 a newly reserved menu key drops only its conflicting binding after startup and preserves original bytes"
             )
-            let dialog = SettingsController(url: root.appendingPathComponent("audit25-shortcuts-dialog.json"))
-            var observed = false, readable = false, current = false
-            let deadline = Date().addingTimeInterval(10)
-            let timerAction: @MainActor @Sendable () -> Void = {
-                guard let content = presentedFormWindow?.contentView else { return }
-                if Date() > deadline {
-                    NSApp.abortModal()
-                    return
-                }
-                let views = descendants(content)
-                guard
-                    let popup = views.compactMap({ $0 as? NSPopUpButton }).first(where: {
-                        $0.accessibilityLabel() == "Command shortcut to assign"
-                    }),
-                    let key = views.compactMap({ $0 as? NSTextField }).first(where: {
-                        $0.accessibilityLabel() == "Shortcut key"
-                    })
-                else { return }
-                observed = true
-                readable = popup.itemArray.contains {
-                    $0.title == "Duplicate Line" && $0.representedObject as? String == "duplicateLine"
-                }
-                if let entry = popup.itemArray.first(where: {
-                    $0.representedObject as? String == "duplicateLine" || $0.title == "duplicateLine"
-                }) {
-                    popup.select(entry)
-                    if let action = popup.action { _ = NSApp.sendAction(action, to: popup.target, from: popup) }
-                    current = key.stringValue == "d"
-                }
-                views.compactMap { $0 as? NSButton }.first { $0.title == "Close" }?.performClick(nil)
-            }
-            let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
-                MainActor.assumeIsolated { timerAction() }
-            }
-            RunLoop.main.add(timer, forMode: .modalPanel)
-            dialog.showSettings(nil)
-            waitForModelessForms()
-            timer.invalidate()
-            check(
-                observed && readable && current,
-                "G396 Settings shows readable command names and the selected current shortcut")
-            check(
-                !FileManager.default.fileExists(atPath: dialog.url.path),
-                "G396 Cancel after reading a shortcut leaves settings absent")
+            // V8: the pop-up that listed twelve commands is now the Shortcuts list. That it shows
+            // readable command names and the selected command's current shortcut, and that reading
+            // one saves nothing, is checked through the real window as "G396 Settings shows readable
+            // command names…" in DesignSettingsChecks.shortcutPaneChecks, in the
+            // design-settings-input-checks process of this suite.
         }
 
         section("audit25 actual shortcut drafts and menu updates", #line) {
@@ -1015,68 +992,10 @@ extension DocumentChecks {
                     delete.keyEquivalent.isEmpty && duplicate.keyEquivalent == "d",
                     "G396 clearing a custom shortcut removes its menu key and keeps Command-D")
             }
-            var acted = false, kept = false, cleared = false, defaultRestored = false
-            let deadline = Date().addingTimeInterval(10)
-            let timerAction: @MainActor @Sendable () -> Void = {
-                guard let content = presentedFormWindow?.contentView else { return }
-                if Date() > deadline {
-                    NSApp.abortModal()
-                    return
-                }
-                let views = descendants(content)
-                guard !acted,
-                    let popup = views.compactMap({ $0 as? NSPopUpButton }).first(where: {
-                        $0.identifier?.rawValue == "settings.shortcut.command"
-                    }),
-                    let key = views.compactMap({ $0 as? NSTextField }).first(where: {
-                        $0.identifier?.rawValue == "settings.shortcut.key"
-                    }),
-                    let clear = views.compactMap({ $0 as? NSButton }).first(where: {
-                        $0.identifier?.rawValue == "settings.shortcut.clear"
-                    }),
-                    let save = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Apply Shortcuts" })
-                else { return }
-                @MainActor func select(_ id: String) {
-                    guard let entry = popup.itemArray.first(where: { $0.representedObject as? String == id }) else {
-                        return
-                    }
-                    popup.select(entry)
-                    if let action = popup.action { _ = NSApp.sendAction(action, to: popup.target, from: popup) }
-                }
-                select("upper")
-                key.stringValue = "u"
-                select("deleteLine")
-                key.stringValue = "k"
-                select("upper")
-                kept = key.stringValue == "u"
-                clear.performClick(nil)
-                cleared = key.stringValue.isEmpty
-                select("duplicateLine")
-                key.stringValue = "j"
-                select("deleteLine")
-                kept = kept && key.stringValue == "k"
-                select("duplicateLine")
-                clear.performClick(nil)
-                defaultRestored = key.stringValue == "d"
-                acted = true
-                save.performClick(nil)
-                views.compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "settings.close" }?
-                    .performClick(nil)
-            }
-            let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
-                MainActor.assumeIsolated { timerAction() }
-            }
-            RunLoop.main.add(timer, forMode: .modalPanel)
-            settings.showSettings(nil)
-            waitForModelessForms()
-            timer.invalidate()
-            check(
-                acted && kept && cleared && defaultRestored,
-                "G396 the real Settings popup retains multiple drafts and Clear restores each command's default")
-            check(
-                settings.value.shortcuts == ["deleteLine": "k"]
-                    && SettingsController(url: settings.url).value == settings.value,
-                "G396 one explicit Save persists all popup edits without adding default or empty overrides")
+            // V8: the pop-up's drafts and Apply Shortcuts are gone; an assignment is saved when it is
+            // recorded. Several assignments through the real list, Use Default and the saved file are
+            // checked as "G396 the real Settings list keeps several assignments…" and "G396 Use Default
+            // restores…" in DesignSettingsChecks.shortcutPaneChecks (design-settings-input-checks).
             try settings.save(EditorSettings())
         }
 
@@ -1199,8 +1118,10 @@ extension DocumentChecks {
                     NSApp.abortModal()
                     return
                 }
-                guard let field = views.compactMap({ $0 as? NSTextField }).first(where: { $0.isEditable }),
-                    let action = field.action
+                guard
+                    let field = views.compactMap({ $0 as? NSTextField }).first(where: {
+                        $0.identifier?.rawValue == "settings.width"
+                    }), let action = field.action
                 else {
                     views.compactMap { $0 as? NSButton }.first?.performClick(nil)
                     return
@@ -1881,18 +1802,18 @@ extension DocumentChecks {
             // Passive typing may select a result. Escape restores the exact opening direction.
             let priorQuery = controller.findField.stringValue
             controller.showFind(nil)
-            let previousWord = controller.wordBox.state
-            controller.wordBox.performClick(nil)
-            check(sessionDelegate.searchController.wordButton.state == controller.wordBox.state
-                    && controller.wordBox.state != previousWord,
+            let previousWord = controller.findOptions.isOn(.wholeWord)
+            controller.findOptions.toggle(.wholeWord)
+            check((sessionDelegate.searchController.wordButton.state == .on) == controller.findOptions.isOn(.wholeWord)
+                    && controller.findOptions.isOn(.wholeWord) != previousWord,
                   "a whole-word change uses the same option in the bar and Find window")
-            controller.wordBox.performClick(nil)
+            controller.findOptions.toggle(.wholeWord)
             let priorMode = sessionDelegate.searchController.mode.indexOfSelectedItem
-            if controller.regexBox.state != .on { controller.regexBox.performClick(nil) }
+            if !controller.findOptions.isOn(.regex) { controller.findOptions.toggle(.regex) }
             controller.findField.stringValue = "["
             controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: controller.findField))
             spinUntil("inline regex error") { !controller.findCount.stringValue.isEmpty }
-            check(controller.regexBox.state == .on && controller.findCount.stringValue != "No matches"
+            check(controller.findOptions.isOn(.regex) && controller.findCount.stringValue != "No matches"
                     && !controller.findCount.stringValue.contains(" of ") && NSApp.modalWindow == nil,
                   "a malformed bar regex reports its error in the Find bar")
             // DS-45: the field is marked and the whole message is shown, not a clipped count label.
@@ -2092,6 +2013,7 @@ extension DocumentChecks {
             let allController = try requireValue(allDocument.presentation, "fixture: current-document Replace All")
             _ = allDocument.editor.loadDocumentText("x x x")
             allController.showFind(nil)
+            allController.setReplaceRow(shown: true)
             allController.findField.stringValue = "x"
             allController.replaceField.stringValue = "yy"
             allController.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: allController.findField))

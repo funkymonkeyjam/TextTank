@@ -39,7 +39,7 @@ any user-facing string. Cite rules by their id (for example DS-31) in commit mes
 | DS-D1 | **Tab model: one workspace window that hosts the compact tab strip** (and, later, editor groups). Native `NSWindow` tabbing is rejected: pinned tabs, multi-select, groups and two views of one document cannot be built on it. Stage 0 replaces the hidden document windows with a shared native host; later stages extend its model. | 15 Nov 2026 |
 | DS-D2 | **The window's red close button quits TextTank**, after the usual review of unsaved documents. One tab closes from its own close button, File > Close or Command-W. Amended by DS-D9 (23 Nov 2026): at quit the review covers files with unsaved edits; an untitled document's unsaved text is kept and is not asked about. | 15 Nov 2026 |
 | DS-D3 | **No Close Tab button in the toolbar.** Each tab has its own. | 15 Nov 2026 |
-| DS-D4 | **The menu bar has nine menus, in this order: TextTank, File, Edit, Find, View, Compare, Tools, Window, Help.** File opens, saves and re-encodes documents and holds the workspace files. Edit holds everything that changes the text or the selection. Find holds finding, Go to Line, bookmarks and the Function List. View holds how the document is shown, including Syntax Highlighting, the Workspace Browser and Editor Groups. Compare holds starting, reading, merging and exporting a comparison. Tools holds Macros, Automations, Run Commands and the utilities that leave the text as it is. Help holds the guides, the Command Palette and keyword help. TextTank is a close approximation of Notepad++, not a copy of its menu bar: a command sits where a person on a Mac would look first, and the Command Palette still finds it by its former menu. Group inside menus; do not add top-level menus without the owner. This replaces the frozen fourteen-menu order. | 23 Nov 2026 |
+| DS-D4 | **The menu bar has nine menus, in this order: TextTank, File, Edit, Find, View, Compare, Tools, Window, Help.** File opens, saves and re-encodes documents and holds the workspace files. Edit holds everything that changes the text or the selection. Find holds finding, Go to Line, bookmarks and the Function List. View holds how the document is shown: the Preview submenu, Split Tab View, Wrap Lines, the Show submenu, Centered Text Column, zoom, Folding, Syntax Highlighting, the Workspace Browser, Editor Groups and the toolbar, fourteen items in all (DS-D13). Compare holds starting, reading, merging and exporting a comparison. Tools holds Macros, Automations, Run Commands and the utilities that leave the text as it is. Help holds the guides, the Command Palette and keyword help. TextTank is a close approximation of Notepad++, not a copy of its menu bar: a command sits where a person on a Mac would look first, and the Command Palette still finds it by its former menu. Group inside menus; do not add top-level menus without the owner. This replaces the frozen fourteen-menu order. | 23 Nov 2026 |
 | DS-D5 | **Distribution** (Developer ID signing and notarisation) is undecided. Do not add signing identities, entitlements or release scripts without the owner asking. | open |
 
 Owner follow-up, 16 November 2026:
@@ -111,6 +111,36 @@ Owner decision, 23 November 2026:
   removes it keeps it removed. DS-D6 stands as written for automations: one drop-down, no buttons of
   their own. Editor Layout is a second menu item of a different kind, which DS-D6 never excluded and
   DS-30 now names. DS-31 is met: nothing in the tab strip or the title bar chooses a layout.
+- DS-D13. **The View menu is regrouped, and gains change bars and a centered text column.** (DS-D12
+  is recorded by another change of the same day.) View's top level lists fourteen items: Preview ▸ |
+  Split Tab View | Wrap Lines, Show ▸, Centered Text Column | Zoom In, Zoom Out, Actual Size |
+  Folding ▸, Syntax Highlighting ▸ | Workspace Browser, Editor Groups ▸ | Show Toolbar, Customize
+  Toolbar…. **Preview** holds Source, Preview, Both and Toggle Preview, then Sync Scrolling in Both,
+  a checkmark for the stored `syncPreviewScrolling` setting that the Settings row also shows; all
+  of it is disabled for a document with no preview (DS-21). **Split Tab View** is one toggle with a
+  checkmark (DS-22): it splits the tab and closes the split. Close Split View has no row; its
+  action remains, and a shortcut saved for it is read as Split Tab View's unless that command has
+  a saved shortcut of its own. **Show** holds Line Numbers, Whitespace, Line Endings | Indentation
+  Guides, Current Line Highlight, Matching Braces | Change Bars. An item there is titled by what
+  it shows (DS-24); the Command Palette and Settings name the command in full ("Show Line
+  Numbers"). Guides and Highlights is no longer a submenu. Every moved command keeps its identity,
+  shortcut, validation and macro behaviour, and the Command Palette finds it by its former path
+  and name as well as its new one.
+  **Change Bars** (stored `changeBars`, off unless stored on, for every editor view): a narrow
+  margin beside the text marks the lines changed since the document was opened, from Scintilla's
+  change history. A change that is not saved is a wide amber bar; a saved one is a narrow green
+  bar at the left; a line undone to its original text after a save is a hollow amber bar in the
+  middle, so no state is carried by colour alone (DS-61, DS-62). The record starts only while a
+  document has no Undo history, and Undo is never cleared to start it: a document edited before
+  the toggle shows the margin with no bars, its tab says so, and its record starts when it is
+  reverted or reopened. Turning the toggle off hides the margin and keeps the record. There are
+  no change bars in large-file mode or in a comparison.
+  **Centered Text Column** (stored `centeredColumn`, off unless stored on, and
+  `centeredColumnWidth`, 90 characters, 40 to 240): the text is laid out between equal margins
+  around a column that wide in the editor font, recomputed when the pane, the zoom or the font
+  changes. The line-number gutter stays at the pane's leading edge. It changes no text and
+  implies nothing about wrapping; a pane narrower than the column, and a comparison, keep the
+  ordinary layout.
 
 ## 3. Rules
 
@@ -164,7 +194,8 @@ Owner decision, 23 November 2026:
   Find share its text with the system find pasteboard. The Find and Replace window (Option-Command-F) adds
   scopes, modes and results; while it is open, Find Next and Find Previous act on it. The bar and the
   window show one Find text and one replacement, live, and offer one history of the last ten of each. A
-  new launch starts in Normal mode with an empty Find field.
+  new launch starts in Normal mode with an empty Find field. The bar is one row; its Replace row is
+  behind a disclosure control (DS-10).
 - DS-36. A search that finds nothing says so in words, visibly, and is announced (DS-62).
 
 ### Alerts, sheets and dialogs
@@ -219,9 +250,9 @@ Owner decision, 23 November 2026:
 - DS-72. A result that only changes a label is announced: use `Announce.say` for one-off messages and
   `AnnouncingLabel` for a tool window's status label. Do not announce progress ticks.
 - DS-73. Every task can be completed from the keyboard, including leaving any dialog. Window > Move
-  Focus moves the keyboard between the areas of the workspace window (sidebar, tab strip, find bar,
-  text, preview, status row, each editor group) without changing a selection, a scroll position or an
-  active tab; Escape returns to the text. `docs/tab-model.md` has the contract.
+  Focus moves the keyboard between the areas of the workspace window (sidebar, tab strip, find bar or
+  Go to Line, text, preview, status row, each editor group) without changing a selection, a scroll
+  position or an active tab; Escape returns to the text. `docs/tab-model.md` has the contract.
 - DS-74. Mac control sizes: 28 by 28 points by default, 20 by 20 at the least.
 
 ### Writing

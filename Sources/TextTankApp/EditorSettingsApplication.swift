@@ -27,6 +27,8 @@ import AppKit
                 editor.lineNumbersVisible = value.lineNumbersEnabled
                 editor.whitespaceVisible = value.showWhitespaceEnabled
                 editor.lineEndingsVisible = value.showLineEndingsEnabled
+                applyChangeBars(value.changeBarsEnabled, to: editor, of: doc)
+                editor.centeredColumnCharacters = value.centeredColumnEnabled ? value.centeredColumnCharacters : 0
                 if let previous {
                     let info = editor.statusInfo
                     if previous.tabWidth != value.tabWidth || previous.useTabs != value.useTabs,
@@ -41,6 +43,7 @@ import AppKit
                 }
             }
         }
+        if let previous, !previous.changeBarsEnabled, value.changeBarsEnabled { explainMissingChangeBars() }
         if previous?.fontName != value.fontName || previous?.basePointSize != value.basePointSize
             || previous?.initialZoom != value.initialZoom
         {
@@ -50,17 +53,29 @@ import AppKit
         }
         if let menu = NSApp.mainMenu { applyShortcuts(value, to: menu) }
     }
-    static func applyShortcuts(_ value: EditorSettings, to menu: NSMenu) {
-        @MainActor func update(_ menu: NSMenu) {
-            for item in menu.items {
-                if let fallback = item as? DefaultShortcutItem {
-                    if fallback.shortcut != .saveAll { fallback.applyEditorOverrides(value) }
-                } else if let id = item.representedObject as? String, EditorSettings.commands.contains(id) {
-                    item.keyEquivalent = value.shortcuts[id] ?? EditorCommand.defaultShortcuts[id] ?? ""
-                }
-                if let child = item.submenu { update(child) }
+    /// Change bars are never shown, and changes never recorded, for a document in large-file mode
+    /// (above the highlighting limit), so typing and loading there cost what they always did.
+    static func applyChangeBars(_ enabled: Bool, to editor: TTEditor, of document: TextDocument) {
+        if document.deferredLargeFileLanguage != nil {
+            if editor.changeBarsVisible || editor.changeTrackingActive { editor.stopChangeTracking() }
+        } else {
+            editor.changeBarsVisible = enabled
+        }
+    }
+    /// What the person is told in a tab whose document cannot record changes yet.
+    static let changeBarsPendingMessage =
+        "This document was edited before Change Bars was turned on. Its change bars start after it is reverted or reopened."
+    /// Scintilla starts a change record only while a document has no Undo history, and TextTank
+    /// never clears Undo to get one. A document edited before Change Bars was turned on shows the
+    /// margin with no bars; its tabs say why (DS-81), and the record starts at its next load.
+    private static func explainMissingChangeBars() {
+        for doc in NSDocumentController.shared.documents.compactMap({ $0 as? TextDocument })
+        where doc.deferredLargeFileLanguage == nil && !doc.editor.changeTrackingActive {
+            // Said once, for the tab the person is looking at; shown in every tab it is true of.
+            doc.presentations.forEach {
+                $0.showTransientStatus(changeBarsPendingMessage, seconds: 8, announce: $0.host.active === $0)
             }
         }
-        update(menu)
     }
+    static func applyShortcuts(_ value: EditorSettings, to menu: NSMenu) { ShortcutCatalog.apply(value, to: menu) }
 }

@@ -150,7 +150,13 @@ final class EditorGroupSurface: NSView {
         mounted.flatMap { root in Self.descendants(of: root).first { $0.identifier?.rawValue == "status.row" } }
     }
     /// The tab titles, marks and close buttons that are showing, in reading order.
-    var tabControls: [NSControl] { Self.controls(in: strip) }
+    /// The tabs scroll, so a tab can lie beyond the strip's edge; the list of open tabs, which
+    /// does not scroll, comes after every tab wherever it is drawn.
+    var tabControls: [NSControl] {
+        let all = Self.controls(in: strip)
+        func scrolls(_ control: NSControl) -> Bool { control.enclosingScrollView?.isDescendant(of: strip) == true }
+        return all.filter(scrolls) + all.filter { !scrolls($0) }
+    }
     var statusControls: [NSControl] { statusRow.map(Self.controls(in:)) ?? [] }
     /// The title button of `tab`, which is where the keyboard enters the strip.
     func tabTitle(_ tab: TabID?) -> NSControl? {
@@ -185,6 +191,18 @@ final class EditorGroupSurface: NSView {
         else { return false }
         let shown = host.model.groups.sorted { $0.slot == slot && $1.slot != slot }.compactMap {
             $0.activeTab.flatMap { host.presentation(for: $0) }
+        }
+        // The two bars keep their own Escape: Go to Line puts the caret, selection and scroll
+        // position back and closes; the find bar closes (DS-35). Each returns the keyboard itself.
+        if let own = shown.first, mounted === own.presentationRoot {
+            if own.goToLineBarVisible, responder.isDescendant(of: own.goToLineBar) {
+                own.cancelGoToLine(nil)
+                return true
+            }
+            if own.findBarVisible, let bar = own.findBar, responder.isDescendant(of: bar) {
+                own.hideFind(nil)
+                return true
+            }
         }
         guard let target = shown.first?.keyboardFocusView, target.window === window,
             !responder.isDescendant(of: target)
@@ -228,7 +246,9 @@ final class EditorGroupSurface: NSView {
                 guard let own = controls[...index].last(where: Self.isTabTitle),
                     let at = choices.firstIndex(where: { $0 === own })
                 else { return true }
-                position = at
+                // The list of open tabs follows the last tab and belongs to none: Left Arrow
+                // from it reaches the last tab's title.
+                position = controls[index] is NSPopUpButton ? at + 1 : at
             }
             if choices.indices.contains(position + step) { moveKeyboard(to: choices[position + step]) }
             return true
@@ -243,11 +263,11 @@ final class EditorGroupSurface: NSView {
             }
             return true
         case 49, 36, 76:
-            // Space presses the control that has the keyboard: it selects a tab, closes one or
-            // opens a status item's menu. Return does the same for a tab or a placeholder button;
-            // in the status row it is left to the pop-up.
-            guard modifiers.isEmpty, event.keyCode == 49 || inStrip || inPlaceholder,
-                let button = controls[index] as? NSButton
+            // Space presses the control that has the keyboard: it selects a tab, closes one, runs
+            // a status button's command or opens a pull-down's menu. Return presses a button too;
+            // a pull-down (a status field, More, the list of open tabs) opens with Space only.
+            guard modifiers.isEmpty, let button = controls[index] as? NSButton,
+                event.keyCode == 49 || !(button is NSPopUpButton)
             else { return false }
             button.performClick(nil)
             return true
@@ -545,9 +565,34 @@ final class EditorGroupContainer: NSView, NSSplitViewDelegate {
         guard alignColumns, !synchronizing, let source = notification.object as? NSSplitView, source.isVertical,
             let other = dividers.first(where: { $0.isVertical && $0 !== source }), let first = source.subviews.first
         else { return }
+        // While the window is being resized the two rows are resized one after the other. A
+        // position copied from the row already resized to the row still at its old width was
+        // then scaled again, which left the columns out of line and one narrower than its
+        // minimum. The rows are aligned once both have their new width, in `resizeSubviews`.
+        guard abs(other.bounds.width - source.bounds.width) < 0.5 else { return }
         guard abs((other.subviews.first?.frame.width ?? 0) - first.frame.width) > 0.5 else { return }
         synchronizing = true
         other.setPosition(first.frame.width, ofDividerAt: 0)
+        synchronizing = false
+    }
+    override func resizeSubviews(withOldSize oldSize: NSSize) {
+        super.resizeSubviews(withOldSize: oldSize)
+        alignGridColumns()
+    }
+    /// Puts the column divider of both rows at the same place: where the first row's is after
+    /// the resize, which keeps its share of the width, never leaving a column narrower than its
+    /// minimum.
+    private func alignGridColumns() {
+        guard alignColumns, !synchronizing else { return }
+        let rows = dividers.filter(\.isVertical)
+        guard rows.count == 2, let width = rows.map(\.bounds.width).min(), width > 0 else { return }
+        let least = splitMinimum[ObjectIdentifier(rows[0])] ?? 0
+        let most = max(least, width - least - rows[0].dividerThickness)
+        let position = min(most, max(least, rows[0].subviews.first?.frame.width ?? width / 2))
+        synchronizing = true
+        for row in rows where abs((row.subviews.first?.frame.width ?? 0) - position) > 0.5 {
+            row.setPosition(position, ofDividerAt: 0)
+        }
         synchronizing = false
     }
     func splitView(
@@ -577,7 +622,7 @@ final class EditorGroupContainer: NSView, NSSplitViewDelegate {
 /// it is clicked, so commands act where the focus ring is. Each move is announced by the name of
 /// the area it reached (DS-72); the standard focus ring shows it.
 @MainActor final class WindowAreaFocusController: NSObject, NSMenuItemValidation {
-    enum Kind: String { case sidebar, tabs, findBar, text, preview, status, emptyGroup }
+    enum Kind: String { case sidebar, tabs, findBar, goToLine, text, preview, status, emptyGroup }
     struct Area {
         let kind: Kind
         /// The group the area belongs to; nil for the sidebar.
@@ -591,8 +636,8 @@ final class EditorGroupContainer: NSView, NSSplitViewDelegate {
     /// F6 and Shift-F6, with Option-Command-` and Shift-Option-Command-` for keyboards whose
     /// function keys need the Fn key. None of the four is used by a menu, by the editor's own key
     /// map or by a reserved system shortcut.
-    static let nextShortcut = MenuShortcut("\u{F709}", [])
-    static let previousShortcut = MenuShortcut("\u{F709}", [.shift])
+    static let nextShortcut = MenuShortcut("\u{f709}", [])
+    static let previousShortcut = MenuShortcut("\u{f709}", [.shift])
     static let nextAlternate = MenuShortcut("`", [.command, .option])
     static let previousAlternate = MenuShortcut("~", [.command, .option])
     static let menuTitle = "Move Focus"
@@ -659,8 +704,12 @@ final class EditorGroupContainer: NSView, NSSplitViewDelegate {
             }
             let name = (presentation.document as? TextDocument)?.displayName ?? "Untitled"
             if let title = surface.tabTitle(tab) { add(.tabs, surface.strip, title) }
+            // The find bar and Go to Line share one slot; only one of them is shown at a time.
             if presentation.findBarVisible, let bar = presentation.findBar {
                 add(.findBar, bar, presentation.findField)
+            }
+            if presentation.goToLineBarVisible {
+                add(.goToLine, presentation.goToLineBar, presentation.goToLineBar.field)
             }
             // The hidden source of a tab that shows Preview alone is not an area: putting the
             // keyboard there would make the tab show Both.
@@ -684,6 +733,9 @@ final class EditorGroupContainer: NSView, NSSplitViewDelegate {
         case (.tabs, let group?): return String(format: Strings.text("areas.tabs.group", "Tabs in %@."), group)
         case (.findBar, nil): return Strings.text("areas.find", "Find bar.")
         case (.findBar, let group?): return String(format: Strings.text("areas.find.group", "Find bar in %@."), group)
+        case (.goToLine, nil): return Strings.text("areas.goToLine", "Go to Line.")
+        case (.goToLine, let group?):
+            return String(format: Strings.text("areas.goToLine.group", "Go to Line in %@."), group)
         case (.text, nil): return String(format: Strings.text("areas.text", "Text of %@."), name)
         case (.text, let group?):
             return String(format: Strings.text("areas.text.group", "Text of %1$@ in %2$@."), name, group)

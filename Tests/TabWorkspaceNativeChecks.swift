@@ -511,17 +511,27 @@ import NativeSearch
         backgroundSplit.close()
         foregroundSplit.close()
         a.showWindows()
+        // Go to Line is one inline field of its tab. An entry that was only typed is not a jump:
+        // switching to B closes the field and A's Clone is where it was.
+        let lineBefore = clone.statusInfo.line
         pa.goToLine(nil)
-        let lineForm = try requireValue(
-            FormPanel.visible.last { $0.window.identifier?.rawValue == "TextTank.GoToLine" }, "T0 captured Go to Line")
-        lineForm.window.makeFirstResponder(nil)
-        try DesignSettingsChecks.field("goToLine.line", lineForm.window).stringValue = "4"
+        let lineField = pa.goToLineBar.field
+        try require(pa.goToLineBarVisible && lineBefore != 4, "T0 Go to Line is open in A")
+        lineField.stringValue = "4"
+        pa.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: lineField))
         b.showWindows()
-        try DesignSettingsChecks.button("goToLine.go", lineForm.window).performClick(nil)
         check(
-            pa.isActiveTab && clone.statusInfo.line == 4
+            !pa.goToLineBarVisible && clone.statusInfo.line == lineBefore,
+            "T0-R12 switching to B closes A's Go to Line and leaves A's Clone where it was")
+        a.showWindows()
+        pa.goToLine(nil)
+        lineField.stringValue = "4"
+        pa.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: lineField))
+        pa.goToLineBar.goButton.performClick(nil)
+        check(
+            pa.isActiveTab && !pa.goToLineBarVisible && clone.statusInfo.line == 4
                 && (window.firstResponder as? NSView)?.isDescendant(of: clone) == true,
-            "T0-R12 captured Go to Line reveals and focuses A after switching to B")
+            "T0-R12 Go to Line moves A's active Clone and returns the keyboard to it")
         let saveTarget = DocumentFactory.makeUntitled()
         saveTarget.editor.text = "Owned unsaved Save As fixture"
         b.showWindows()

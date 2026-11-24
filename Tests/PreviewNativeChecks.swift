@@ -411,6 +411,15 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         Checks.section("scroll sync: table and tree") { try scrollSyncRows(root: root) }
         Checks.section("fail closed") { try failClosed(root: root) }
         Checks.section("docked Workspace Browser") { try WorkspaceSidebarChecks.run(root: root, app: app, host: host) }
+        Checks.section("tab strip: state, mouse and the list of open tabs") {
+            try TabStripChecks.run(root: root, app: app, host: host)
+        }
+        Checks.section("compact find bar and inline Go to Line") {
+            try FindBarNativeChecks.run(root: root, app: app, host: host)
+        }
+        Checks.section("View menu, change bars and centered column") {
+            try ViewMenuChecks.run(root: root, app: app, host: host)
+        }
         Checks.section("Editor Layout toolbar item") { try WindowLayoutChecks.layoutControl(app: app, host: host) }
         Checks.section("Move Focus between window areas") {
             try WindowLayoutChecks.focusAreas(root: root, app: app, host: host)
@@ -580,9 +589,13 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
 
     // MARK: Eligibility and commands
 
-    private static func viewModeItems() throws -> [NSMenuItem] {
+    /// View > Preview, the submenu that holds the mode commands since DS-D13.
+    static func previewMenu() throws -> NSMenu {
         let view = try requireValue(NSApp.mainMenu?.items.first { $0.title == "View" }?.submenu, "View menu")
-        return view.items.filter { $0.action == #selector(EditorWindowController.setDocumentViewMode(_:)) }
+        return try requireValue(view.items.first?.submenu, "View > Preview")
+    }
+    private static func viewModeItems() throws -> [NSMenuItem] {
+        try previewMenu().items.filter { $0.action == #selector(EditorWindowController.setDocumentViewMode(_:)) }
     }
 
     private static func eligibility(root: URL, app: AppDelegate, host: WorkspaceWindowController) throws {
@@ -591,12 +604,14 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
             items.map(\.title) == ["Source", "Preview", "Both"]
                 && items.map { $0.representedObject as? String } == ["source", "preview", "both"]
                 && items.allSatisfy { $0.target == nil && $0.keyEquivalent.isEmpty },
-            "View has Source, Preview and Both as first-responder commands with no shortcut")
+            "View > Preview has Source, Preview and Both as first-responder commands with no shortcut")
         let view = try requireValue(NSApp.mainMenu?.items.first { $0.title == "View" }?.submenu, "View menu")
+        let preview = try previewMenu()
         check(
-            Array(view.items.prefix(4)).map(\.title) == ["Source", "Preview", "Both", "Toggle Preview"]
-                && view.items[4].isSeparatorItem,
-            "the three commands, Toggle Preview and a separator open the View menu")
+            view.items.first?.title == "Preview" && view.items[1].isSeparatorItem
+                && preview.items.map(\.title) == ["Source", "Preview", "Both", "Toggle Preview", "", "Sync Scrolling in Both"]
+                && preview.items[4].isSeparatorItem,
+            "DS-D13 the Preview submenu opens the View menu with the three commands, Toggle Preview, a separator and Sync Scrolling in Both")
 
         let document = DocumentFactory.makeUntitled()
         document.editor.text = "# Title\n\nplain so far\n"
@@ -769,8 +784,8 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         check(!tab.findBarVisible, "Preview closes the find bar, which acts on the hidden source")
         tab.goToLine(nil)
         check(tab.viewMode == .both, "Go to Line shows the source beside the preview first")
-        presentedFormWindow?.close()
         tab.setViewMode(.preview)
+        check(!tab.goToLineBarVisible, "Preview closes Go to Line, which acts on the hidden source")
         app.searchController.showSearch(nil)
         check(tab.viewMode == .both, "Find and Replace shows the source beside the preview first")
         app.searchController.window?.orderOut(nil)
@@ -2034,12 +2049,13 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
     private static func togglePreview(root: URL, app: AppDelegate, host: WorkspaceWindowController) throws {
         let bar = try requireValue(NSApp.mainMenu, "menu bar")
         let view = try requireValue(bar.items.first { $0.title == "View" }?.submenu, "View menu")
+        let preview = try previewMenu()
         let toggle = try requireValue(
-            view.items.first { $0.action == #selector(EditorWindowController.toggleDocumentPreview(_:)) },
-            "View > Toggle Preview")
+            preview.items.first { $0.action == #selector(EditorWindowController.toggleDocumentPreview(_:)) },
+            "View > Preview > Toggle Preview")
         check(
-            view.items.firstIndex { $0 === toggle } == 3 && view.items[2].title == "Both" && view.items[4].isSeparatorItem
-                && toggle.title == "Toggle Preview" && toggle.target == nil,
+            preview.items.firstIndex { $0 === toggle } == 3 && preview.items[2].title == "Both"
+                && preview.items[4].isSeparatorItem && toggle.title == "Toggle Preview" && toggle.target == nil,
             "Toggle Preview is directly under Source, Preview and Both, and goes to the first responder")
         check(
             toggle.keyEquivalent == "V" && toggle.keyEquivalentModifierMask == .command && toggle is DefaultShortcutItem,
@@ -2058,7 +2074,7 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
             }
         }
         walk(bar, "")
-        check(chords == [" > View > Toggle Preview"], "no other menu item uses Shift-Command-V: \(chords)")
+        check(chords == [" > View > Preview > Toggle Preview"], "no other menu item uses Shift-Command-V: \(chords)")
         check(
             !EditorSettings.protectedShortcuts.contains("V") && !EditorCommand.defaultShortcuts.values.contains("V")
                 && !SettingsController.reservedShortcuts(in: bar).contains("V"),

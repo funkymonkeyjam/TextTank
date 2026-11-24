@@ -50,14 +50,13 @@ package enum TabGroupGeometry {
     package static let minimumPane = TabGroupExtent(width: 320, height: 200)
     package static func minimumContent(
         _ layout: LayoutKind, normal: TabGroupExtent = TabGroupExtent(width: 800, height: 500),
-        pickerHeight: Double = 36,
         divider: Double = 1
     ) -> TabGroupExtent {
         let columns: Double = layout == .twoColumns || layout == .grid2x2 ? 2 : 1
         let rows: Double = layout == .twoRows || layout == .grid2x2 ? 2 : 1
         return TabGroupExtent(
             width: max(normal.width, columns * minimumPane.width + (columns - 1) * divider),
-            height: max(normal.height, rows * minimumPane.height + (rows - 1) * divider + pickerHeight))
+            height: max(normal.height, rows * minimumPane.height + (rows - 1) * divider))
     }
     package static func fits(_ required: TabGroupExtent, available: TabGroupExtent) -> Bool {
         [required.width, required.height, available.width, available.height].allSatisfy { $0.isFinite && $0 >= 0 }

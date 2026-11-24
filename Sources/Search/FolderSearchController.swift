@@ -92,6 +92,8 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
     static let maximumListedProblems = 200
     private var generation = UUID()
     private var cancellation: FolderSearchCancellation?
+    /// The status-row operation of the folder search now running.
+    private var statusOperation: UUID?
     private var work: Task<Void, Never>?
     private var searchButton: NSButton!, cancelButton: NSButton!
     /// True while a search or a replacement is running.
@@ -394,6 +396,12 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         status.stringValue = "Searching…"
         isSearching = true
         lastOutcome = nil
+        // The amount of work is not known before the folders are read, so the status row's
+        // indicator is indeterminate (DS-51). Its Cancel is this window's Stop.
+        if let id = statusOperation { StatusOperationCenter.shared.end(id) }
+        statusOperation = StatusOperationCenter.shared.begin(
+            "Searching the folder", cancelLabel: "Stop the folder search"
+        ) { [weak self] in self?.cancelSearch(nil) }
         work = Task { @MainActor [weak self] in
             do {
                 let report = try await FolderSearch.searchAcross(
@@ -732,6 +740,11 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
         }.joined(separator: "\n")
     }
     private func finish() {
+        // The outcome is announced by this window's status label.
+        if let id = statusOperation {
+            statusOperation = nil
+            StatusOperationCenter.shared.end(id)
+        }
         searchButton.isEnabled = true
         cancelButton.isEnabled = false
         work = nil

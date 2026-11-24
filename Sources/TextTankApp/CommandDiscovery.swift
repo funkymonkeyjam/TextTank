@@ -97,7 +97,7 @@ struct CommandRecents: Equatable {
         (["Find", "Bookmarks"], "Search › Bookmarked Lines"),
         (["Find", "Function List…"], "Language"),
         (["Find"], "Search"),
-        (["View", "Guides and Highlights"], "View"),
+        (["View", "Show"], "View"),
         (["View", "Syntax Highlighting"], "Language"),
         (["View", "Workspace Browser"], "Workspace › Show"),
         (["View", "Editor Groups"], "View"),
@@ -109,10 +109,29 @@ struct CommandRecents: Equatable {
         (["Tools"], "Text Utilities"),
         (["Help", "Show Keyword Help"], "Language")
     ]
+    /// Where the View menu listed a command, and what it called it, before the menu was
+    /// regrouped on 23 November 2026 (DS-D13), by today's whole path. Close Split View has no
+    /// row now: Split Tab View is the one toggle, and answers to the old name.
+    static let formerPaths: [(current: [String], former: String)] = [
+        (["View", "Preview", "Source"], "View › Source"),
+        (["View", "Preview", "Preview"], "View › Preview"),
+        (["View", "Preview", "Both"], "View › Both"),
+        (["View", "Preview", "Toggle Preview"], "View › Toggle Preview"),
+        (["View", "Split Tab View"], "View › Close Split View"),
+        (["View", "Show", "Line Numbers"], "View › Show Line Numbers"),
+        (["View", "Show", "Whitespace"], "View › Show Whitespace"),
+        (["View", "Show", "Line Endings"], "View › Show Line Endings"),
+        (["View", "Show", "Indentation Guides"], "View › Guides and Highlights › Show Indentation Guides"),
+        (["View", "Show", "Current Line Highlight"], "View › Guides and Highlights › Highlight Current Line"),
+        (["View", "Show", "Matching Braces"], "View › Guides and Highlights › Highlight Matching Braces")
+    ]
+    /// Every former place and name of the command at `route`, as one text the filter reads.
     static func legacyPath(for route: [String]) -> String {
-        guard let old = legacyLocations.first(where: { route.starts(with: $0.current) }), let title = route.last
-        else { return "" }
-        return old.legacy + " " + title
+        var former = formerPaths.filter { $0.current == route }.map(\.former)
+        if let old = legacyLocations.first(where: { route.starts(with: $0.current) }), let title = route.last {
+            former.insert(old.legacy + " " + title, at: 0)
+        }
+        return former.joined(separator: " ")
     }
     private static func key(_ text: String) -> String {
         text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
@@ -288,14 +307,16 @@ struct CommandRecents: Equatable {
                 // DS-20: the key shown is the one the menu item has now, including a shortcut
                 // assigned in Settings. The menu that holds the command is the secondary text.
                 let shortcut = ControlPresentation.shortcut(of: item) ?? ""
+                // A View > Show item is titled by what it shows; on its own it keeps the verb.
+                let name = ViewMenuTitles.spokenName(route: route) ?? item.title
                 entries.append(
                     Entry(
                         row: .init(
-                            id: id, title: item.title, detail: path.joined(separator: " › "), enabled: enabled,
+                            id: id, title: name, detail: path.joined(separator: " › "), enabled: enabled,
                             accessory: shortcut,
                             accessoryLabel: ControlPresentation.spokenShortcut(of: item).map { "Shortcut " + $0 } ?? ""),
                         item: item, target: target, externalNotice: destination,
-                        legacyPath: Self.legacyPath(for: route), name: item.title, path: pathLabel, scope: scope))
+                        legacyPath: Self.legacyPath(for: route), name: name, path: pathLabel, scope: scope))
             }
         }
         collect(bar, path: [])
@@ -378,6 +399,9 @@ struct CommandRecents: Equatable {
             if raw == EditorCommand.bookmarkCutLines.rawValue {
                 return ("Reads bookmarked lines • Changes document and clipboard", nil)
             }
+        }
+        if ["toggleChangeBars:", "toggleCenteredColumn:", "toggleSyncPreviewScrolling:"].contains(selector) {
+            return ("Reads view settings • Changes them for every editor", nil)
         }
         if selector == "toggleAutoIndent:" || selector == "toggleAutoPair:" {
             return ("Reads typing settings • Changes them for every editor", nil)

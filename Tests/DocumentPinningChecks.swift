@@ -997,7 +997,9 @@ extension DocumentChecks {
             let present = Set(try FileManager.default.contentsOfDirectory(atPath: folder.path))
             check(
                 present == [
-                    "Settings.json", "SearchOptions.json", "FolderSearchSettings.json", "WorkspaceBrowser.json",
+                    // Settings-v2.json is decoded value by value in SettingsShortcutValidationChecks.versionStep.
+                    "Settings.json", "Settings-v2.json", "SearchOptions.json", "FolderSearchSettings.json",
+                    "WorkspaceBrowser.json",
                     "RunLibrary.json", "Session.texttanksession", "SessionLayout.texttanksession",
                     "RecoverySnapshot.json", "ReminderBatch.json", "LastSession.json", "LastSession-untitled.json",
                     "MacroLibrary.json", "Automations.json", "Automations-before-flags.json", "LanguageCatalog.json",
@@ -1141,14 +1143,38 @@ extension DocumentChecks {
             // Move Focus to Previous Area, F6 and Shift-F6, each listed once more as a hidden item
             // for its second key, Option-Command-` and Shift-Option-Command-`. Nothing was removed.
             let moveFocusAdded: [[String: String]] = [
-                ("moveFocusToNextArea:", "\u{F709}", "0"), ("moveFocusToPreviousArea:", "\u{F709}", "131072"),
+                ("moveFocusToNextArea:", "\u{f709}", "0"), ("moveFocusToPreviousArea:", "\u{f709}", "131072"),
                 ("moveFocusToNextArea:", "`", "1572864"), ("moveFocusToPreviousArea:", "~", "1572864"),
             ].map { ["action": $0.0, "object": "", "key": $0.1, "modifiers": $0.2, "target": "explicit"] }
+            // Merged on 23 November 2026 (DS-D13): View > Close Split View has no row of its own.
+            // View > Split Tab View is the one toggle that splits and closes; `closeSplit:` is
+            // still an action. This is the only command the regrouped View menu stopped listing.
+            let closeSplitMerged: [[String: String]] = [
+                ["action": "closeSplit:", "object": "", "key": "", "modifiers": "1048576", "target": "responder"]
+            ]
+            // Added with it: View > Preview > Sync Scrolling in Both (the stored setting, on the
+            // active tab's validation), View > Show > Change Bars and View > Centered Text Column.
+            let viewRegroupAdded: [[String: String]] = [
+                [
+                    "action": "toggleSyncPreviewScrolling:", "object": "", "key": "", "modifiers": "1048576",
+                    "target": "responder",
+                ],
+                ["action": "toggleChangeBars:", "object": "", "key": "", "modifiers": "1048576", "target": "explicit"],
+                [
+                    "action": "toggleCenteredColumn:", "object": "", "key": "", "modifiers": "1048576",
+                    "target": "explicit",
+                ],
+            ]
+            // Added on 23 November 2026: View > Syntax Highlighting > Choose Language…, the
+            // filterable chooser the status bar's language field also opens. Nothing was removed.
+            let chooseLanguageAdded: [[String: String]] = [
+                ["action": "chooseLanguage:", "object": "", "key": "", "modifiers": "1048576", "target": "explicit"]
+            ]
             var accounted = identities(
                 formerCommands + deliberatelyAdded + togglePreviewAdded + quickOpenWithKey + localHistoryAdded
-                    + moveFocusAdded)
+                    + viewRegroupAdded + chooseLanguageAdded + moveFocusAdded)
             var removedRowsInFixture = 0
-            for removed in identities(deliberatelyRemoved + quickOpenWithoutKey) {
+            for removed in identities(deliberatelyRemoved + quickOpenWithoutKey + closeSplitMerged) {
                 if let index = accounted.firstIndex(of: removed) {
                     accounted.remove(at: index)
                     removedRowsInFixture += 1
@@ -1157,8 +1183,9 @@ extension DocumentChecks {
             let current = identities(menuSnapshot)
             check(
                 formerCommands.count == 338
-                    && removedRowsInFixture == deliberatelyRemoved.count + quickOpenWithoutKey.count,
-                "DS-D4 the fixture lists all 338 commands of the fourteen-menu bar, the two rows of the retired recipe automation among them")
+                    && removedRowsInFixture == deliberatelyRemoved.count + quickOpenWithoutKey.count
+                        + closeSplitMerged.count,
+                "DS-D4 the fixture lists all 338 commands of the fourteen-menu bar, the two rows of the retired recipe automation and Close Split View's row among them")
             if !check(
                 current == accounted.sorted(),
                 "DS-D4 every command of the fourteen-menu bar is listed exactly once more in the nine-menu bar, apart from the removals named")
@@ -1513,55 +1540,31 @@ extension DocumentChecks {
                     && document.editor.text == "x\nx\nx\n" && document.editor.revision == untouched,
                 "Cancel in Insert into Each Selection inserts nothing")
             check(explanation.text.isEmpty, "Cancel in Insert into Each Selection shows no explanation")
-            // F12: Go to Line through its real dialog, on the engine's own line model.
+            // F12: Go to Line through its real inline field, on the engine's own line model.
             @MainActor func goToLineDialog(_ entry: String, confirm: Bool = true) -> Bool {
-                var acted = false, timedOut = false
                 explanation.text = ""
-                let deadline = Date().addingTimeInterval(10)
-                let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
-                    MainActor.assumeIsolated {
-                        guard let window = presentedFormWindow, let content = window.contentView else { return }
-                        if Date() > deadline {
-                            timedOut = true
-                            window.performClose(nil)
-                            return
-                        }
-                        let views = descendants(content)
-                        guard
-                            let field = views.compactMap({ $0 as? NSTextField }).first(where: {
-                                $0.identifier?.rawValue == "goToLine.line"
-                            })
-                        else { return }
-                        if acted {
-                            // Invalid input remains in this same modeless form, instead of a replacement alert.
-                            explanation.text =
-                                views.compactMap { $0 as? NSTextField }.first {
-                                    $0.accessibilityLabel()?.hasPrefix("Input needs correction") == true
-                                }?.stringValue ?? ""
-                            check(
-                                field.stringValue == entry && field.accessibilityHelp() != nil,
-                                "DG Go to Line keeps and marks the rejected input")
-                            views.compactMap { $0 as? NSButton }.first { $0.title == "Cancel" }?.performClick(nil)
-                            return
-                        }
-                        guard
-                            let button = views.compactMap({ $0 as? NSButton }).first(where: {
-                                $0.title == (confirm ? "Go" : "Cancel")
-                            })
-                        else { return }
-                        acted = true
-                        window.makeFirstResponder(nil)
-                        field.stringValue = entry
-                        button.performClick(nil)
-                    }
-                }
-                RunLoop.main.add(timer, forMode: .modalPanel)
                 let item = NSMenuItem(title: "Go to Line…", action: nil, keyEquivalent: "")
                 item.representedObject = "goToLine"
                 controller.perform(NSSelectorFromString("statusOption:"), with: item)
-                waitForModelessForms()
-                timer.invalidate()
-                return acted && !timedOut
+                let bar = controller.goToLineBar, field = bar.field
+                guard controller.goToLineBarVisible, presentedFormWindow == nil else { return false }
+                field.stringValue = entry
+                controller.controlTextDidChange(
+                    Notification(name: NSControl.textDidChangeNotification, object: field))
+                guard confirm else {
+                    bar.cancelButton.performClick(nil)
+                    return !controller.goToLineBarVisible
+                }
+                bar.goButton.performClick(nil)
+                if controller.goToLineBarVisible {
+                    // Invalid input remains in this same inline field, instead of an alert.
+                    explanation.text = bar.message.stringValue
+                    check(
+                        field.stringValue == entry && field.accessibilityHelp() != nil,
+                        "DG Go to Line keeps and marks the rejected input")
+                    bar.cancelButton.performClick(nil)
+                }
+                return !controller.goToLineBarVisible
             }
             document.editor.text = "é\r\nbb\rccc\n"
             document.editor.resetUndoHistory()
@@ -1576,7 +1579,7 @@ extension DocumentChecks {
             for entry in ["5", "0", "two", "-1"] {
                 check(
                     goToLineDialog(entry) && document.editor.selectionCaret == 11
-                        && explanation.text.contains("Enter a whole line number from 1 to 4."),
+                        && explanation.text.contains("Lines are 1–4."),
                     "Go to Line \(entry) says that line does not exist and names the valid range")
             }
             check(

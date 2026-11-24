@@ -174,12 +174,16 @@ item, a standard menu toolbar item in the default, customisable toolbar, and fro
 Groups > Editor Group Layout, which stays when the item is removed from the toolbar. Both menus are
 built by the group command owner and show one checkmark. No row sits between the toolbar and the
 tab strips: the group container starts at the top of the editor area. The earlier trailing layout
-picker and its 36-point row are gone; `TabGroupGeometry` still reserves those 36 points in the
-minimum height of a two-row layout, so no minimum shrank. Native dividers enforce
+picker and its 36-point row are gone, and `TabGroupGeometry.minimumContent` no longer reserves them:
+the bare minimum of a two-row or grid layout is 401 points high (two 200-point panes and a divider),
+where it was 437. The window's minimum is still 800 by 500, the larger normal size. Native dividers enforce
 320 x 200 total group bounds with responsive Find/status, shared chrome counted once,
 and screen-aware content/frame fit. Unfittable layout refuses atomically with status
 and announcement. Single retains its normal minimum; no gratuitous shrink. Same layout
-preserves divider ratios; layout changes reset equal shares, with aligned Grid columns.
+preserves divider ratios; layout changes reset equal shares, with aligned Grid columns. When the
+window is resized the Grid's two rows are aligned again after both have their new width, at the first
+row's divider, held between the 320-point minimums: a position is never copied from a row already
+resized to one still at its old width (that left the columns out of line and one under 320 points).
 Visible group-active status work is bounded (no per-Clone job); hidden/retired work stops,
 while recovery/monitoring remain per document. Reference shortcuts remain unassigned
 until conflict verification. Stage 4 extends explicit session persistence below; extra
@@ -307,6 +311,74 @@ window, as its frame does. Restoring an explicit session applies the keys its la
 Physical keyboard, VoiceOver, pointer dragging of the divider and full screen with the sidebar shown
 have not been observed; the native checks drive the same views and commands in an owned window.
 
+## What a tab shows, the mouse and the list of open tabs
+
+A tab's title is the document's name and nothing else. State is drawn beside it, as shapes with
+words behind them, never as a character in the title and never by colour alone (DS-62):
+
+- **Edited.** The close button shows a filled dot instead of its cross. Under the pointer, or while
+  the close button has the keyboard, it shows the cross. It is the same 28 by 28 button with the
+  same action, so a click on the dot closes through the same Save / Don't Save / Cancel review as a
+  click on the cross (DS-12), and an edited tab never looks as if it cannot be closed.
+- **Changed outside TextTank.** A warning triangle between the title and the close button. Its
+  tooltip and accessibility text give the document, the notice and what to do next (DS-70, DS-85).
+- **Selected for comparison.** A pair of opposed arrows in the same place, with its own tooltip.
+- **Pinned** remains the pin in place of the document icon; Source, Preview and Both remain the eye.
+
+A click on a state symbol is a click on its tab; a Control-click or secondary click opens the tab's
+menu. The symbols are 16 points wide with four points on either side, so the title, each symbol, the
+eye and the close button never abut (DS-14, DS-74).
+
+The tab's own accessibility label is one whole string for each combination of what the tab shows,
+pinned and edited ("notes.md, pinned, edited, showing Preview"), and one whole sentence form around it
+for an outside change, for comparison and for the two together ("notes.md, edited. Changed on disk.
+Selected for comparison."), so each can be translated as a whole (DS-84).
+
+**What gives way when a tab is narrow.** Tabs shrink from 220 to 130 points before the strip scrolls.
+From the trailing edge, in order of who keeps their place:
+
+1. the close button, which is also the edited dot: always;
+2. the eye of a tab in Preview or Both: always, because it is state;
+3. the outside-change symbol: always, because it warns that a save may overwrite other work;
+4. the comparison symbol: only while the title keeps 50 points, the width a title has beside the eye
+   at the minimum;
+5. the eye a Source tab shows under the pointer: only while the title keeps 82 points.
+
+So a 130-point tab shows close, and at most one of the two symbols, the outside change first; a
+130-point tab in Preview or Both shows close, the eye and the outside change, and its title keeps 30
+points. Whatever is not drawn is still in the tab's tooltip, its accessibility label and the list of
+open tabs.
+
+**Tooltip.** A tab's tooltip is the file's full path with the home folder written as `~`; a document
+with no file shows its name. When the file changed outside TextTank the notice follows on a second
+line. Only the home folder itself is abbreviated, not a sibling whose name starts the same.
+
+**Mouse.** A click with the other (middle) mouse button closes the tab it is pressed and released
+on, anywhere on the tab, without selecting it first. It goes through the close button's route
+(`WorkspaceWindowController.closeTab`), so unsaved changes get the same review and Cancel leaves
+everything as it was (DS-12). Pressed on one tab and released on another, or on the empty strip, it
+does nothing. A double-click on the empty part of the strip focuses that group and runs the same
+action as File > New. A double-click on a tab is two clicks on that tab and nothing more. A tab's
+controls take their own clicks, so the end of a reorder never counts as a click on the strip. The
+window's frame has first refusal over its inside edge (`FrameTextClick`): a point the frame claims is
+never treated as empty strip, so AppKit's own handling of a double-click there is untouched.
+
+**The list of open tabs.** When a group's tabs are at the 130-point minimum and still do not fit, so
+that its strip scrolls, a chevron pull-down appears at the trailing end of that strip, outside the
+scrolling area: a 28 by 28 target four points from the tabs, which keep their own separated close
+targets (DS-14, DS-74). It is hidden whenever the tabs fit (DS-10). It lists that group's tabs in
+strip order, with a checkmark on the active one; each row's title says in words when the tab is
+pinned or edited ("notes.md, pinned, edited"), a pinned row carries the pin, and a row's tooltip is
+the tab's tooltip (DS-62). Choosing a row selects the tab exactly as a plain click on it does and
+scrolls it into view. Each group has its own list. It is an ordinary system pull-down (DS-11): it
+takes the keyboard with Full Keyboard Access, is the strip's last accessibility child and is labelled
+"Open tabs in this group" (DS-70, DS-73). It is filled when it opens and holds no state of its own.
+
+The native checks for this section are `Tests/TabStripChecks.swift`, run by
+`scripts/test-preview-ui.sh`, which does not need the key window. They press the real controls with
+synthetic events in an owned window. Not observed: a physical pointer, middle button and tooltip
+display, VoiceOver, Full Keyboard Access, and the review sheet of an edited tab closed by the dot or
+the other mouse button (a check may not present a sheet; the route is the close button's own).
 ## Keyboard areas of the window
 
 DS-73 (23 November 2026); DS-20/23/70-72/84 apply. Window > Move Focus holds two commands, Move Focus
@@ -319,7 +391,7 @@ The areas form one ring, visited in this order and back:
 
 1. the Workspace Browser, while it is shown (its list takes the keyboard);
 2. for each editor group in its usual order: the tab strip (the active tab's title), the find bar
-   while it is shown (its Find field), the text, and the status row (its first item);
+   or Go to Line, whichever is shown (its field), the text, and the status row (its first item);
 3. a group with no tabs is one area: its New button.
 
 The text is each pane of a split view in turn. A tab that shows Both offers its source and then its
@@ -336,16 +408,20 @@ standard focus ring (DS-71, DS-72).
 Inside an area the group surface handles the keys its controls pass up:
 
 - Tab strip: Left and Right Arrow move from tab to tab without selecting; Tab and Shift-Tab step
-  through every control, so a tab's mark and close button are reached; Space or Return presses the
-  control (a title selects its tab and puts the keyboard in its text); the strip scrolls only to
-  show the control that has the keyboard.
-- Status row: Left and Right Arrow, or Tab and Shift-Tab, move between the items; Space opens the
-  item's menu.
+  through every control, so a tab's mark and close button are reached, and after the last tab the
+  list of open tabs while the tabs overflow; Space or Return presses the control (a title selects
+  its tab and puts the keyboard in its text); the strip scrolls only to show the control that has
+  the keyboard.
+- Status row: Left and Right Arrow, or Tab and Shift-Tab, move between the items, including More,
+  an operation's Cancel and a follow-up button while they are shown. Space or Return presses a
+  button (position opens Go to Line, language opens the chooser).
+- A pull-down (a status field, More, the list of open tabs) opens with Space only.
 - Empty group: the arrow keys or Tab move between its buttons; Space or Return presses one.
 - Tab past the last control of an area, or Shift-Tab before the first, moves to the next or previous
   area.
 - Escape returns the keyboard to the group's text. In a group with no tabs it returns to the text of
-  a group that has some. In the find bar Escape keeps its own meaning and closes the bar (DS-35).
+  a group that has some. The two bars keep their own Escape on every control: the find bar closes
+  (DS-35), and Go to Line puts the caret, selection and scroll position back and closes.
 
 ## Empty group
 

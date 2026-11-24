@@ -152,6 +152,8 @@ import Darwin
         surface.frame = NSRect(x: 0, y: 0, width: 320, height: 200)
         surface.layoutSubtreeIfNeeded()
         b.showFind(nil)
+        // With the Replace row shown: the tallest the bar gets.
+        b.setReplaceRow(shown: true)
         surface.layoutSubtreeIfNeeded()
         b.presentationRoot.layoutSubtreeIfNeeded()
         let inlineFind = try requireValue(b.findBar, "T3 mounted Find bar")
@@ -835,6 +837,7 @@ import Darwin
         last.restoreClosedTabView(anchor: 2, caret: 6, firstVisibleLine: 0)
         pa.showFind(nil)
         pd.showFind(nil)
+        pd.setReplaceRow(shown: true)
         let ranges = last.selectionRanges
         host.activate(pa)
         check(
@@ -853,7 +856,7 @@ import Darwin
                 && last.selectionRanges == ranges,
             "R1 V3-02 Replace focus updates exact group without stealing Clone selection")
         host.activate(pa)
-        pd.caseBox.performClick(nil)
+        pd.findOptions.toggle(.matchCase)
         check(
             host.model.focusedGroup == .fourth && app.currentDocument === other && pd.activeEditor === last
                 && last.selectionRanges == ranges,
@@ -864,13 +867,13 @@ import Darwin
         check(responderBelongsTo(last), "R2 V3-04 Match Case moves native typing focus to its saved Clone")
         window.makeFirstResponder(pd.findField)
         let findResponder = window.firstResponder
-        pd.caseBox.performClick(nil)
+        pd.findOptions.toggle(.matchCase)
         check(
             window.firstResponder === findResponder && pd.findField.currentEditor() === findResponder,
             "R2 V3-04 Match Case preserves its own Find field editor")
         window.makeFirstResponder(pd.replaceField)
         let replaceResponder = window.firstResponder
-        pd.caseBox.performClick(nil)
+        pd.findOptions.toggle(.matchCase)
         check(
             window.firstResponder === replaceResponder && pd.replaceField.currentEditor() === replaceResponder,
             "R2 V3-04 Match Case preserves its own Replace field editor")
@@ -988,6 +991,7 @@ import Darwin
                     "R3 genuine native primary/Clone focus routes visible group \(slots[index].rawValue)")
             }
             presentation.showFind(nil)
+            presentation.setReplaceRow(shown: true)
             host.activate(other)
             check(
                 window.makeFirstResponder(presentation.findField)

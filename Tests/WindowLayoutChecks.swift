@@ -326,6 +326,67 @@ import EditorBridge
             [WindowAreaFocusController.nextTitle, WindowAreaFocusController.previousTitle].allSatisfy { title in
                 palette.filter { $0.path == "Window › Move Focus › " + title && $0.row.enabled }.count == 1
             }, "the Command Palette lists both commands once each")
+        // The whole golden menu tree is the menu bar as built, every menu and every row.
+        let listedRows = expected.filter { ($0["position"] ?? "").split(separator: ".").count == 2 }.count
+        // AppKit also puts a separator before the windows it lists at the end of the Window menu.
+        let liveBar = rows(bar, path: []).filter { $0["action"] != "makeKeyAndOrderFront:" }.filter {
+            !($0["action"] == "" && $0["title"] == "" && $0["position"] == "\(windowIndex).\(listedRows)")
+        }
+        let known = Set(fixture), built = Set(liveBar)
+        let stray = liveBar.filter { !known.contains($0) }, absent = fixture.filter { !built.contains($0) }
+        if !check(stray.isEmpty && absent.isEmpty, "the whole menu fixture equals the menu bar as built in this host") {
+            print(
+                "NOTE menu rows not in the fixture: \(stray.prefix(8)); fixture rows not in the menu: \(absent.prefix(8))"
+            )
+        }
+
+        // Settings > Shortcuts: both commands can be given a key, and their defaults give way.
+        let catalog = ShortcutCatalog.catalog(in: bar)
+        let nextID = try requireValue(ShortcutCatalog.identifier(for: next), "fixture: Next Area identifier")
+        let entries = catalog.entries.filter { $0.item === next || $0.item === previous }
+        check(
+            entries.map(\.title) == [
+                "Window › Move Focus › Move Focus to Next Area", "Window › Move Focus › Move Focus to Previous Area"
+            ]
+                && entries.allSatisfy { $0.kind == .assignable(yields: true) }
+                && entries.map { $0.standard?.displayText ?? "" } == ["F6", "⇧F6"]
+                && entries.map { $0.standard?.spokenText ?? "" } == ["F6", "Shift-F6"],
+            "the Shortcuts list shows both commands with F6 and Shift-F6, assignable, as defaults that give way: \(entries.map { "\($0.title) \($0.kind) \($0.standard?.displayText ?? "-")" })"
+        )
+        check(
+            aliases.map { alias in catalog.aliases.first { $0.item === alias }?.standard }
+                == [WindowAreaFocusController.nextAlternate, WindowAreaFocusController.previousAlternate],
+            "their second keys are known to the shortcut model as aliases, which give way to an assigned key")
+        let pressF6 = try key(97, f6, [.function], in: window)
+        let pressShiftF6 = try key(97, f6, [.function, .shift], in: window)
+        check(
+            MenuShortcut(pressF6) == WindowAreaFocusController.nextShortcut
+                && MenuShortcut(pressShiftF6) == WindowAreaFocusController.previousShortcut
+                && ShortcutPolicy.refusal(for: WindowAreaFocusController.nextShortcut) == nil
+                && ShortcutPolicy.refusal(for: WindowAreaFocusController.nextAlternate) == nil,
+            "a pressed function key is recorded as that key, and none of the four keys is refused")
+        var assigned = app.settings.value
+        assigned.assignShortcut(MenuShortcut("j", [.command, .control]), to: nextID, in: catalog.context)
+        ShortcutCatalog.apply(assigned, to: bar)
+        check(
+            next.keyEquivalent == "j" && next.keyEquivalentModifierMask == [.command, .control]
+                && previous.keyEquivalent == f6 && aliases.map(\.keyEquivalent) == ["`", "~"],
+            "a shortcut assigned to Move Focus to Next Area replaces F6 on its item only")
+        var taken = app.settings.value
+        let upperID = EditorCommand.upper.rawValue
+        taken.assignShortcut(
+            WindowAreaFocusController.nextShortcut, to: upperID, replacing: [nextID], in: catalog.context)
+        ShortcutCatalog.apply(taken, to: bar)
+        check(
+            next.keyEquivalent.isEmpty && previous.keyEquivalent == f6
+                && allItems(bar).contains { $0.representedObject as? String == upperID && $0.keyEquivalent == f6 },
+            "F6 given to another command leaves Move Focus to Next Area without it")
+        ShortcutCatalog.apply(app.settings.value, to: bar)
+        check(
+            next.keyEquivalent == f6 && next.keyEquivalentModifierMask == []
+                && previous.keyEquivalentModifierMask == [.shift]
+                && aliases.map(\.keyEquivalent) == ["`", "~"],
+            "fixture: the default keys are back")
 
         // One group, one tab showing Source: tabs, text, status.
         check(
@@ -396,6 +457,16 @@ import EditorBridge
         browser.outline.keyDown(with: try key(53, "\u{1B}", in: window))
         check(keyboard(in: editor) && host.isSidebarShown, "Escape in the sidebar returns the keyboard to the text")
         browser.hide()
+        // Escape on a button of the find bar closes the bar, as it does in the Find field (DS-35).
+        let findBar = try requireValue(plainTab.findBar, "fixture: find bar")
+        let findButton = try requireValue(
+            EditorGroupSurface.controls(in: findBar).first, "fixture: a button in the find bar")
+        window.makeFirstResponder(findButton)
+        check(current() == .findBar, "a button of the find bar is in the find bar's area")
+        findButton.keyDown(with: try key(53, "\u{1B}", in: window))
+        check(
+            !plainTab.findBarVisible && keyboard(in: editor) && snapshot() == shown,
+            "Escape there closes the find bar and returns the keyboard to the text")
         plainTab.hideFind(nil)
         window.makeFirstResponder(plainTab.keyboardFocusView)
         check(kinds() == [.tabs, .text, .status], "hidden again, they leave the ring")
@@ -476,6 +547,85 @@ import EditorBridge
         check(current() == .status, "fixture: back in the status row")
         surface.keyDown(with: try key(53, "\u{1B}", in: window))
         check(keyboard(in: editor) && snapshot() == before, "Escape in the status row returns the keyboard to the text")
+        // The status row's buttons run one command; Return presses them. Position opens Go to Line.
+        focus.move(1)
+        let position = try requireValue(
+            surface.statusControls.first {
+                !($0 is NSPopUpButton) && ($0.identifier?.rawValue ?? "").hasPrefix("status.position")
+            },
+            "the position item is a button among the status row's keyboard stops: \(surface.statusControls.map { $0.accessibilityLabel() ?? "" })"
+        )
+        check(
+            surface.statusControls.contains { $0 is NSPopUpButton },
+            "the pull-down fields are keyboard stops too")
+        window.makeFirstResponder(position)
+        surface.keyDown(with: try key(36, "\r", in: window))
+        window.contentView?.layoutSubtreeIfNeeded()
+        check(
+            plainTab.goToLineBarVisible && kinds() == [.tabs, .goToLine, .text, .status] && current() == .goToLine
+                && keyboard(in: plainTab.goToLineBar.field),
+            "Return on the position button opens Go to Line, which joins the ring while it is shown: \(kinds())")
+        // Round the ring and back into the bar by the command.
+        window.makeFirstResponder(plainTab.goToLineBar.cancelButton)
+        check(current() == .goToLine, "the bar's buttons belong to its area")
+        plainTab.goToLineBar.field.stringValue = "300"
+        plainTab.goToLineBar.cancelButton.keyDown(with: try key(53, "\u{1B}", in: window))
+        check(
+            !plainTab.goToLineBarVisible && keyboard(in: editor) && snapshot() == before,
+            "Escape on a button of Go to Line closes it and puts the caret, selection and scroll position back")
+        plainTab.goToLine(nil)
+        window.contentView?.layoutSubtreeIfNeeded()
+        window.makeFirstResponder(plainTab.keyboardFocusView)
+        settle(0.1)
+        if plainTab.goToLineBarVisible {
+            focus.move(-1)
+            check(
+                current() == .goToLine && focus.lastAnnouncement == "Go to Line.",
+                "Move Focus reaches Go to Line and names it")
+            plainTab.cancelGoToLine(nil)
+        } else {
+            check(
+                kinds() == [.tabs, .text, .status], "Go to Line closes when the keyboard leaves it, and leaves the ring"
+            )
+        }
+        window.makeFirstResponder(plainTab.keyboardFocusView)
+        check(
+            !plainTab.goToLineBarVisible && snapshot() == before,
+            "fixture: Go to Line is closed and the editor is as it was")
+        // An operation's Cancel button and a follow-up are stops while they are shown.
+        let center = StatusOperationCenter.shared
+        let delay = center.revealDelay
+        center.revealDelay = 0
+        let operation = center.begin("Checking the fixture", in: editor, cancelLabel: "Cancel the fixture check") {}
+        window.contentView?.layoutSubtreeIfNeeded()
+        check(
+            surface.statusControls.contains { $0.identifier?.rawValue == StatusBadgeRow.cancelIdentifier },
+            "while an operation runs its Cancel button is one of the status row's keyboard stops: \(surface.statusControls.map { $0.identifier?.rawValue ?? "" })"
+        )
+        center.end(operation)
+        center.revealDelay = delay
+        window.contentView?.layoutSubtreeIfNeeded()
+        // Narrow: the fields that do not fit move into More, which is the last stop.
+        window.setContentSize(NSSize(width: 800, height: 700))
+        check(host.setEditorLayout(.twoColumns), "fixture: two columns, so the status row is narrow")
+        window.contentView?.layoutSubtreeIfNeeded()
+        let narrow = surface.statusControls
+        if let more = narrow.first(where: { $0.identifier?.rawValue == StatusBadgeRow.overflowIdentifier }) {
+            window.makeFirstResponder(narrow[0])
+            for _ in 1..<narrow.count { surface.keyDown(with: try key(124, right, in: window)) }
+            check(
+                narrow.last === more && window.firstResponder === more && more.focusRingType != .none,
+                "in a narrow group the More pull-down is the row's last stop and the arrow keys reach it")
+            surface.keyDown(with: try key(36, "\r", in: window))
+            check(window.firstResponder === more, "Return does not open a pull-down; Space does")
+        } else {
+            print("NOTE the status row showed no More pull-down at \(surface.bounds.width) points")
+        }
+        check(host.setEditorLayout(.single), "fixture: one group again")
+        window.setContentSize(NSSize(width: 1400, height: 700))
+        window.contentView?.layoutSubtreeIfNeeded()
+        window.makeFirstResponder(plainTab.keyboardFocusView)
+        check(snapshot() == before, "fixture: the editor is as it was")
 
         // With nothing holding the keyboard the first move reaches the text.
         window.makeFirstResponder(nil)
@@ -507,6 +657,41 @@ import EditorBridge
             "a whole round leaves the tab in Preview: the hidden source never took the keyboard")
         check(notesTab.setViewMode(.source), "fixture: notes.md shows Source")
         host.activate(plainTab)
+
+        // More tabs than fit: the list of open tabs is the strip's last keyboard stop.
+        let extras = try (1...9).map { try open("extra-\($0).txt", "extra\n", in: folder).1 }
+        host.activate(plainTab)
+        window.setContentSize(NSSize(width: 800, height: 700))
+        window.contentView?.layoutSubtreeIfNeeded()
+        let list = surface.strip.openTabListButton
+        check(surface.strip.showsOpenTabList, "fixture: eleven tabs overflow an 800-point strip")
+        let crowded = surface.tabControls
+        check(
+            crowded.last === list && list.accessibilityLabel() == "Open tabs in this group",
+            "the list of open tabs is the last keyboard stop of the tab area (DS-70): \(crowded.suffix(2).map { $0.accessibilityLabel() ?? "" })"
+        )
+        window.makeFirstResponder(crowded[crowded.count - 2])
+        surface.keyDown(with: try key(48, "\t", in: window))
+        check(
+            window.firstResponder === list && current() == .tabs,
+            "Tab from the last tab's close button reaches it, still in the tab area")
+        surface.keyDown(with: try key(36, "\r", in: window))
+        surface.keyDown(with: try key(123, left, in: window))
+        let lastTitle = crowded.last {
+            ($0.identifier?.rawValue ?? "").hasPrefix("tab.")
+                && !($0.identifier?.rawValue ?? "").hasPrefix("tab.viewMode.")
+        }
+        check(
+            window.firstResponder === lastTitle && host.model.activeTab?.id == plainID,
+            "Return leaves the pull-down closed; Left Arrow from it moves to the last tab's title, selecting nothing")
+        window.makeFirstResponder(list)
+        surface.keyDown(with: try key(48, "\t", in: window))
+        check(current() == .text, "Tab past it leaves the tab area")
+        extras.forEach { ($0.document as? TextDocument)?.close() }
+        window.setContentSize(NSSize(width: 1400, height: 700))
+        window.contentView?.layoutSubtreeIfNeeded()
+        host.activate(plainTab)
+        window.makeFirstResponder(plainTab.keyboardFocusView)
 
         // Two groups: the second group's areas follow the first group's.
         check(host.setEditorLayout(.twoColumns), "fixture: two editor groups")
@@ -671,6 +856,26 @@ import EditorBridge
         surface.refresh()
         window.contentView?.layoutSubtreeIfNeeded()
         check(shownRows() == live, "fixture: the default keys are back")
+        // A shortcut recorded in Settings > Shortcuts for Quick Open is the key its row shows.
+        let context = ShortcutCatalog.catalog(in: bar).context
+        let quickOpenID = try requireValue(ShortcutCatalog.identifier(for: items[2]), "fixture: Quick Open identifier")
+        var withKey = app.settings.value
+        let eighth = MenuShortcut(String(UnicodeScalar(UInt32(NSF8FunctionKey))!), [.shift])
+        withKey.assignShortcut(eighth, to: quickOpenID, in: context)
+        ShortcutCatalog.apply(withKey, to: bar)
+        surface.refresh()
+        window.contentView?.layoutSubtreeIfNeeded()
+        check(
+            eighth.displayText.hasPrefix("⇧") && eighth.spokenText.hasPrefix("Shift-")
+                && eighth.displayText.hasSuffix("8")
+                && shownRows()[2] == "Press \(eighth.displayText) for Quick Open, to find a file by name."
+                && surface.hintRows[2].accessibilityLabel()
+                    == "Press \(eighth.spokenText) for Quick Open, to find a file by name.",
+            "a function key assigned to Quick Open in the shortcut model is what its row shows: \(shownRows())")
+        ShortcutCatalog.apply(app.settings.value, to: bar)
+        surface.refresh()
+        window.contentView?.layoutSubtreeIfNeeded()
+        check(shownRows() == live, "fixture: the default keys are back again")
 
         // Recent files: none in an isolated host unless the check supplies them.
         check(
@@ -757,6 +962,50 @@ import EditorBridge
         opened.close()
         window.contentView?.layoutSubtreeIfNeeded()
         check(surface.emptyGroupArea != nil, "fixture: the second group is empty again")
+
+        // A grid set up in a wide window and then shrunk keeps its columns in line and no group
+        // below its minimum (the two rows used to be left at different divider positions).
+        window.setContentSize(NSSize(width: 1400, height: 700))
+        check(host.setEditorLayout(.grid2x2), "fixture: four groups in a wide window")
+        window.contentView?.layoutSubtreeIfNeeded()
+        func groupFrames() -> [NSRect] {
+            GroupSlot.allCases.compactMap { host.groupSurfaces[$0] }.map { $0.convert($0.bounds, to: nil) }
+        }
+        func aligned(_ frames: [NSRect]) -> Bool {
+            frames.count == 4 && abs(frames[0].width - frames[2].width) < 0.5
+                && abs(frames[1].minX - frames[3].minX) < 0.5
+                && frames.allSatisfy {
+                    $0.width >= CGFloat(TabGroupGeometry.minimumPane.width) - 0.5
+                        && $0.height >= CGFloat(TabGroupGeometry.minimumPane.height) - 0.5
+                }
+        }
+        window.setContentSize(NSSize(width: 800, height: 500))
+        window.contentView?.layoutSubtreeIfNeeded()
+        check(
+            aligned(groupFrames()) && abs(groupFrames()[0].width - 400) < 1.5,
+            "a grid shrunk from 1400 to 800 points keeps both rows' columns in line, at equal shares, none under 320: \(groupFrames().map { NSStringFromRect($0) })"
+        )
+        // A divider the person moved keeps its share of the width when the window is resized.
+        window.setContentSize(NSSize(width: 1400, height: 700))
+        window.contentView?.layoutSubtreeIfNeeded()
+        let columns = host.groupContainer.dividers.filter(\.isVertical)
+        columns[0].setPosition(1000, ofDividerAt: 0)
+        window.contentView?.layoutSubtreeIfNeeded()
+        check(
+            aligned(groupFrames()) && abs(groupFrames()[0].width - 1000) < 1,
+            "moving one row's column divider moves the other row's with it: \(groupFrames().map { NSStringFromRect($0) })"
+        )
+        window.setContentSize(NSSize(width: 800, height: 500))
+        window.contentView?.layoutSubtreeIfNeeded()
+        check(
+            aligned(groupFrames()) && abs(groupFrames()[1].width - 320) < 1.5,
+            "shrunk again, the wide column keeps as much of its share as the other's 320-point minimum allows: \(groupFrames().map { NSStringFromRect($0) })"
+        )
+        window.setContentSize(NSSize(width: 1400, height: 700))
+        window.contentView?.layoutSubtreeIfNeeded()
+        check(
+            aligned(groupFrames()),
+            "and wide again the rows are still in line: \(groupFrames().map { NSStringFromRect($0) })")
 
         // The minimum group size: rows that do not fit are hidden, never clipped (DS-67).
         check(host.setEditorLayout(.single), "fixture: one group before the window shrinks")

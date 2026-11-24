@@ -181,6 +181,9 @@ private func seconds(_ work: () -> Void) -> Double {
             Checks.section("Markdown fixtures") { try checkMarkdownFixtures() }
             Checks.section("Markdown scroll map") { try checkScrollMap() }
             Checks.section("scroll sync setting") { try checkScrollSyncSetting() }
+            Checks.section("change bars, centered column and the Close Split View shortcut") {
+                try checkViewRegroupSettings()
+            }
             Checks.section("Markdown constructs") { checkMarkdownConstructs() }
             Checks.section("Markdown safety") { try checkMarkdownSafety() }
             Checks.section("Markdown bounds") { checkMarkdownBounds() }
@@ -674,6 +677,85 @@ private func seconds(_ work: () -> Void) -> Double {
         check(
             store.value.syncsPreviewScrolling && SettingsStore(url: url).value.syncsPreviewScrolling,
             "and it switches on again")
+    }
+
+    /// The stored keys of DS-D13 (change bars, the centered text column) and the shortcut a
+    /// person saved for Close Split View before that command lost its menu row.
+    static func checkViewRegroupSettings() throws {
+        let fresh = EditorSettings()
+        let freshJSON = try JSONSerialization.jsonObject(with: JSONEncoder().encode(fresh)) as? [String: Any]
+        check(
+            !fresh.changeBarsEnabled && !fresh.centeredColumnEnabled && fresh.centeredColumnCharacters == 90
+                && freshJSON?["changeBars"] == nil && freshJSON?["centeredColumn"] == nil
+                && freshJSON?["centeredColumnWidth"] == nil,
+            "change bars and the centered column are off by default, 90 characters wide, and default settings are written without the members")
+        let older = try EditorSettings.decode(
+            Data(contentsOf: TestPaths.fixtures.appendingPathComponent("persistence/Settings.json")))
+        check(
+            !older.changeBarsEnabled && !older.centeredColumnEnabled && older.centeredColumnCharacters == 90,
+            "an earlier settings file with none of the keys reads as off, as before")
+        func settings(_ members: String, version: Int = 1, shortcuts: String = "{}") -> Data {
+            Data(
+                (#"{"tabWidth":4,"wrap":false,"useTabs":true,"version":\#(version),"appearance":"system","shortcuts":\#(shortcuts)"#
+                    + (members.isEmpty ? "" : "," + members) + "}").utf8)
+        }
+        let chosen = try EditorSettings.decode(
+            settings(#""changeBars":true,"centeredColumn":true,"centeredColumnWidth":72"#))
+        check(
+            chosen.changeBarsEnabled && chosen.centeredColumnEnabled && chosen.centeredColumnCharacters == 72
+                && EditorViewPreference.changeBars.enabled(in: chosen)
+                && EditorViewPreference.centeredColumn.enabled(in: chosen)
+                && EditorViewPreference.changeBars.rawValue == "changeBars"
+                && EditorViewPreference.centeredColumn.rawValue == "centeredColumn",
+            "the stored choices are read, and each View command writes the member of its own name")
+        check(
+            try EditorSettings.decode(settings(#""centeredColumnWidth":12"#)).centeredColumnCharacters == 40
+                && EditorSettings.decode(settings(#""centeredColumnWidth":9000"#)).centeredColumnCharacters == 240
+                && EditorSettings.decode(settings(#""centeredColumnWidth":null"#)).centeredColumnCharacters == 90,
+            "a stored width outside 40 to 240 is read as the nearest bound; null is the default")
+        for (label, members) in [
+            ("text for changeBars", #""changeBars":"yes""#), ("a number for centeredColumn", #""centeredColumn":1"#),
+            ("a fraction for centeredColumnWidth", #""centeredColumnWidth":90.5"#)
+        ] {
+            rejects("\(label) fails the settings file, as any member of the wrong type does") {
+                _ = try EditorSettings.decode(settings(members))
+            }
+        }
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "ViewRegroup-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appendingPathComponent("Settings.json")
+        try settings(#""futureMember":[1,2.50]"#).write(to: url)
+        let store = SettingsStore(url: url)
+        try store.updateViewPreference(.changeBars) { !$0 }
+        try store.updateViewPreference(.centeredColumn) { !$0 }
+        let written = String(decoding: try Data(contentsOf: url), as: UTF8.self)
+        check(
+            store.value.changeBarsEnabled && store.value.centeredColumnEnabled
+                && written.contains(#""changeBars":true"#) && written.contains(#""centeredColumn":true"#)
+                && written.contains(#""futureMember":[1,2.50]"#) && SettingsStore(url: url).value == store.value,
+            "each toggle writes its one member, keeps the rest of the file and survives a round trip")
+
+        // Close Split View's saved shortcut, in a context that lists Split Tab View and not it.
+        let context = ShortcutContext(
+            commands: ["clone:": .init(title: "View › Split Tab View")], fixed: [:], isComplete: true)
+        func load(_ shortcuts: String) throws -> (settings: EditorSettings, issues: [ShortcutLoadIssue]) {
+            try EditorSettings.load(settings("", version: 2, shortcuts: shortcuts), context: context)
+        }
+        let moved = try load(#"{"closeSplit:":"ctrl+opt+k"}"#)
+        let kept = try load(#"{"closeSplit:":"ctrl+opt+k","clone:":"ctrl+opt+j"}"#)
+        let unknown = try load(#"{"noSuchCommand:":"ctrl+opt+k"}"#)
+        check(
+            moved.settings.shortcuts == ["clone:": "ctrl+opt+k"] && moved.issues.isEmpty
+                && moved.settings.effectiveShortcut(for: "clone:", in: context)?.storedText == "ctrl+opt+k",
+            "a shortcut saved for Close Split View is read as Split Tab View's, with no ignored-shortcut notice")
+        check(
+            kept.settings.shortcuts == ["clone:": "ctrl+opt+j"] && kept.issues.isEmpty,
+            "Split Tab View's own saved shortcut wins, and the retired entry is dropped quietly")
+        check(
+            unknown.settings.shortcuts.isEmpty && unknown.issues.map(\.reason) == [.unavailable],
+            "control: a shortcut for a command that never existed is still reported as ignored")
     }
 
     /// Small inputs with the output the CommonMark specification gives for them, plus the

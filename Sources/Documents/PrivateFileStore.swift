@@ -13,6 +13,7 @@ package enum AppStorage {
         case folderReplacements = "FolderReplacements"
         case commandRecents = "CommandPaletteRecents.json"
         case localHistory = "LocalHistory"
+        case languageRecents = "LanguageRecents.json"
         package var isDirectory: Bool {
             self == .recovery || self == .reminders || self == .folderReplacements || self == .localHistory
         }
