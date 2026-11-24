@@ -44,7 +44,7 @@ import EditorBridge
         return (enabled, item.state)
     }
     private static func descendants<View: NSView>(of view: NSView, as type: View.Type) -> [View] {
-        view.subviews.flatMap { ($0 as? View).map { [$0] } ?? [] + descendants(of: $0, as: type) }
+        view.subviews.flatMap { (($0 as? View).map { [$0] } ?? []) + descendants(of: $0, as: type) }
     }
     /// The settings file as it is on disk; empty when there is none yet.
     private static func stored(_ app: AppDelegate) -> [String: Any] {
@@ -163,6 +163,31 @@ import EditorBridge
             let position = row["position"] ?? ""
             return position.hasPrefix("\(viewIndex).") && !dynamicPrefixes.contains { position.hasPrefix($0) }
         }
+        // The two submenus other checks own, compared here too. Syntax Highlighting lists the
+        // bundled languages; Editor Groups follows the open tabs, so its rows are only reported.
+        func subtree(_ title: String) -> (live: [[String: String]], golden: [[String: String]]) {
+            guard let index = view.items.firstIndex(where: { $0.title == title }), let menu = view.items[index].submenu
+            else { return ([], []) }
+            func whole(_ menu: NSMenu, _ path: [Int]) -> [[String: String]] {
+                menu.items.enumerated().flatMap { offset, item -> [[String: String]] in
+                    let position = path + [offset]
+                    let row: [String: String] = [
+                        "position": position.map(String.init).joined(separator: "."), "title": item.title,
+                        "action": item.action.map(NSStringFromSelector) ?? "", "key": item.keyEquivalent,
+                        "modifiers": String(item.keyEquivalentModifierMask.rawValue),
+                        "target": item.target == nil ? "responder" : "explicit",
+                        "object": item.representedObject.map { String(describing: $0) } ?? ""
+                    ]
+                    return [row] + (item.submenu.map { whole($0, position) } ?? [])
+                }
+            }
+            menu.delegate?.menuNeedsUpdate?(menu)
+            let prefix = "\(viewIndex).\(index)."
+            return (whole(menu, [viewIndex, index]), fixture.filter { ($0["position"] ?? "").hasPrefix(prefix) })
+        }
+        let languages = subtree("Syntax Highlighting"), groups = subtree("Editor Groups")
+        print("NOTE Syntax Highlighting rows: live \(languages.live.count), fixture \(languages.golden.count), equal \(languages.live == languages.golden); differing \(languages.live.filter { !languages.golden.contains($0) }.prefix(4)) / \(languages.golden.filter { !languages.live.contains($0) }.prefix(4))")
+        print("NOTE Editor Groups rows: live \(groups.live.count), fixture \(groups.golden.count), equal \(groups.live == groups.golden); differing \(groups.live.filter { !groups.golden.contains($0) }.prefix(4)) / \(groups.golden.filter { !groups.live.contains($0) }.prefix(4))")
         check(
             dynamicPrefixes.count == 2 && live == golden,
             "DS-D13 the View rows of Tests/Fixtures/menu-tree.json are the menu as it is built (differing: \(live.filter { !golden.contains($0) }.prefix(6)) / \(golden.filter { !live.contains($0) }.prefix(6)))")
@@ -461,6 +486,39 @@ import EditorBridge
             editor.text == text && !document.isDocumentEdited && !editor.wrap,
             "the document, its edited state and Wrap Lines are untouched")
 
+        // The find bar, its Replace row, the inline Go to Line bar and the status row are above
+        // and below the text: they change its height, never its width or its margins.
+        var bars = app.settings.value
+        bars.changeBars = true
+        try app.settings.save(bars)
+        // The gutter takes its new width, and the text area gives it up, at the next drawing pass.
+        host.window?.displayIfNeeded()
+        let withBars = (editor.textMarginLeft, editor.textMarginRight, textArea(editor))
+        func undisturbed() -> Bool {
+            host.window?.contentView?.layoutSubtreeIfNeeded()
+            host.window?.displayIfNeeded()
+            return centered(editor, 90) && (editor.textMarginLeft, editor.textMarginRight, textArea(editor)) == withBars
+                && editor.changeBarsVisible && editor.changeTrackingActive
+        }
+        check(centered(editor, 90) && withBars.2 == textArea(editor), "with change bars shown the column is centred in the text area beside the wider gutter")
+        tab.showFind(nil)
+        let findOnly = tab.findBarVisible && undisturbed()
+        tab.replaceDisclosure.performClick(nil)
+        let withReplace = tab.replaceRowShown && undisturbed()
+        tab.goToLine(nil)
+        let withGoToLine = tab.goToLineBarVisible && undisturbed()
+        tab.closeGoToLineBar(restoring: true, returningKeyboard: true)
+        tab.closeFindBar(returningKeyboard: true)
+        check(
+            findOnly && withReplace && withGoToLine && !tab.findBarVisible && !tab.goToLineBarVisible && undisturbed(),
+            "showing and hiding the find bar, its Replace row and the inline Go to Line bar leaves the column's margins and the change-bar margin as they were (find \(findOnly), replace \(withReplace), go to line \(withGoToLine))")
+        bars.changeBars = nil
+        try app.settings.save(bars)
+        // The gutter gives its width back on the next turn of the run loop, when it is drawn.
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        host.window?.display()
+        check(centered(editor, 90) && textArea(editor) > withBars.2, "fixture: change bars off again, and the column recentred in the wider text area")
+
         // Zoom, the stored width, a split and the font each move the margins.
         let wide = editor.textMarginLeft
         editor.zoomLevel += 3
@@ -508,6 +566,15 @@ import EditorBridge
         check(
             box.state == .on && field.stringValue == "60" && field.accessibilityLabel() == "Column width (characters)",
             "DS-70 Settings shows the toggle and the labelled width")
+        func rowView(_ id: String) -> NSView? {
+            descendants(of: content, as: NSView.self).first { $0.identifier?.rawValue == id + ".row" }
+        }
+        let appearanceRows = [
+            "settings.showLineEndings", "settings.changeBars", "settings.centeredColumn", "settings.centeredColumn.width"
+        ].map(rowView)
+        check(
+            appearanceRows.allSatisfy { $0 != nil } && Set(appearanceRows.compactMap { $0?.superview }.map(ObjectIdentifier.init)).count == 1,
+            "the Change Bars, Centered Text Column and width rows are in the Appearance pane with the other rows")
         func commit(_ value: String) {
             field.stringValue = value
             if let action = field.action { _ = NSApp.sendAction(action, to: field.target, from: field) }

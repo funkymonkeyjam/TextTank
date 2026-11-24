@@ -180,7 +180,9 @@ struct BulkChangeReceipt: Sendable {
     var counts: String { "\(beforeLines) → \(afterLines) lines, \(beforeBytes) → \(afterBytes) bytes"
     }
     var summary: String {
-        return "\(name) · \(counts). " + (before == nil ? "Comparison exceeds the \(SizePolicy.describe(SizePolicy.standard.reviewText)) limit." : "Show Changes is in the save status menu at the left of the status bar.")
+        // The follow-up is the Show Changes button in the status row, not an instruction here.
+        return "\(name) · \(counts)."
+            + (before == nil ? " Comparison exceeds the \(SizePolicy.describe(SizePolicy.standard.reviewText)) limit." : "")
     }
 }
 @MainActor struct BulkChangeCapture {
@@ -208,6 +210,6 @@ struct BulkChangeReceipt: Sendable {
         let receipt = BulkChangeReceipt(name: name, beforeBytes: beforeBytes, afterBytes: afterBytes,
             beforeLines: beforeLines, afterLines: editor.lineCount, before: comparable ? before : nil, after: after)
         document.bulkReceipt = receipt
-        document.presentation?.showTransientStatus(receipt.summary, compactMessage: receipt.counts)
+        document.presentation?.showBulkChange(receipt)
     }
 }

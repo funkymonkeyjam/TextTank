@@ -1158,9 +1158,14 @@ extension DocumentChecks {
                     "target": "explicit",
                 ],
             ]
+            // Added on 23 November 2026: View > Syntax Highlighting > Choose Language…, the
+            // filterable chooser the status bar's language field also opens. Nothing was removed.
+            let chooseLanguageAdded: [[String: String]] = [
+                ["action": "chooseLanguage:", "object": "", "key": "", "modifiers": "1048576", "target": "explicit"]
+            ]
             var accounted = identities(
                 formerCommands + deliberatelyAdded + togglePreviewAdded + quickOpenWithKey + localHistoryAdded
-                    + viewRegroupAdded)
+                    + viewRegroupAdded + chooseLanguageAdded)
             var removedRowsInFixture = 0
             for removed in identities(deliberatelyRemoved + quickOpenWithoutKey + closeSplitMerged) {
                 if let index = accounted.firstIndex(of: removed) {
@@ -1528,55 +1533,31 @@ extension DocumentChecks {
                     && document.editor.text == "x\nx\nx\n" && document.editor.revision == untouched,
                 "Cancel in Insert into Each Selection inserts nothing")
             check(explanation.text.isEmpty, "Cancel in Insert into Each Selection shows no explanation")
-            // F12: Go to Line through its real dialog, on the engine's own line model.
+            // F12: Go to Line through its real inline field, on the engine's own line model.
             @MainActor func goToLineDialog(_ entry: String, confirm: Bool = true) -> Bool {
-                var acted = false, timedOut = false
                 explanation.text = ""
-                let deadline = Date().addingTimeInterval(10)
-                let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
-                    MainActor.assumeIsolated {
-                        guard let window = presentedFormWindow, let content = window.contentView else { return }
-                        if Date() > deadline {
-                            timedOut = true
-                            window.performClose(nil)
-                            return
-                        }
-                        let views = descendants(content)
-                        guard
-                            let field = views.compactMap({ $0 as? NSTextField }).first(where: {
-                                $0.identifier?.rawValue == "goToLine.line"
-                            })
-                        else { return }
-                        if acted {
-                            // Invalid input remains in this same modeless form, instead of a replacement alert.
-                            explanation.text =
-                                views.compactMap { $0 as? NSTextField }.first {
-                                    $0.accessibilityLabel()?.hasPrefix("Input needs correction") == true
-                                }?.stringValue ?? ""
-                            check(
-                                field.stringValue == entry && field.accessibilityHelp() != nil,
-                                "DG Go to Line keeps and marks the rejected input")
-                            views.compactMap { $0 as? NSButton }.first { $0.title == "Cancel" }?.performClick(nil)
-                            return
-                        }
-                        guard
-                            let button = views.compactMap({ $0 as? NSButton }).first(where: {
-                                $0.title == (confirm ? "Go" : "Cancel")
-                            })
-                        else { return }
-                        acted = true
-                        window.makeFirstResponder(nil)
-                        field.stringValue = entry
-                        button.performClick(nil)
-                    }
-                }
-                RunLoop.main.add(timer, forMode: .modalPanel)
                 let item = NSMenuItem(title: "Go to Line…", action: nil, keyEquivalent: "")
                 item.representedObject = "goToLine"
                 controller.perform(NSSelectorFromString("statusOption:"), with: item)
-                waitForModelessForms()
-                timer.invalidate()
-                return acted && !timedOut
+                let bar = controller.goToLineBar, field = bar.field
+                guard controller.goToLineBarVisible, presentedFormWindow == nil else { return false }
+                field.stringValue = entry
+                controller.controlTextDidChange(
+                    Notification(name: NSControl.textDidChangeNotification, object: field))
+                guard confirm else {
+                    bar.cancelButton.performClick(nil)
+                    return !controller.goToLineBarVisible
+                }
+                bar.goButton.performClick(nil)
+                if controller.goToLineBarVisible {
+                    // Invalid input remains in this same inline field, instead of an alert.
+                    explanation.text = bar.message.stringValue
+                    check(
+                        field.stringValue == entry && field.accessibilityHelp() != nil,
+                        "DG Go to Line keeps and marks the rejected input")
+                    bar.cancelButton.performClick(nil)
+                }
+                return !controller.goToLineBarVisible
             }
             document.editor.text = "é\r\nbb\rccc\n"
             document.editor.resetUndoHistory()
@@ -1591,7 +1572,7 @@ extension DocumentChecks {
             for entry in ["5", "0", "two", "-1"] {
                 check(
                     goToLineDialog(entry) && document.editor.selectionCaret == 11
-                        && explanation.text.contains("Enter a whole line number from 1 to 4."),
+                        && explanation.text.contains("Lines are 1–4."),
                     "Go to Line \(entry) says that line does not exist and names the valid range")
             }
             check(

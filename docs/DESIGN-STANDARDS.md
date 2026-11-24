@@ -179,7 +179,8 @@ Owner decision, 23 November 2026:
   Find share its text with the system find pasteboard. The Find and Replace window (Option-Command-F) adds
   scopes, modes and results; while it is open, Find Next and Find Previous act on it. The bar and the
   window show one Find text and one replacement, live, and offer one history of the last ten of each. A
-  new launch starts in Normal mode with an empty Find field.
+  new launch starts in Normal mode with an empty Find field. The bar is one row; its Replace row is
+  behind a disclosure control (DS-10).
 - DS-36. A search that finds nothing says so in words, visibly, and is announced (DS-62).
 
 ### Alerts, sheets and dialogs

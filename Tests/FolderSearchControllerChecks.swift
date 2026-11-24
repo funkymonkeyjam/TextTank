@@ -319,9 +319,32 @@ import NativeSearch
                     && busy.details.string.contains("a.txt: Replaced"),
                 "the replacement report is shown when the held replacement ends")
             busy.queryField.stringValue = "pin"
+            let operations = StatusOperationCenter.shared
+            let usualReveal = operations.revealDelay
+            operations.revealDelay = 0
+            defer { operations.revealDelay = usualReveal }
             let started = pressReturn(), restarted = pressReturn()
             check(started && restarted && busy.isSearching, "Return while a search is running starts the search again")
+            // The folder search is one status-row operation, shown in whichever tab is on
+            // screen; the amount of work is unknown, so it is indeterminate (DS-51).
+            let folderOperation = operations.operation(for: [])
+            check(
+                operations.operations.count == 1 && folderOperation?.title == "Searching the folder"
+                    && folderOperation?.fraction == nil && folderOperation?.cancelLabel == "Stop the folder search",
+                "SR-3 a folder search is one indeterminate status-row operation, also after a restart: \(operations.operations.map(\.title))")
             await waitUntil("the restarted search to finish") { !busy.isSearching }
+            check(operations.operations.isEmpty, "SR-3 the folder search's operation ends with the search")
+            let stoppable = pressReturn()
+            let stopping = operations.operation(for: [])
+            if let stopping { operations.cancel(stopping.id) }
+            await waitUntil("the stopped search to finish") { !busy.isSearching }
+            check(
+                stoppable && stopping != nil && operations.operations.isEmpty
+                    && busy.status.stringValue.contains("Cancelled"),
+                "SR-3 Cancel in the status row stops the folder search: \(busy.status.stringValue)")
+            let again = pressReturn()
+            check(again, "fixture: the search runs once more after the stop")
+            await waitUntil("the search after the stop to finish") { !busy.isSearching }
             let privateManifest = try requireValue(
                 busy.lastReplacementOutcomes.first?.recoveryReport, "private batch location")
             check(

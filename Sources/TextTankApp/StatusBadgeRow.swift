@@ -63,6 +63,9 @@ enum StatusField: String, CaseIterable {
 struct StatusItem: Equatable {
     let field: StatusField
     let text: String
+    /// What the field's tooltip and accessibility help add to its text: for the position, the
+    /// document's statistics.
+    var detail = ""
 }
 
 /// A display prefix never substitutes the document's save state for an action result.
@@ -85,27 +88,193 @@ enum StatusMessageSummary {
     }
 }
 
-/// Native pop-up cells supply their own menu tracking, keyboard behavior and accessibility role.
-private final class StatusPopup: NSPopUpButton {
-    let field: StatusField
-    var measuredWidth: CGFloat { max(24, ceil(intrinsicContentSize.width)) }
-    init(field: StatusField) {
-        self.field = field
-        super.init(frame: .zero, pullsDown: true)
-        isBordered = false
+/// The long operations the status row shows: a search of a large document, a search of a
+/// folder. The row of every tab that shows the operation's document carries a progress
+/// indicator and a Cancel button for it; an operation that belongs to no document is shown in
+/// every tab. The owner of the work starts, updates and ends its operation here and keeps its
+/// own cancellation; Cancel in the row calls that.
+///
+/// An operation is revealed only once it has run for `revealDelay`, so a search that returns at
+/// once neither flashes an indicator nor speaks. Its start is announced when it is revealed;
+/// its end is announced only if the owner gives the words, which it does when nothing else
+/// announces the result (DS-36, DS-72). Progress steps are never announced. Progress is the
+/// real fraction of the work or indeterminate (DS-51).
+@MainActor final class StatusOperationCenter {
+    static let shared = StatusOperationCenter()
+    static let didChange = Notification.Name("TextTank.StatusOperationDidChange")
+    struct Operation {
+        let id: UUID
+        /// What is running, in words: "Searching the document".
+        let title: String
+        /// The part that is done, from 0 to 1, or nil while the amount of work is unknown.
+        var fraction: Double?
+        let cancelLabel: String
+        let cancel: @MainActor () -> Void
+        fileprivate let scoped: Bool
+        fileprivate weak var editor: TTEditor?
+        fileprivate var revealed = false
+    }
+    /// How long an operation runs before it is shown and announced. Checks set this to zero.
+    var revealDelay: TimeInterval = 0.3
+    private(set) var operations: [Operation] = []
+    /// - Parameters:
+    ///   - editor: a view of the document the work is on; nil when it belongs to no document.
+    ///   - cancelLabel: what the Cancel button does, for assistive technology: "Cancel search".
+    @discardableResult func begin(
+        _ title: String, in editor: TTEditor? = nil, cancelLabel: String, cancel: @escaping @MainActor () -> Void
+    ) -> UUID {
+        let id = UUID()
+        operations.append(
+            Operation(
+                id: id, title: title, fraction: nil, cancelLabel: cancelLabel, cancel: cancel, scoped: editor != nil,
+                editor: editor))
+        if revealDelay <= 0 {
+            reveal(id)
+        } else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + revealDelay) { [weak self] in self?.reveal(id) }
+        }
+        return id
+    }
+    private func reveal(_ id: UUID) {
+        guard let index = operations.firstIndex(where: { $0.id == id }), !operations[index].revealed else { return }
+        operations[index].revealed = true
+        Announce.say(operations[index].title + ".")
+        NotificationCenter.default.post(name: Self.didChange, object: self)
+    }
+    /// Real progress: `done` of `total` units of the work. A total that is not positive leaves
+    /// the indicator indeterminate. Rows are told only when the whole percentage changes.
+    func update(_ id: UUID, done: Int, total: Int) {
+        guard let index = operations.firstIndex(where: { $0.id == id }) else { return }
+        let fraction = total > 0 ? min(1, max(0, Double(done) / Double(total))) : nil
+        let before = operations[index].fraction.map { Int($0 * 100) }
+        operations[index].fraction = fraction
+        if operations[index].revealed, before != fraction.map({ Int($0 * 100) }) {
+            NotificationCenter.default.post(name: Self.didChange, object: self)
+        }
+    }
+    /// Ends an operation however it ended. `announce` is spoken only for an operation that was
+    /// revealed; pass it when no other surface announces the outcome.
+    func end(_ id: UUID, announce: String? = nil) {
+        guard let index = operations.firstIndex(where: { $0.id == id }) else { return }
+        let ended = operations.remove(at: index)
+        guard ended.revealed else { return }
+        if let announce { Announce.say(announce) }
+        NotificationCenter.default.post(name: Self.didChange, object: self)
+    }
+    /// The Cancel button of a row: asks the owner to cancel. The owner ends the operation.
+    func cancel(_ id: UUID) { operations.first { $0.id == id }?.cancel() }
+    /// The newest revealed operation a tab with these views shows.
+    func operation(for views: [TTEditor]) -> Operation? {
+        operations.last { operation in
+            guard operation.revealed else { return false }
+            guard operation.scoped else { return true }
+            guard let editor = operation.editor else { return false }
+            return views.contains { $0 === editor || $0.sharesDocument(with: editor) }
+        }
+    }
+}
+
+/// What the row shows for a running operation.
+struct StatusProgress: Equatable {
+    let id: UUID
+    let title: String
+    let fraction: Double?
+    let cancelLabel: String
+}
+
+/// A follow-up to a status message, offered as a button in the row instead of as an
+/// instruction in the message ("Show Changes"). `isCurrent` says whether it still applies; the
+/// row drops it when it does not.
+struct StatusFollowUp {
+    let title: String
+    /// The action and its scope, for assistive technology (DS-70).
+    let accessibilityLabel: String
+    let toolTip: String
+    let run: @MainActor () -> Void
+    let isCurrent: @MainActor () -> Bool
+}
+
+/// What every field of the status row is, whichever native control shows it.
+@MainActor private protocol StatusFieldControl: NSControl {
+    var field: StatusField { get }
+    var measuredWidth: CGFloat { get }
+    var shownText: String { get set }
+}
+extension StatusFieldControl {
+    /// DS-74: every field is a target of the row's whole 28-point height. The text keeps the
+    /// small system font and the primary control colour (DS-61).
+    fileprivate func configureAsStatusField() {
         controlSize = .small
         font = .monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
         translatesAutoresizingMaskIntoConstraints = false
         setContentCompressionResistancePriority(.required, for: .horizontal)
-        heightAnchor.constraint(greaterThanOrEqualToConstant: 22).isActive = true
+        heightAnchor.constraint(equalToConstant: StatusBadgeRow.height).isActive = true
+    }
+}
+
+/// Native pop-up cells supply their own menu tracking, keyboard behavior and accessibility role.
+private final class StatusPopup: NSPopUpButton, StatusFieldControl {
+    let field: StatusField
+    var measuredWidth: CGFloat { max(24, ceil(intrinsicContentSize.width)) }
+    var shownText: String {
+        get { menu?.items.first?.title ?? "" }
+        set {
+            if menu?.items.isEmpty != false { menu?.addItem(withTitle: newValue, action: nil, keyEquivalent: "") }
+            menu?.items[0].title = newValue
+            selectItem(at: 0)
+        }
+    }
+    init(field: StatusField) {
+        self.field = field
+        super.init(frame: .zero, pullsDown: true)
+        isBordered = false
+        configureAsStatusField()
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
 }
 
-/// One Auto Layout row. Less important fields disappear before the essential state or position
-/// could be compressed. Their menus remain available inside Position.
+/// A field that runs one command when it is clicked or pressed: Go to Line for the position,
+/// the language chooser for the language. A borderless native button, so the keyboard and
+/// assistive technology activate it as they do any other.
+private final class StatusButton: NSButton, StatusFieldControl {
+    let field: StatusField
+    var measuredWidth: CGFloat { max(24, ceil(intrinsicContentSize.width) + 8) }
+    var shownText: String {
+        get { title }
+        // A borderless button dims its plain title in a window that is not key. The primary
+        // label colour is set outright so the text reads the same as the fields beside it (DS-61).
+        set {
+            attributedTitle = NSAttributedString(
+                string: newValue,
+                attributes: [
+                    .foregroundColor: NSColor.labelColor,
+                    .font: font ?? .monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+                ])
+        }
+    }
+    init(field: StatusField) {
+        self.field = field
+        super.init(frame: .zero)
+        setButtonType(.momentaryChange)
+        isBordered = false
+        configureAsStatusField()
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
+}
+
+/// One Auto Layout row. Each field does one thing: the position runs Go to Line, the language
+/// opens the language chooser, and indentation, encoding, line endings and the selection each
+/// open a menu of their own commands. Less important fields leave the row before the essential
+/// state or position could be compressed; a field that has left is listed in the More menu at
+/// the row's trailing edge, so nothing is out of reach at a narrow width (DS-67).
 final class StatusBadgeRow: NSView, NSMenuDelegate {
+    /// DS-74: the default size of a Mac control.
+    static let height: CGFloat = 28
+    /// The fields that run a command directly; every other field opens a menu.
+    static let commandFields: Set<StatusField> = [.position, .language]
     var menuProvider: ((StatusField) -> NSMenu?)?
+    /// Runs the command of a field in `commandFields`.
+    var onCommand: ((StatusField) -> Void)?
     private let stack = NSStackView()
     private let spacer = NSView()
     private let recording = NSButton(title: "", target: nil, action: nil)
@@ -168,6 +337,62 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
         needsLayout = true
     }
 
+    // MARK: Progress and follow-up
+
+    static let progressIdentifier = "status.progress", cancelIdentifier = "status.cancelOperation"
+    static let followUpIdentifier = "status.followUp"
+    private let progressBar = NSProgressIndicator()
+    private let cancelButton = NSButton(title: "Cancel", target: nil, action: nil)
+    private let followUpButton = NSButton(title: "", target: nil, action: nil)
+    private(set) var progress: StatusProgress?
+    /// Called with the operation's identity when its Cancel button is pressed.
+    var onCancelOperation: ((UUID) -> Void)?
+    private var followUp: StatusFollowUp?
+    /// Shows a small progress indicator and a Cancel button for a running operation, or removes
+    /// them. The indicator is determinate when the operation reports a real fraction (DS-51).
+    func setProgress(_ value: StatusProgress?) {
+        guard value != progress else { return }
+        let wasShown = progress != nil
+        progress = value
+        progressBar.isHidden = value == nil
+        cancelButton.isHidden = value == nil
+        guard let value else {
+            progressBar.stopAnimation(nil)
+            needsLayout = true
+            return
+        }
+        if let fraction = value.fraction {
+            progressBar.stopAnimation(nil)
+            progressBar.isIndeterminate = false
+            progressBar.doubleValue = fraction
+        } else {
+            progressBar.isIndeterminate = true
+            progressBar.startAnimation(nil)
+        }
+        progressBar.setAccessibilityLabel(value.title)
+        progressBar.toolTip = value.title
+        cancelButton.setAccessibilityLabel(value.cancelLabel)
+        cancelButton.cell?.setAccessibilityLabel(value.cancelLabel)
+        cancelButton.toolTip = value.cancelLabel
+        if !wasShown { needsLayout = true }
+    }
+    @objc private func cancelShownOperation(_ sender: Any?) {
+        if let progress { onCancelOperation?(progress.id) }
+    }
+    /// Offers a follow-up as a button beside the status message, or withdraws it.
+    func setFollowUp(_ value: StatusFollowUp?) {
+        followUp = value
+        followUpButton.isHidden = value == nil
+        if let value {
+            followUpButton.title = value.title
+            followUpButton.setAccessibilityLabel(value.accessibilityLabel)
+            followUpButton.cell?.setAccessibilityLabel(value.accessibilityLabel)
+            followUpButton.toolTip = value.toolTip
+        }
+        needsLayout = true
+    }
+    @objc private func runFollowUp(_ sender: Any?) { followUp?.run() }
+
     let largeFileButton = NSButton(title: "Apply Language and Wrap Settings", target: nil, action: nil)
     var showsLargeFileAction: Bool {
         get { !largeFileButton.isHidden }
@@ -177,12 +402,17 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
             needsLayout = true
         }
     }
-    private var popups: [StatusPopup] = []
+    private var popups: [any StatusFieldControl] = []
+    /// Lists the fields that did not fit. Hidden while every field is shown.
+    private let overflow = NSPopUpButton(frame: .zero, pullsDown: true)
+    static let overflowIdentifier = "status.more"
     private var values: [StatusItem] = []
     private var leadingLabel: NSTextField?
     private var fullLeadingText = "Ready", compactLeadingText = "Ready"
     private var widths: [StatusField: NSLayoutConstraint] = [:]
     private var rebuildingMenu = false
+    private static let progressWidth: CGFloat = 72
+    private var overflowWidth: CGFloat { max(24, ceil(overflow.intrinsicContentSize.width)) }
     private(set) var collapsedFields: [StatusField] = []
     /// Position remains present at the supported 800-point minimum. Selection follows it in priority.
     static let collapseOrder: [StatusField] = [.language, .indent, .eol, .encoding, .selections, .selectedCharacters]
@@ -203,6 +433,30 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
         addSubview(stack)
         spacer.setContentHuggingPriority(.init(1), for: .horizontal)
         spacer.setContentCompressionResistancePriority(.init(1), for: .horizontal)
+        followUpButton.controlSize = .small
+        followUpButton.identifier = .init(Self.followUpIdentifier)
+        followUpButton.target = self
+        followUpButton.action = #selector(runFollowUp(_:))
+        followUpButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        followUpButton.isHidden = true
+        stack.addArrangedSubview(followUpButton)
+        progressBar.style = .bar
+        progressBar.controlSize = .small
+        progressBar.minValue = 0
+        progressBar.maxValue = 1
+        progressBar.isIndeterminate = true
+        progressBar.identifier = .init(Self.progressIdentifier)
+        progressBar.translatesAutoresizingMaskIntoConstraints = false
+        progressBar.widthAnchor.constraint(equalToConstant: Self.progressWidth).isActive = true
+        progressBar.isHidden = true
+        stack.addArrangedSubview(progressBar)
+        cancelButton.controlSize = .small
+        cancelButton.identifier = .init(Self.cancelIdentifier)
+        cancelButton.target = self
+        cancelButton.action = #selector(cancelShownOperation(_:))
+        cancelButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        cancelButton.isHidden = true
+        stack.addArrangedSubview(cancelButton)
         largeFileButton.controlSize = .small
         largeFileButton.isHidden = true
         largeFileButton.toolTip = "Enable the detected language and your Wrap Lines setting for this large file."
@@ -214,12 +468,31 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
         recording.isHidden = true
         stack.addArrangedSubview(recording)
         stack.addArrangedSubview(spacer)
+        overflow.isBordered = false
+        overflow.controlSize = .small
+        overflow.identifier = NSUserInterfaceItemIdentifier(Self.overflowIdentifier)
+        overflow.translatesAutoresizingMaskIntoConstraints = false
+        overflow.setContentCompressionResistancePriority(.required, for: .horizontal)
+        overflow.heightAnchor.constraint(equalToConstant: Self.height).isActive = true
+        let more = NSMenu()
+        more.delegate = self
+        more.autoenablesItems = false
+        let face = more.addItem(withTitle: "", action: nil, keyEquivalent: "")
+        face.image = NSImage(
+            systemSymbolName: "ellipsis.circle", accessibilityDescription: "More status fields")
+        if face.image == nil { face.title = "More" }
+        overflow.menu = more
+        let moreName = "More status fields. Shows the fields that do not fit."
+        ControlPresentation.label(moreName, control: overflow)
+        overflow.toolTip = "Shows the status fields that do not fit in the window."
+        overflow.isHidden = true
+        stack.addArrangedSubview(overflow)
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
             stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
             stack.topAnchor.constraint(equalTo: topAnchor),
             stack.bottomAnchor.constraint(equalTo: bottomAnchor),
-            heightAnchor.constraint(equalToConstant: 24)
+            heightAnchor.constraint(equalToConstant: Self.height)
         ])
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
@@ -245,49 +518,107 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
         let prior = Dictionary(uniqueKeysWithValues: popups.map { ($0.field, $0) })
         var occurrences: [String: Int] = [:]
         popups = shown.map { item in
-            let popup = prior[item.field] ?? StatusPopup(field: item.field)
-            let menu = popup.menu ?? NSMenu()
-            menu.delegate = self
-            menu.autoenablesItems = false
-            popup.menu = menu
-            if menu.items.isEmpty { menu.addItem(withTitle: item.text, action: nil, keyEquivalent: "") }
-            menu.items[0].title = item.text
-            popup.selectItem(at: 0)
+            let control: any StatusFieldControl = prior[item.field] ?? makeControl(item.field)
+            control.shownText = item.text
             let group = item.field.identityGroup, number = occurrences[group, default: 0]
             occurrences[group] = number + 1
-            popup.identifier = NSUserInterfaceItemIdentifier("status.\(group).\(number)")
+            control.identifier = NSUserInterfaceItemIdentifier("status.\(group).\(number)")
             let description = String(
                 format: Strings.text("status.fieldValue", "%@: %@"), item.field.displayName, item.text)
-            ControlPresentation.label(
-                String(format: Strings.text("status.options", "%@. Show options."), description), control: popup)
-            let help = Strings.text("status.showOptions", "Shows options for this field.")
-            popup.setAccessibilityHelp(help)
-            popup.cell?.setAccessibilityHelp(help)
-            popup.toolTip = String(format: Strings.text("status.options", "%@. Show options."), description)
-            if popup.superview == nil { stack.addArrangedSubview(popup) }
+            // DS-70: the name says what the field shows and what activating it does.
+            let name: String, help: String
+            switch item.field {
+            case .position:
+                name = description + ". Go to line."
+                help = "Opens Go to Line." + (item.detail.isEmpty ? "" : " " + item.detail)
+                control.toolTip = "Go to Line…" + (item.detail.isEmpty ? "" : "\n" + item.detail)
+            case .language:
+                name = description + ". Choose language."
+                help = "Opens the language chooser."
+                control.toolTip = description + ". Choose a language for this document."
+            default:
+                name = String(format: Strings.text("status.options", "%@. Show options."), description)
+                help = Strings.text("status.showOptions", "Shows options for this field.")
+                control.toolTip = name
+            }
+            ControlPresentation.label(name, control: control)
+            control.setAccessibilityHelp(help)
+            control.cell?.setAccessibilityHelp(help)
+            if control.superview == nil { stack.addArrangedSubview(control) }
             if let constraint = widths[item.field] {
-                constraint.constant = popup.measuredWidth
+                constraint.constant = control.measuredWidth
             } else {
-                let constraint = popup.widthAnchor.constraint(equalToConstant: popup.measuredWidth)
+                let constraint = control.widthAnchor.constraint(equalToConstant: control.measuredWidth)
                 constraint.isActive = true
                 widths[item.field] = constraint
             }
-            return popup
+            return control
         }
-        for (field, popup) in prior where !shown.contains(where: { $0.field == field }) {
-            stack.removeArrangedSubview(popup)
-            popup.removeFromSuperview()
+        for (field, control) in prior where !shown.contains(where: { $0.field == field }) {
+            stack.removeArrangedSubview(control)
+            control.removeFromSuperview()
             widths.removeValue(forKey: field)?.isActive = false
         }
         // Keep a stable visual order even when selection controls appear between existing fields.
-        for popup in popups { stack.removeArrangedSubview(popup) }
-        for popup in popups { stack.addArrangedSubview(popup) }
+        // The More menu stays at the trailing edge.
+        for control in popups { stack.removeArrangedSubview(control) }
+        stack.removeArrangedSubview(overflow)
+        for control in popups { stack.addArrangedSubview(control) }
+        stack.addArrangedSubview(overflow)
         needsLayout = true
     }
+    private func makeControl(_ field: StatusField) -> any StatusFieldControl {
+        guard Self.commandFields.contains(field) else {
+            let popup = StatusPopup(field: field)
+            let menu = NSMenu()
+            menu.delegate = self
+            menu.autoenablesItems = false
+            popup.menu = menu
+            return popup
+        }
+        let button = StatusButton(field: field)
+        button.target = self
+        button.action = #selector(runFieldCommand(_:))
+        return button
+    }
+    @objc private func runFieldCommand(_ sender: Any?) {
+        if let button = sender as? StatusButton {
+            onCommand?(button.field)
+        } else if let raw = (sender as? NSMenuItem)?.representedObject as? String, let field = StatusField(rawValue: raw)
+        {
+            onCommand?(field)
+        }
+    }
+    /// What the More menu lists now: one entry per field that did not fit, in the row's order.
+    /// A menu field keeps its own menu as a submenu; a command field is the command itself.
+    func overflowItems() -> [NSMenuItem] {
+        values.filter { collapsedFields.contains($0.field) }.map { value in
+            let description = String(
+                format: Strings.text("status.fieldValue", "%@: %@"), value.field.displayName, value.text)
+            if Self.commandFields.contains(value.field) {
+                let item = NSMenuItem(
+                    title: description + "…", action: #selector(runFieldCommand(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = value.field.rawValue
+                return item
+            }
+            let item = NSMenuItem(title: description, action: nil, keyEquivalent: "")
+            item.submenu = menuProvider?(value.field)
+            item.isEnabled = item.submenu != nil
+            return item
+        }
+    }
     func menuNeedsUpdate(_ menu: NSMenu) {
-        guard !rebuildingMenu, let popup = popups.first(where: { $0.menu === menu }) else { return }
+        guard !rebuildingMenu else { return }
         rebuildingMenu = true
         defer { rebuildingMenu = false }
+        if menu === overflow.menu {
+            // The first item is the pull-down's own face.
+            while menu.items.count > 1 { menu.removeItem(at: 1) }
+            overflowItems().forEach(menu.addItem)
+            return
+        }
+        guard let popup = popups.first(where: { ($0 as? NSPopUpButton)?.menu === menu }) as? StatusPopup else { return }
         let title = values.first { $0.field == popup.field }?.text ?? popup.title
         menu.removeAllItems()
         menu.addItem(withTitle: title, action: nil, keyEquivalent: "")
@@ -312,13 +643,16 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
                     (text as NSString).size(withAttributes: [
                         .font: label.font ?? NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
                     ]).width) + 2
-            let actionWidth = [diskAction, diskCompare, largeFileButton, recording].filter { $0.superview != nil && !$0.isHidden }
-                .reduce(
-                    CGFloat(0)
-                ) {
+            // The action buttons, the follow-up and a running operation's indicator and Cancel
+            // keep their width; fields collapse and the message shortens to make room for them.
+            let buttons = [diskAction, diskCompare, followUpButton, cancelButton, largeFileButton, recording]
+            let actionWidth =
+                buttons.filter { $0.superview != nil && !$0.isHidden }.reduce(CGFloat(0)) {
                     $0 + ceil($1.intrinsicContentSize.width) + stack.spacing
-                }
-            return textWidth + actionWidth + visible.reduce(0) { $0 + (widths[$1.field]?.constant ?? 0) }
+                } + (progressBar.isHidden ? 0 : Self.progressWidth + stack.spacing)
+            // Once a field has left the row the More menu takes its own place in it.
+            let more = hidden.isEmpty ? 0 : overflowWidth + stack.spacing
+            return textWidth + actionWidth + more + visible.reduce(0) { $0 + (widths[$1.field]?.constant ?? 0) }
                 + CGFloat(visible.count + 1) * stack.spacing
         }
         func collapse(_ text: String) {
@@ -340,6 +674,7 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
             let shouldHide = hidden.contains(popup.field)
             if popup.isHidden != shouldHide { popup.isHidden = shouldHide }
         }
+        if overflow.isHidden != hidden.isEmpty { overflow.isHidden = hidden.isEmpty }
         if label.stringValue != text { label.stringValue = text }
         super.layout()
     }

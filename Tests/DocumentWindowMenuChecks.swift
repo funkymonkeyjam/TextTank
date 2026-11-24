@@ -148,10 +148,10 @@ extension DocumentChecks {
             document.editor.text = "one\ntwo"
             document.editor.setSavePoint()
             controller.goToLine(nil)
-            let form = try requireValue(FormPanel.visible.last, "fixture: owned Go to Line form")
+            try require(controller.goToLineBarVisible, "fixture: Go to Line is open in the document's tab")
             let caret = document.editor.selectionCaret
             document.close()
-            check(!form.window.isVisible, "DG closing the captured document closes its Go to Line form")
+            check(!controller.goToLineBarVisible, "DG closing the captured document closes its Go to Line field")
             check(
                 document.editor.selectionCaret == caret,
                 "DG closing a Go to Line target never navigates a retired editor")
@@ -805,9 +805,14 @@ extension DocumentChecks {
             check(shifted.count == 1, "Shift-Command-P is assigned once in the menus")
 
             let (document, controller, window) = try tab("p21-goto")
+            // The position field is a button whose one command is Go to Line; it has no menu.
+            let positionField = descendants(try requireValue(window.contentView, "fixture: window content"))
+                .compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "status.position.0" }
             check(
                 controller.responds(to: #selector(EditorWindowController.goToLine(_:)))
-                    && controller.statusOptionsMenu("position")?.items.first?.title == "Go to Line…",
+                    && controller.statusOptionsMenu("position") == nil && positionField != nil
+                    && !(positionField is NSPopUpButton) && positionField?.action != nil
+                    && positionField?.accessibilityLabel()?.hasSuffix("Go to line.") == true,
                 "the document window implements Go to Line and the status bar keeps its own entry")
             let text = "één\r\ntwo 😀\rthree\nfour"
             document.editor.text = text
@@ -832,35 +837,19 @@ extension DocumentChecks {
                     && document.editor.selectionCaret == held && document.editor.revision == revision
                     && document.editor.text == text,
                 "a line the document does not have moves nothing and edits nothing")
-            // The dialog itself, answered as a person would.
+            // The inline field itself, answered as a person would.
             _ = document.editor.setSelectionAnchor(0, caret: 0)
-            var answered = false
-            let giveUp = Date().addingTimeInterval(10)
-            let answerAction: @MainActor @Sendable () -> Void = {
-                guard !answered, let modal = presentedFormWindow, let content = modal.contentView else { return }
-                let views = descendants(content)
-                if let field = views.compactMap({ $0 as? NSTextField }).first(where: { $0.isEditable }),
-                    let go = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Go" })
-                {
-                    answered = true
-                    modal.makeFirstResponder(nil)
-                    field.stringValue = "2"
-                    go.performClick(nil)
-                } else if Date() > giveUp {
-                    NSApp.abortModal()
-                }
-            }
-            let answer = Timer(timeInterval: 0.05, repeats: true) { _ in
-                MainActor.assumeIsolated { answerAction() }
-            }
-            RunLoop.main.add(answer, forMode: .modalPanel)
             controller.goToLine(nil)
-            waitForModelessForms()
-            answer.invalidate()
+            let lineField = controller.goToLineBar.field
+            let answered = controller.goToLineBarVisible && presentedFormWindow == nil
+            lineField.stringValue = "2"
+            controller.controlTextDidChange(
+                Notification(name: NSControl.textDidChangeNotification, object: lineField))
+            controller.goToLineBar.goButton.performClick(nil)
             check(
-                answered && document.editor.statusInfo.line == 2
+                answered && !controller.goToLineBarVisible && document.editor.statusInfo.line == 2
                     && (window.firstResponder as? NSView)?.isDescendant(of: document.editor) == true,
-                "the Go to Line dialog moves the caret to the line entered and returns to the editor")
+                "the Go to Line field moves the caret to the line entered and returns to the editor")
             document.close()
         }
 
@@ -1813,18 +1802,18 @@ extension DocumentChecks {
             // Passive typing may select a result. Escape restores the exact opening direction.
             let priorQuery = controller.findField.stringValue
             controller.showFind(nil)
-            let previousWord = controller.wordBox.state
-            controller.wordBox.performClick(nil)
-            check(sessionDelegate.searchController.wordButton.state == controller.wordBox.state
-                    && controller.wordBox.state != previousWord,
+            let previousWord = controller.findOptions.isOn(.wholeWord)
+            controller.findOptions.toggle(.wholeWord)
+            check((sessionDelegate.searchController.wordButton.state == .on) == controller.findOptions.isOn(.wholeWord)
+                    && controller.findOptions.isOn(.wholeWord) != previousWord,
                   "a whole-word change uses the same option in the bar and Find window")
-            controller.wordBox.performClick(nil)
+            controller.findOptions.toggle(.wholeWord)
             let priorMode = sessionDelegate.searchController.mode.indexOfSelectedItem
-            if controller.regexBox.state != .on { controller.regexBox.performClick(nil) }
+            if !controller.findOptions.isOn(.regex) { controller.findOptions.toggle(.regex) }
             controller.findField.stringValue = "["
             controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: controller.findField))
             spinUntil("inline regex error") { !controller.findCount.stringValue.isEmpty }
-            check(controller.regexBox.state == .on && controller.findCount.stringValue != "No matches"
+            check(controller.findOptions.isOn(.regex) && controller.findCount.stringValue != "No matches"
                     && !controller.findCount.stringValue.contains(" of ") && NSApp.modalWindow == nil,
                   "a malformed bar regex reports its error in the Find bar")
             // DS-45: the field is marked and the whole message is shown, not a clipped count label.
@@ -2024,6 +2013,7 @@ extension DocumentChecks {
             let allController = try requireValue(allDocument.presentation, "fixture: current-document Replace All")
             _ = allDocument.editor.loadDocumentText("x x x")
             allController.showFind(nil)
+            allController.setReplaceRow(shown: true)
             allController.findField.stringValue = "x"
             allController.replaceField.stringValue = "yy"
             allController.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: allController.findField))

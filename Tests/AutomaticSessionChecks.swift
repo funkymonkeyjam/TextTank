@@ -352,9 +352,8 @@ import EditorBridge
                 return editor.zoomLevel == 0 && editor.followsDefaultZoom
             }, "V4 tabs saved at the default zoom reopen at the default zoom")
         @MainActor func textSize(_ presentation: EditorWindowController) -> [String] {
-            (presentation.statusOptionsMenu("position")?.items.map(\.title) ?? []).filter {
-                $0.hasPrefix("Text size ") && $0.hasSuffix(" pt")
-            }
+            // The text size is one of the statistics the position field shows in its tooltip.
+            presentation.statusStatistics.filter { $0.hasPrefix("Text size ") && $0.hasSuffix(" pt") }
         }
         second.workspaceWindow.activate(rezoomed)
         check(
