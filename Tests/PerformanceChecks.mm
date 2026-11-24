@@ -83,6 +83,29 @@ int main(int argc,char **argv){@autoreleasepool{
   // Peak resident size is cumulative for the process, so the ceiling grows with the largest
   // fixture loaded so far: a fixed allowance plus thirty times the fixture's UTF-8 size.
   within((double)peak,150.0*1024*1024+30.0*mib*1024*1024,[size stringByAppendingString:@" peak resident memory"],"bytes");
+  // DS-D13, DS-101: the cost of View > Show > Change Bars on the same fixture. Load, then 2,000
+  // one-character edits spread through the document with one Undo each, with the record off
+  // and on. Measured on the development Mac when it was added (best of three, seconds): 1 MiB
+  // load 0.0117 off and 0.0111 on, an edit with its Undo 0.0000449 off and 0.0000473 on; 10 MiB
+  // load 0.0988 and 0.0987, an edit with its Undo 0.0000397 and 0.0000427. That is about three
+  // microseconds an edit and nothing at load. The record is never kept above the large-file
+  // limit (32 MiB, or a line of 1 MiB), where TextTank turns it off.
+  double barLoad[2]={1e9,1e9},barEdit[2]={1e9,1e9};BOOL barsExact=YES,barsRecorded=NO;
+  for(int bars=0;bars<2;++bars)for(int attempt=0;attempt<3;++attempt){@autoreleasepool{
+   TTEditor *view=[[TTEditor alloc]initWithFrame:NSMakeRect(0,0,900,600)];
+   view.changeBarsVisible=bars==1;
+   double a=seconds();BOOL loaded=[view loadDocumentText:fixture];barLoad[bars]=std::min(barLoad[bars],seconds()-a);
+   const NSInteger length=view.byteLength,edits=2000;
+   double b=seconds();
+   for(NSInteger i=0;i<edits;++i){NSInteger at=(length/edits)*i;[view setSelectionAnchor:at caret:at];[view replaceSelection:@"#"];[view executeCommand:@"undo"];}
+   barEdit[bars]=std::min(barEdit[bars],(seconds()-b)/edits);
+   barsExact=barsExact && loaded && view.byteLength==length;
+   if(bars==1)barsRecorded=view.changeTrackingActive;
+  }}
+  printf("changebars,%d,load_off=%.6f,load_on=%.6f,edit_undo_off=%.9f,edit_undo_on=%.9f\n",mib,barLoad[0],barLoad[1],barEdit[0],barEdit[1]);fflush(stdout);
+  check(barsExact && barsRecorded,[[size stringByAppendingString:@" edits with change bars on are recorded and undo to the same length"] UTF8String]);
+  within(barLoad[1],0.04*mib,[size stringByAppendingString:@" load with change bars on"],"s");
+  within(barEdit[1],0.00025,[size stringByAppendingString:@" edit and Undo with change bars on"],"s");
  }}
  NSMutableArray *tabs=nil;double buffers=1e9,start=0;
  for(int attempt=0;attempt<3;++attempt){@autoreleasepool{

@@ -91,6 +91,18 @@ static BOOL TTValidatedByteRange(id candidate, NSUInteger documentLength, NSRang
 
 static const int TTBookmarkMarker = 1;
 static const int TTBookmarkMask = 1 << TTBookmarkMarker;
+/// The change-bar margin, beside the text, and its width: a saved bar is Scintilla's 4 px left
+/// rectangle and an unsaved one fills the margin, so the two differ by width as well as colour (DS-62).
+static const int TTChangeMargin = 3;
+static const int TTChangeMarginWidth = 8;
+/// Documents, by pointer, whose change record began with an empty Undo history. Scintilla has no
+/// query for it. An entry is removed when a view stops the record or attaches a new document.
+static NSMutableSet<NSNumber *> *TTTrackedDocuments() {
+    static NSMutableSet<NSNumber *> *documents;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ documents = [NSMutableSet set]; });
+    return documents;
+}
 static const int TTSearchIndicator = 20, TTFindPreviewIndicator = 25;
 // The native brace overlays are per view. They never fill a shared document indicator range.
 static const int TTMatchedBraceIndicator = 23, TTUnmatchedBraceIndicator = 24;
@@ -637,6 +649,11 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     sptr_t _braceCaret, _braceEndStyled;
     NSUInteger _braceRevision;
     NSString *_recordedReturnIndent;
+    BOOL _changeBarsVisible;
+    NSInteger _unsavedChangeColour, _savedChangeColour;
+    NSInteger _centeredColumnCharacters;
+    sptr_t _plainMarginLeft, _plainMarginRight;
+    id _textAreaObserver;
 }
 @property(nonatomic, strong) ScintillaView *engine;
 @property(nonatomic,strong) TTEmptyLineNumbersView *emptyLineNumbers;
@@ -733,6 +750,9 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         _syntaxStyles=[NSMutableDictionary dictionary];_syntaxFonts=[NSMutableDictionary dictionary];
         _engine = [[TTScintillaView alloc] initWithFrame:NSZeroRect];
         ((TTContentView *)_engine.content).editor = self;
+        // The engine's own blank margins beside the text, which the ordinary layout keeps.
+        _plainMarginLeft = [_engine message:SCI_GETMARGINLEFT];
+        _plainMarginRight = [_engine message:SCI_GETMARGINRIGHT];
         _autoIndentEnabled = YES;
         _braceHighlightEnabled = YES;
         _currentLineHighlightEnabled = YES;
@@ -779,6 +799,22 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         [_engine message:SCI_SETMARGINMASKN wParam:2 lParam:SC_MASK_FOLDERS];
         [_engine message:SCI_SETMARGINWIDTHN wParam:2 lParam:16];
         [_engine message:SCI_SETMARGINSENSITIVEN wParam:2 lParam:1];
+        // Change bars: hidden until View > Show > Change Bars. It takes the text's own background,
+        // so a bar reads as the edge of its line.
+        [TTTrackedDocuments() removeObject:@([_engine message:SCI_GETDOCPOINTER])];
+        [_engine message:SCI_SETMARGINTYPEN wParam:TTChangeMargin lParam:SC_MARGIN_BACK];
+        [_engine message:SCI_SETMARGINMASKN wParam:TTChangeMargin lParam:SC_MASK_HISTORY];
+        [_engine message:SCI_SETMARGINWIDTHN wParam:TTChangeMargin lParam:0];
+        [_engine message:SCI_MARKERDEFINE wParam:SC_MARKNUM_HISTORY_MODIFIED lParam:SC_MARK_FULLRECT];
+        [_engine message:SCI_MARKERDEFINE wParam:SC_MARKNUM_HISTORY_REVERTED_TO_MODIFIED lParam:SC_MARK_FULLRECT];
+        [_engine message:SCI_MARKERDEFINE wParam:SC_MARKNUM_HISTORY_SAVED lParam:SC_MARK_LEFTRECT];
+        [_engine message:SCI_MARKERDEFINE wParam:SC_MARKNUM_HISTORY_REVERTED_TO_ORIGIN lParam:SC_MARK_BAR];
+        [self applyChangeBarColours];
+        // The text area's width changes with the window, a split, the sidebar and the gutter.
+        NSClipView *textArea = _engine.scrollView.contentView;
+        textArea.postsFrameChangedNotifications = YES;
+        _textAreaObserver = [NSNotificationCenter.defaultCenter addObserverForName:NSViewFrameDidChangeNotification object:textArea
+            queue:nil usingBlock:^(NSNotification *note) { [weakEditor updateCenteredColumn]; }];
         [_engine message:SCI_SETAUTOMATICFOLD wParam:SC_AUTOMATICFOLD_SHOW | SC_AUTOMATICFOLD_CLICK | SC_AUTOMATICFOLD_CHANGE];
         // Scintilla creates its scroll view at 100x10. Its initWithFrame does not
         // position the inner content. Start at zero so this real size transition also
@@ -799,6 +835,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     _emptyLineNumbers.needsDisplay = YES;
     // A taller view draws more filler numbers past the end of the document.
     if ([self lineNumberDigits] != _marginDigits) [self updateLineNumberMargin:NO];
+    [self updateCenteredColumn];
 }
 /// Digits of the largest number the gutter can show: the filler view numbers the rows past the
 /// end of the document, so that is the line count plus one screen of rows.
@@ -879,6 +916,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     _bookmarkColour = dark ? 0x5BF4C7 : (highContrast ? 0x002E1C : 0x005B3A);
     [_engine message:SCI_MARKERSETBACK wParam:TTBookmarkMarker lParam:_bookmarkColour];
     [_engine message:SCI_MARKERSETFORE wParam:TTBookmarkMarker lParam:_bookmarkColour];
+    [self applyChangeBarColours];
     [_engine message:SCI_SETCARETFORE wParam:foreground];
     // Selection uses the system's colours, so it follows the accent colour, the appearance and
     // Increase Contrast, and an unfocused pane shows the system's unemphasised selection.
@@ -906,11 +944,117 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     }
     // STYLECLEARALL put the line-number style back on the default font.
     [self updateLineNumberMargin:NO];
+    // The column is measured in the default style's font.
+    [self updateCenteredColumn];
     _engine.needsDisplay = YES;
     _emptyLineNumbers.needsDisplay = YES;
 }
+// Change bars. Amber for a change that is not saved and green for a saved one, each at least 3:1
+// against the text background they are drawn on (light 4.6:1 and 4.9:1, with Increase Contrast
+// 8.4:1 and 9.2:1; dark 10.2:1 and 9.5:1). The colour is never the only cue: see TTChangeMarginWidth.
+- (void)applyChangeBarColours {
+    const BOOL dark = [self usesDarkPalette], highContrast = NSWorkspace.sharedWorkspace.accessibilityDisplayShouldIncreaseContrast;
+    _unsavedChangeColour = dark ? 0x54B4FF : (highContrast ? 0x00337A : 0x0A52B4);
+    _savedChangeColour = dark ? 0x8CD06F : (highContrast ? 0x224D0E : 0x3A7A1F);
+    for (int marker : {SC_MARKNUM_HISTORY_MODIFIED, SC_MARKNUM_HISTORY_REVERTED_TO_MODIFIED}) {
+        [_engine message:SCI_MARKERSETFORE wParam:marker lParam:_unsavedChangeColour];
+        [_engine message:SCI_MARKERSETBACK wParam:marker lParam:_unsavedChangeColour];
+    }
+    [_engine message:SCI_MARKERSETFORE wParam:SC_MARKNUM_HISTORY_SAVED lParam:_savedChangeColour];
+    [_engine message:SCI_MARKERSETBACK wParam:SC_MARKNUM_HISTORY_SAVED lParam:_savedChangeColour];
+    // Undone to the original text after a save: not saved, so the unsaved colour, as an outline.
+    [_engine message:SCI_MARKERSETFORE wParam:SC_MARKNUM_HISTORY_REVERTED_TO_ORIGIN lParam:_unsavedChangeColour];
+    [_engine message:SCI_MARKERSETBACK wParam:SC_MARKNUM_HISTORY_REVERTED_TO_ORIGIN lParam:dark ? 0x171810 : 0xF0F6F4];
+}
+- (NSInteger)unsavedChangeColour { return _unsavedChangeColour; }
+- (NSInteger)savedChangeColour { return _savedChangeColour; }
+/// Puts this view's choice on the engine. Scintilla keeps the option per view and the record per
+/// document, and ignores a request to start the record while the document can undo.
+- (void)applyChangeTracking {
+    const BOOL shown = _changeBarsVisible && !_comparisonPresentation;
+    sptr_t option = [_engine message:SCI_GETCHANGEHISTORY];
+    if (_comparisonPresentation) option = SC_CHANGE_HISTORY_DISABLED;
+    else if (shown) option = SC_CHANGE_HISTORY_ENABLED | SC_CHANGE_HISTORY_MARKERS;
+    else option &= SC_CHANGE_HISTORY_ENABLED;
+    NSNumber *document = @([_engine message:SCI_GETDOCPOINTER]);
+    if (option == SC_CHANGE_HISTORY_DISABLED) {
+        // Zero would discard a record another view of this document is showing.
+        if ([_engine message:SCI_GETCHANGEHISTORY] != SC_CHANGE_HISTORY_DISABLED && !_hasSharedDocument) {
+            [_engine message:SCI_SETCHANGEHISTORY wParam:option];
+            [TTTrackedDocuments() removeObject:document];
+        }
+    } else {
+        if (![_engine message:SCI_CANUNDO]) [TTTrackedDocuments() addObject:document];
+        [_engine message:SCI_SETCHANGEHISTORY wParam:option];
+    }
+    [_engine message:SCI_SETMARGINWIDTHN wParam:TTChangeMargin lParam:shown ? TTChangeMarginWidth : 0];
+    NSRulerView *ruler = _engine.scrollView.verticalRulerView;
+    ruler.accessibilityLabel = shown ? @"Line numbers, bookmarks and change bars" : @"Line numbers and bookmarks";
+    ruler.accessibilityHelp = shown
+        ? @"A wide bar marks a line changed since the document was opened and not saved. A narrow bar marks a changed line that is saved. A hollow bar in the middle marks a line undone to its original text after a save."
+        : nil;
+}
+- (BOOL)changeBarsVisible { [self assertThread]; return _changeBarsVisible; }
+- (void)setChangeBarsVisible:(BOOL)visible {
+    [self assertThread];
+    if (_changeBarsVisible == visible) return;
+    _changeBarsVisible = visible;
+    [self applyChangeTracking];
+    [self scheduleStateNotification];
+}
+- (BOOL)changeTrackingActive {
+    [self assertThread];
+    return ([_engine message:SCI_GETCHANGEHISTORY] & SC_CHANGE_HISTORY_ENABLED) != 0
+        && [TTTrackedDocuments() containsObject:@([_engine message:SCI_GETDOCPOINTER])];
+}
+- (void)stopChangeTracking {
+    [self assertThread];
+    _changeBarsVisible = NO;
+    [_engine message:SCI_SETCHANGEHISTORY wParam:SC_CHANGE_HISTORY_DISABLED];
+    [TTTrackedDocuments() removeObject:@([_engine message:SCI_GETDOCPOINTER])];
+    [self applyChangeTracking];
+}
+/// After this view's document was replaced or loaded again with an empty Undo history: the
+/// record, if this view asks for one, starts from the text as it is now.
+- (void)restartChangeTracking {
+    const sptr_t option = [_engine message:SCI_GETCHANGEHISTORY];
+    if (!(option & SC_CHANGE_HISTORY_ENABLED) || [_engine message:SCI_CANUNDO]) return;
+    [_engine message:SCI_SETCHANGEHISTORY wParam:SC_CHANGE_HISTORY_DISABLED];
+    [_engine message:SCI_SETCHANGEHISTORY wParam:option];
+    [TTTrackedDocuments() addObject:@([_engine message:SCI_GETDOCPOINTER])];
+}
+- (NSInteger)centeredColumnCharacters { [self assertThread]; return _centeredColumnCharacters; }
+- (void)setCenteredColumnCharacters:(NSInteger)characters {
+    [self assertThread];
+    characters = MAX(0, MIN(characters, 1000));
+    if (characters == _centeredColumnCharacters) return;
+    _centeredColumnCharacters = characters;
+    [self updateCenteredColumn];
+}
+- (NSInteger)textMarginLeft { [self assertThread]; return [_engine message:SCI_GETMARGINLEFT]; }
+- (NSInteger)textMarginRight { [self assertThread]; return [_engine message:SCI_GETMARGINRIGHT]; }
+- (NSInteger)textAreaWidth { [self assertThread]; return (NSInteger)floor(_engine.scrollView.contentView.bounds.size.width); }
+- (NSInteger)textWidthOfColumns:(NSInteger)columns {
+    [self assertThread];
+    return [_engine message:SCI_TEXTWIDTH wParam:STYLE_DEFAULT lParam:(sptr_t)"0"] * MAX((NSInteger)0, columns);
+}
+/// Equal margins around a column of `_centeredColumnCharacters` zeros in the default style, which
+/// Scintilla measures at the current zoom. With no room for both, the engine's own margins.
+- (void)updateCenteredColumn {
+    if (!_engine) return;
+    sptr_t left = _plainMarginLeft, right = _plainMarginRight;
+    if (_centeredColumnCharacters > 0 && !_comparisonPresentation) {
+        const sptr_t available = self.textAreaWidth;
+        const sptr_t column = [self textWidthOfColumns:_centeredColumnCharacters];
+        const sptr_t spare = available - column;
+        if (spare > left + right) { left = spare / 2; right = spare - left; }
+    }
+    if ([_engine message:SCI_GETMARGINLEFT] != left) [_engine message:SCI_SETMARGINLEFT wParam:0 lParam:left];
+    if ([_engine message:SCI_GETMARGINRIGHT] != right) [_engine message:SCI_SETMARGINRIGHT wParam:0 lParam:right];
+}
 - (void)dealloc {
     if (_accessibilityDisplayObserver) [NSWorkspace.sharedWorkspace.notificationCenter removeObserver:_accessibilityDisplayObserver];
+    if (_textAreaObserver) [NSNotificationCenter.defaultCenter removeObserver:_textAreaObserver];
     if (_ownGroups > 0) {
         NSNumber *key = @([_engine message:SCI_GETDOCPOINTER]);
         const NSInteger open = [[TTOpenGroups() objectForKey:key] integerValue] - _ownGroups;
@@ -1331,6 +1475,9 @@ static constexpr int TTNamedHistoryBase = 0x54540000;
     [_engine message:SCI_SETTABWIDTH wParam:width];
     [_engine message:SCI_SETUSETABS wParam:tabs];
     [_engine message:SCI_SETUNDOCOLLECTION wParam:1];
+    // The loader's document is new: it has no change record, and its pointer may be a reused one.
+    [TTTrackedDocuments() removeObject:@([_engine message:SCI_GETDOCPOINTER])];
+    [self applyChangeTracking];
     ++_revision;
     ++_selectionGeneration;
     _braceCacheValid = NO;
@@ -1346,6 +1493,7 @@ static constexpr int TTNamedHistoryBase = 0x54540000;
     const BOOL loaded = [self replaceDocumentWithEncodedUTF8:data];
     [_engine message:SCI_SETUNDOCOLLECTION wParam:1];
     [_engine message:SCI_EMPTYUNDOBUFFER];
+    [self restartChangeTracking];
     [_historyNames removeAllObjects];
     _cachedRedoCursor = -1;
     return loaded;
@@ -1751,6 +1899,7 @@ static sptr_t TTMacWordDestination(ScintillaView *engine, sptr_t caret, bool rig
     [self noteStateChange];
     // The line count changed with no modification notification.
     [self updateLineNumberMargin:NO];
+    [self applyChangeTracking];
 }
 - (BOOL)sharesDocumentWith:(TTEditor *)other {
     [self assertThread];
@@ -1785,6 +1934,12 @@ static sptr_t TTMacWordDestination(ScintillaView *engine, sptr_t caret, bool rig
     [_engine message:SCI_SETVIEWWS wParam:(uptr_t)[other.engine message:SCI_GETVIEWWS]];
     [_engine message:SCI_SETVIEWEOL wParam:(uptr_t)[other.engine message:SCI_GETVIEWEOL]];
     for (int margin = 0; margin < 3; ++margin) [_engine message:SCI_SETMARGINWIDTHN wParam:margin lParam:[other.engine message:SCI_GETMARGINWIDTHN wParam:margin]];
+    // A view that hid its bars keeps the record going; so does its copy.
+    _changeBarsVisible = other->_changeBarsVisible;
+    if (!_comparisonPresentation && ([other.engine message:SCI_GETCHANGEHISTORY] & SC_CHANGE_HISTORY_ENABLED) && [self sharesDocumentWith:other])
+        [_engine message:SCI_SETCHANGEHISTORY wParam:SC_CHANGE_HISTORY_ENABLED];
+    [self applyChangeTracking];
+    self.centeredColumnCharacters = other.centeredColumnCharacters;
 }
 - (void)retireInFavorOf:(TTEditor *)successor {
     [self assertThread];
@@ -2436,6 +2591,8 @@ static sptr_t TTMacWordDestination(ScintillaView *engine, sptr_t caret, bool rig
     [_engine message:SCI_SETVSCROLLBAR wParam:!value];
     [_engine message:SCI_SETENDATLASTLINE wParam:!value];
     if(value) [self applyComparisonStyle];
+    [self applyChangeTracking];
+    [self updateCenteredColumn];
 }
 - (BOOL)comparisonPresentation { return _comparisonPresentation; }
 - (NSInteger)comparisonTopDisplayLine { [self assertThread]; return [_engine message:SCI_GETFIRSTVISIBLELINE]; }
@@ -2957,7 +3114,7 @@ static sptr_t TTMacWordDestination(ScintillaView *engine, sptr_t caret, bool rig
     // Keep the line-number margin wide enough: zoom rescales its font, and added or removed lines
     // change the digit count. A margin width is view state, so setting it here edits nothing.
     // The filler numbers are drawn at the zoomed size, which the compared values need not show.
-    if (code == SCN_ZOOM) { _followsDefaultZoom = self.zoomLevel == _defaultZoomLevel; [self updateLineNumberMargin:NO]; _emptyLineNumbers.needsDisplay = YES; [self scheduleStateNotification]; }
+    if (code == SCN_ZOOM) { _followsDefaultZoom = self.zoomLevel == _defaultZoomLevel; [self updateLineNumberMargin:NO]; [self updateCenteredColumn]; _emptyLineNumbers.needsDisplay = YES; [self scheduleStateNotification]; }
     else if (code == SCN_MODIFIED && notification->linesAdded != 0 && [self lineNumberDigits] != _marginDigits) [self updateLineNumberMargin:NO];
     if (code == SCN_ZOOM || (code == SCN_UPDATEUI && (notification->updated & (SC_UPDATE_V_SCROLL | SC_UPDATE_H_SCROLL)))) [self comparisonViewportChanged];
     if (code == SCN_UPDATEUI) {
