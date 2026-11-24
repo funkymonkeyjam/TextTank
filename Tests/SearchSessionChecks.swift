@@ -167,9 +167,21 @@ enum SearchSessionChecks {
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "na\u{ef}ve NA\u{cf}VE \u{1F600}na\u{ef}ve\u{1F600} nai\u{308}ve \u{65e5}\u{672c}\u{8a9e}na\u{ef}ve stra\u{df}e STRASSE \u{212a}elvin kelvin",
             String(repeating: "\u{1F600}x\u{e9}y ", count: 40) + "\u{1F600}",
-            "line one\r\nline two\nx\0y line\tthree line"
+            "line one\r\nline two\nx\0y line\tthree line",
+            // Fix round 2: scripts with no ASCII, and characters whose case fold is longer than they are.
+            "\u{65e5}\u{672c}\u{8a9e}\u{306e}\u{6587}\u{7ae0}\u{3092}\u{691c}\u{7d22}\u{3059}\u{308b}\u{3002}\u{691c}\u{7d22}\u{6587}\u{5b57}\u{5217}\u{3092}\u{691c}\u{7d22}\u{3059}\u{308b}",
+            "\u{39f}\u{394}\u{3a5}\u{3a3}\u{3a3}\u{395}\u{3a5}\u{3a3} \u{3bf}\u{3b4}\u{3c5}\u{3c3}\u{3c3}\u{3b5}\u{3cd}\u{3c2} \u{41c}\u{43e}\u{441}\u{43a}\u{432}\u{430} \u{43c}\u{43e}\u{441}\u{43a}\u{432}\u{430} \u{130}stanbul i\u{307}stanbul \u{131}\u{15f}\u{131}k o\u{fb03}ce OFFICE Stra\u{df}e STRASSE \u{1e9e}"
         ]
-        let needles = ["alpha", "a", "aa", "na\u{ef}ve", "\u{1F600}", "x\u{e9}", "line", "ss", "k", "\u{e9}", "e", "y "]
+        let needles = [
+            "alpha", "a", "aa", "na\u{ef}ve", "\u{1F600}", "x\u{e9}", "line", "ss", "k", "\u{e9}", "e", "y ",
+            "\u{691c}\u{7d22}", "\u{3c3}\u{3c3}", "\u{3a3}", "\u{43c}\u{43e}\u{441}", "i", "\u{130}", "ffi", "\u{fb03}",
+            "\u{df}", "stra\u{df}e", "\u{3c2}",
+            // Long enough to be searched position by position in the smallest windows.
+            "\u{130}stanbul", "i\u{307}stanbul", "ISTANBUL", "o\u{fb03}ce", "OFFICE", "office", "STRASSE", "strasse",
+            "stra\u{1e9e}e", "\u{3bf}\u{3b4}\u{3c5}\u{3c3}\u{3c3}\u{3b5}\u{3cd}\u{3c3}",
+            "\u{39f}\u{394}\u{3a5}\u{3a3}\u{3a3}\u{395}", "\u{41c}\u{41e}\u{421}\u{41a}\u{412}\u{410}",
+            "\u{691c}\u{7d22}\u{3059}\u{308b}\u{3002}\u{691c}", "\u{3092}\u{691c}\u{7d22}\u{3059}\u{308b}"
+        ]
         var compared = 0, mismatches = 0
         for text in texts {
             let data = Data(text.utf8)

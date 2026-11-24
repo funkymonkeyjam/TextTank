@@ -782,9 +782,37 @@ final class ProgressTicks: @unchecked Sendable {
         }
         check(
             editor.revision == playbackRevision && editor.text == text && editor.selectionCaret == 0
-                && SearchFailure.largeDocumentMacro.localizedDescription.contains("Nothing was changed")
                 && SearchFailure.largeDocumentMacro.localizedDescription.contains("Find and Replace"),
             "the refused playback changes nothing and says what to use instead")
+        // Fix round 2: the message must be true whether or not earlier steps of the macro edited
+        // the document, and reads like the other macro stops.
+        let refusal = SearchFailure.largeDocumentMacro.localizedDescription
+        check(
+            refusal.hasPrefix("Macro stopped:") && refusal.hasSuffix("prior edits remain undoable.")
+                && refusal.contains("The search changed nothing") && !refusal.contains("Nothing was changed"),
+            "the refusal claims only that the search changed nothing, and that prior edits remain undoable")
+        // Earlier steps applied, then the search step is refused: their edits stay, each its own Undo step.
+        editor.resetUndoHistory()
+        _ = editor.setSelectionAnchor(0, caret: 0)
+        try require(editor.replaceSelection("first "), "fixture: an earlier macro step typed text")
+        _ = editor.setSelectionAnchor(editor.byteLength, caret: editor.byteLength)
+        try require(editor.replaceSelection(" second"), "fixture: another earlier step typed text")
+        let afterEarlier = editor.text, earlierRevision = editor.revision
+        rejects(
+            "the search step after earlier edits is refused the same way", expecting: SearchFailure.largeDocumentMacro
+        ) {
+            try controller.playRecorded(
+                options: SearchOptions(query: "needle", replacement: "PIN"), action: "replaceAll", on: editor)
+        }
+        check(
+            editor.text == afterEarlier && editor.revision == earlierRevision
+                && afterEarlier == "first " + text + " second",
+            "the refused step leaves the earlier steps' edits in place, as its message says")
+        editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+        check(editor.text == "first " + text, "Undo takes back the last earlier step alone")
+        editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+        check(editor.text == text, "a second Undo takes back the step before it: they remain separate Undo steps")
+        _ = editor.setSelectionAnchor(0, caret: 0)
         controller.largeDocumentUnits = SearchCore.maximumTextUnits
         try controller.playRecorded(options: SearchOptions(query: "needle"), action: "next", on: editor)
         check(editor.selectionStart == needles[0].location, "the same recorded step still replays under the limit")

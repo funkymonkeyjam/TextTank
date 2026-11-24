@@ -35,6 +35,22 @@ struct ReplaceSkips: Equatable {
     var total: Int { readOnly + multipleSelections + closed + stale }
 }
 
+/// The newest progress step of a search, written on the search's thread and read on the main one.
+private final class LatestProgress: @unchecked Sendable {
+    private let lock = NSLock()
+    private var latest: (done: Int, total: Int)?
+    func set(_ done: Int, _ total: Int) {
+        lock.lock()
+        latest = (done, total)
+        lock.unlock()
+    }
+    var value: (done: Int, total: Int)? {
+        lock.lock()
+        defer { lock.unlock() }
+        return latest
+    }
+}
+
 /// Native snapshot search. Workers never access TTEditor; results are revision checked.
 final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate,
     NSComboBoxDelegate
@@ -1009,7 +1025,12 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             replacing ? "Replacing in the document" : "Searching the document", in: editor,
             cancelLabel: replacing ? "Cancel replacing" : "Cancel search"
         ) { [weak self] in self?.cancel(nil) }
+        // Each step hops to the main actor on its own, and nothing orders those hops before the
+        // result's. The newest step is therefore also kept here and shown when the result arrives,
+        // so a finished search has always shown the progress it made.
+        let newest = LatestProgress()
         let progress: @Sendable (Int, Int) -> Void = { [weak self] done, total in
+            newest.set(done, total)
             Task { @MainActor in self?.showProgress(done, of: total, token: token) }
         }
         task = Task { @MainActor [weak self] in
@@ -1020,6 +1041,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                         continuing: continuing, chunkBytes: chunk, cancellation: flag, progress: progress)
                 }.value
                 guard let self, self.generation == token, !flag.cancelled else { return }
+                if let last = newest.value { self.showProgress(last.done, of: last.total, token: token) }
                 self.rememberRan(opts, action)
                 // G372: the editor stayed editable while the search ran. A result for text or a
                 // selection that has since changed, or for an editor that is no longer current,

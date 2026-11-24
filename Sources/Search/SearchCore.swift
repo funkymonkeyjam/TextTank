@@ -234,7 +234,7 @@ package enum SearchFailure: LocalizedError, CustomNSError, Equatable {
         switch self {
         case .largeDocumentMacro:
             return
-                "A recorded search cannot be replayed in a document this large. Use Find or Find and Replace for this step. Nothing was changed."
+                "Macro stopped: a recorded search cannot be replayed in a document this large. Use Find or Find and Replace for this step. The search changed nothing; prior edits remain undoable."
         case .largeDocumentRegex:
             return
                 "This document is too large for a regular expression search. Select part of it and choose Selection in Find and Replace, or change the search mode to Normal. Nothing was changed."

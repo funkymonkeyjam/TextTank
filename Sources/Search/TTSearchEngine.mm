@@ -331,25 +331,54 @@ const NSUInteger defaultChunkBytes=4*1024*1024;
         // when both its character and the search text's first are ASCII and differ beyond case.
         const bool byPosition=slice<4*needle.length;
         const unichar firstUnit=[needle characterAtIndex:0];
-        auto lower=[](unichar c){return (unichar)(c>='A'&&c<='Z'?c+32:c);};
-        auto mayStart=[&](FoldedWindow &w,size_t unit){
-            const unichar c=w.ascii?(unichar)p[w.byteStart+unit]:w.units[unit];
-            if(low(c))return false;
-            return !(c<0x80&&firstUnit<0x80)||lower(c)==lower(firstUnit);
+        // A match can start at a character only if that character's case fold begins with the
+        // unit the search text's fold begins with: folding is character by character, so the two
+        // folded texts agree from their first unit or not at all. The first unit of each BMP
+        // character's fold is looked up once and kept, which makes the test one table read in
+        // any script. Characters outside the BMP are always tried.
+        // 0: not yet looked up; 1: a match may start with this unit; 2: it cannot.
+        std::vector<uint8_t> starts;
+        const bool filterable=!high(firstUnit)&&!low(firstUnit);
+        auto firstOfFold=[&](unichar c){
+            if(c<0x80)return (unichar)(c>='A'&&c<='Z'?c+32:c);
+            NSString *one=[[[NSString alloc]initWithCharacters:&c length:1]stringByFoldingWithOptions:NSCaseInsensitiveSearch locale:nil];
+            return one.length?[one characterAtIndex:0]:c;
+        };
+        const unichar needleFold=filterable?firstOfFold(firstUnit):0;
+        auto classify=[&](unichar c)->uint8_t{
+            if(low(c))return 2;
+            if(!filterable||high(c))return 1;
+            return firstOfFold(c)==needleFold?1:2;
         };
         // The match that starts exactly at `unit` and ends by `endUnit`, if there is one.
         auto matchAt=[&](FoldedWindow &w,size_t unit,size_t endUnit,size_t *start,size_t *length){
-            if(!mayStart(w,unit)){spend(1);return false;}
             spend(needle.length);
             NSRange r=[w.string rangeOfString:needle options:folded|NSAnchoredSearch range:NSMakeRange(unit,std::min(reachUnits,endUnit-unit))];
             if(r.location==NSNotFound)return false;
             *start=w.byteAt(r.location);*length=w.byteAt(NSMaxRange(r))-*start;return true;
         };
+        // The next unit at or after `unit` (or, backwards, the last one before `unit`) at which
+        // a match may start; `end` (or `floor`) when there is none. One table read per unit.
+        auto nextStart=[&](const auto *u,size_t unit,size_t end){
+            if(starts.empty())starts.resize(65536);
+            uint8_t *t=starts.data();const size_t begin=unit;
+            for(;unit<end;++unit){uint8_t m=t[u[unit]];if(m==0)m=t[u[unit]]=classify(u[unit]);if(m==1)break;}
+            spend(unit-begin);return unit;
+        };
+        auto previousStart=[&](const auto *u,size_t floor,size_t unit){
+            if(starts.empty())starts.resize(65536);
+            uint8_t *t=starts.data();const size_t begin=unit;
+            for(;unit>floor;--unit){uint8_t m=t[u[unit-1]];if(m==0)m=t[u[unit-1]]=classify(u[unit-1]);if(m==1)break;}
+            spend(begin-unit);return unit;
+        };
         auto foldedForward=[&](FoldedWindow &w,size_t from,size_t *start,size_t *length){
             const size_t total=w.string.length;
             if(byPosition){
-                for(size_t unit=w.unitAt(from);unit<total;unit++)if(matchAt(w,unit,total,start,length))return true;
-                return false;
+                for(size_t unit=w.unitAt(from);;++unit){
+                    unit=w.ascii?nextStart(p+w.byteStart,unit,total):nextStart(w.units.data(),unit,total);
+                    if(unit>=total)return false;
+                    if(matchAt(w,unit,total,start,length))return true;
+                }
             }
             for(size_t unit=w.unitAt(from);unit<total;unit+=slice){
                 const size_t end=total-unit>slice+reachUnits?unit+slice+reachUnits:total;
@@ -363,8 +392,12 @@ const NSUInteger defaultChunkBytes=4*1024*1024;
         auto foldedBackward=[&](FoldedWindow &w,size_t floor,size_t to,size_t *start,size_t *length){
             const size_t lowUnit=w.unitAt(floor),highUnit=w.unitAt(to);
             if(byPosition){
-                for(size_t unit=highUnit;unit-->lowUnit;)if(matchAt(w,unit,highUnit,start,length))return true;
-                return false;
+                for(size_t unit=highUnit;;){
+                    unit=w.ascii?previousStart(p+w.byteStart,lowUnit,unit):previousStart(w.units.data(),lowUnit,unit);
+                    if(unit<=lowUnit)return false;
+                    --unit;
+                    if(matchAt(w,unit,highUnit,start,length))return true;
+                }
             }
             for(size_t startHigh=highUnit;;){
                 const size_t a=startHigh-lowUnit>slice?startHigh-slice:lowUnit;
