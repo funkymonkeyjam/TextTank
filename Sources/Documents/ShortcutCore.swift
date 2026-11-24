@@ -103,7 +103,9 @@ extension MenuShortcut {
     }
     /// The same shortcut in words, for sentences and assistive technology.
     package var spokenText: String {
-        let value = normalized
+        var value = normalized
+        // The tilde is Shift with the backtick key, and is said as that key press.
+        if value.key == "~" { value = MenuShortcut("`", value.modifiers.union([.shift])) }
         let key: String
         if let named = value.named {
             key = named.spoken
