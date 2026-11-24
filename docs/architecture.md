@@ -266,8 +266,13 @@ against late writes by another process.
 Run Automation and Open Documents use `ChoicePanel` with live filtering and stable
 identities independent of displayed names. Typing, focus changes and Cancel never
 invoke an action. Return, table activation or the explicit action button chooses
-exactly once. Go to Line is an owned modeless panel; closing its captured document
-closes the panel, and a changed or retired target cannot navigate a stale editor.
+exactly once. Go to Line is one inline field in the find bar's place, owned by its tab
+(`EditorGoToLineBar`, `LineJumpPreview`): the two bars replace each other and the shared Find
+state is untouched. A valid entry (`line` or `line:column`, read by `GoToLineEntry`) shows the
+line without a jump being made; Return makes the jump through `goTo(line:column:in:macros:)`,
+the one place a macro recording learns of it; Escape, another tab, Find or Preview alone put
+the caret, every selection and the scroll position back. Closing the document closes the
+field, and a changed or retired target cannot navigate a stale editor.
 
 `VersionedLibrary` in `Sources/Documents/` shares their Foundation-only codec with
 `AutomationRuleSet`. Each model retains its required version, optional minimum-reader
@@ -432,8 +437,8 @@ subject to the separately documented provenance limitation.
 Numeric forms keep a real locale-aware formatter and the complete active raw draft. Parsing
 requires the whole trimmed input, rejects fractions in integer fields, grouping/exponents/NaN/
 infinity and inappropriate decimal separators, and validates bounds at the owning operation.
-Unicode decimal digits emitted by the formatter are accepted. Go to Line retains signed integer
-recognition and its existing out-of-range feedback. Editable point sizes use a lossless Double
+Unicode decimal digits emitted by the formatter are accepted. Go to Line reads ASCII digits
+itself and says what is wrong beside its field, with the valid range. Editable point sizes use a lossless Double
 spelling, distinct from concise one-decimal status presentation; an unchanged 12.125 remains
 12.125 through Save. Explicit Cancel remains reachable with invalid active editing.
 

@@ -127,10 +127,12 @@ extension EditorWindowController {
 
         let focusWasInPreview = previewHasFocus
         let focusWasInTab = (hostWindow?.firstResponder as? NSView)?.isDescendant(of: presentationRoot) == true
-        // The find bar acts on the source, which Preview hides. Closing it returns the keyboard
-        // to the editor only when this tab holds the keyboard and the change may move it: a tab
+        // The find bar and Go to Line act on the source, which Preview hides. Closing one returns the
+        // keyboard to the editor only when this tab holds the keyboard and the change may move it: a tab
         // changed from its own menu or mark while another is in use must not take the keyboard.
-        if mode == .preview, findBarVisible { closeFindBar(returningKeyboard: movingFocus && focusWasInTab) }
+        if mode == .preview, findBarVisible || goToLineBarVisible {
+            closeFindBar(returningKeyboard: movingFocus && focusWasInTab)
+        }
 
         viewMode = mode
         if mode == .source {

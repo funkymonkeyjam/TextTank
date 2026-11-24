@@ -414,6 +414,9 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         Checks.section("tab strip: state, mouse and the list of open tabs") {
             try TabStripChecks.run(root: root, app: app, host: host)
         }
+        Checks.section("compact find bar and inline Go to Line") {
+            try FindBarNativeChecks.run(root: root, app: app, host: host)
+        }
         settle(0.5)
         check(
             listener.connections == allowedConnections,
@@ -767,8 +770,8 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         check(!tab.findBarVisible, "Preview closes the find bar, which acts on the hidden source")
         tab.goToLine(nil)
         check(tab.viewMode == .both, "Go to Line shows the source beside the preview first")
-        presentedFormWindow?.close()
         tab.setViewMode(.preview)
+        check(!tab.goToLineBarVisible, "Preview closes Go to Line, which acts on the hidden source")
         app.searchController.showSearch(nil)
         check(tab.viewMode == .both, "Find and Replace shows the source beside the preview first")
         app.searchController.window?.orderOut(nil)
