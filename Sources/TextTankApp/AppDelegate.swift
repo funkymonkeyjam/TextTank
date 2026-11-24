@@ -228,7 +228,6 @@ import AppKit
     }
     func applicationDidBecomeActive(_ notification: Notification) {
         startForegroundInterfaceIfNeeded()
-        (NSDocumentController.shared as? TextDocumentController)?.endStalledReview()
         let front = currentDocument
         front?.externalFile.setApplicationActive(true)
         front?.externalFile.check(prioritized: true)
@@ -690,6 +689,22 @@ import AppKit
         }
         return true
     }
+    /// Takes the holds again for the text as it is now. False when a document this quit was
+    /// holding is no longer held (it grew past a bound) or its newer copy cannot be verified.
+    private func renewQuitHolds() -> Bool {
+        let before = quitHeld
+        holdUntitledForQuit()
+        if before.contains(where: { !$0.isHeldForQuit && !$0.isClosed && $0.fileURL == nil }) { return false }
+        return confirmQuitHolds()
+    }
+    /// An edited untitled document that is open and registered, with the setting on, and not held.
+    private var hasUnkeptUntitledDocument: Bool {
+        guard settings.value.keepsUntitledOnQuit else { return false }
+        return NSDocumentController.shared.documents.contains {
+            guard let document = $0 as? TextDocument else { return false }
+            return document.isEditedUntitled && !document.isHeldForQuit
+        }
+    }
     static let unkeptTextNotice =
         "TextTank did not quit: an untitled document's unsaved text could not be kept. Save it, then quit again."
     private func refuseQuitForUnkeptText() {
@@ -701,16 +716,13 @@ import AppKit
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         launchReviewSuspended = true
-        if !reviewingTermination {
-            holdUntitledForQuit()
-            // AppKit's own review may already have been accepted, with every close noted. A held
-            // document whose text changed since and cannot be written and verified again must not
-            // be closed on the strength of its earlier copy: the quit is refused, everything is
-            // open again, and that earlier copy is still on disk.
-            if !confirmQuitHolds() {
-                refuseQuitForUnkeptText()
-                return .terminateCancel
-            }
+        // AppKit's own review may already have been accepted, with every close noted. A held
+        // document whose text changed since and cannot be written and verified again, or no
+        // longer fits a bound, must not be closed on the strength of its earlier copy: the quit
+        // is refused, everything is open again, and that earlier copy is still on disk.
+        if !reviewingTermination, !renewQuitHolds() {
+            refuseQuitForUnkeptText()
+            return .terminateCancel
         }
         if NSDocumentController.shared.documents.allSatisfy({ !$0.isDocumentEdited }) {
             commitSession()
@@ -738,8 +750,10 @@ import AppKit
     var replyToTerminate: @MainActor (Bool) -> Void = { NSApp.reply(toApplicationShouldTerminate: $0) }
     @objc func reviewed(_ controller: NSDocumentController, didReviewAll: Bool, contextInfo: UnsafeMutableRawPointer?) {
         var didReviewAll = didReviewAll
-        if didReviewAll, !confirmQuitHolds() {
-            // Text changed during the review and its copy could not be verified again: stay open.
+        // Defence in depth for a review that says every document was reviewed: the holds are
+        // taken again, and an edited untitled document that is still registered (so nobody was
+        // asked about it) and is not held is never closed. The quit is refused instead.
+        if didReviewAll, !(renewQuitHolds() && !hasUnkeptUntitledDocument) {
             didReviewAll = false
             knownWorkspace?.showTabMessage(Self.unkeptTextNotice)
         }
