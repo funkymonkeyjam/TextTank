@@ -11,6 +11,7 @@ package enum AppStorage {
         case recovery = "Recovery", reminders = "ReminderExports", pasteThroughChoice = "PasteThroughChoice.json", lastSession = "LastSession.json"
         case find = "FindPreferences.json", folderSearch = "FolderSearchPreferences.json"
         case folderReplacements = "FolderReplacements"
+        case commandRecents = "CommandPaletteRecents.json"
         package var isDirectory: Bool { self == .recovery || self == .reminders || self == .folderReplacements }
     }
     static package func resolve(override: String?, fallback: URL) -> URL {

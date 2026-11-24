@@ -3,15 +3,79 @@ import AppKit
 import TextTankCore
 import EditorBridge
 
+/// The commands a person ran from the palette most recently, newest first.
+struct CommandRecents: Equatable {
+    static let limit = 5
+    private(set) var ids: [String]
+    init(_ ids: [String] = []) {
+        var seen = Set<String>()
+        self.ids = Array(ids.filter { !$0.isEmpty && seen.insert($0).inserted }.prefix(Self.limit))
+    }
+    mutating func note(_ id: String) {
+        guard !id.isEmpty else { return }
+        self = Self([id] + ids)
+    }
+}
+
+/// Keeps `CommandRecents` in the private support folder, so the list survives a relaunch.
+///
+/// The file holds row identities only: menu titles and command identifiers, never document
+/// text. It is a convenience, so a failure to read or write it is never an alert (DS-40); the
+/// palette then works from the list in memory. A file this version cannot read because a later
+/// one wrote it is left as it is.
+@MainActor final class CommandRecentsStore {
+    static let maximumBytes = 64 * 1024
+    private struct File: Codable {
+        var version: Int
+        var commands: [String]
+    }
+    let url: URL
+    private(set) var recents = CommandRecents()
+    private var replaceable = true
+    init(url: URL? = nil) {
+        self.url = url ?? AppStorage.url(.commandRecents)
+        do {
+            let data = try PrivateFileStore.read(self.url, maximumBytes: Self.maximumBytes)
+            guard let file = try? JSONDecoder().decode(File.self, from: data) else { return }
+            if file.version == 1 { recents = CommandRecents(file.commands) } else { replaceable = false }
+        } catch where error.isFileNotFound {} catch {
+            // Too large, not a regular file or not readable: do not write over what is there.
+            replaceable = false
+        }
+    }
+    func note(_ id: String) {
+        // A row identity is a few menu titles long. Anything larger is not worth a file write.
+        guard id.utf8.count <= 4096 else { return }
+        let previous = recents
+        recents.note(id)
+        guard replaceable, recents != previous else { return }
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            let data = try encoder.encode(File(version: 1, commands: recents.ids))
+            try PrivateFileStore.prepareDirectory(url.deletingLastPathComponent())
+            try PrivateFileStore.write(data, to: url, maximumBytes: Self.maximumBytes)
+        } catch {}
+    }
+}
+
 /// Discover and invoke the same menu items that belong to the window where the chooser opened.
 @MainActor final class CommandDiscovery {
     struct Entry {
+        /// What the palette shows: the command's name, the menu that holds it as secondary
+        /// text, and its current key equivalent at the trailing edge.
         let row: ChoicePanel.Row
         let item: NSMenuItem
         weak var target: AnyObject?
         let externalNotice: String?
         /// Where the command used to be listed, matched by the filter but never shown.
         var legacyPath = ""
+        /// The command's own name, and its whole menu path ending in that name.
+        var name = ""
+        var path = ""
+        /// What the command reads and changes. It is not shown; `perform` compares it so that a
+        /// saved automation reconfigured while the palette was open is not run by mistake.
+        var scope = ""
     }
 
     /// Where commands were listed before the nine-menu bar of 23 November 2026 (DS-D4), by the
@@ -50,20 +114,64 @@ import EditorBridge
         else { return "" }
         return old.legacy + " " + title
     }
-    /// The rows whose path, or former path, contains every word typed, in any order.
-    static func rows(_ entries: [Entry], matching query: String) -> [ChoicePanel.Row] {
-        let words = query.split(whereSeparator: \.isWhitespace)
-        return entries.filter { entry in
-            let text = entry.row.title + " " + entry.legacyPath
-            return words.allSatisfy { text.localizedCaseInsensitiveContains($0) }
-        }.map(\.row)
+    private static func key(_ text: String) -> String {
+        text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+    }
+    /// How well a command's name answers what was typed; lower is listed first.
+    ///
+    /// 0 the name is exactly what was typed, 1 the name starts with it, 2 every word typed
+    /// starts a word of the name, 3 every word typed is somewhere in the name, 4 the match is
+    /// only in the menu path or the former one. A trailing ellipsis is not part of the name.
+    static func rank(name: String, query: String) -> Int {
+        let words = key(query).split(whereSeparator: \.isWhitespace).map(String.init)
+        var title = key(name)
+        while title.hasSuffix("…") || title.hasSuffix(".") { title.removeLast() }
+        let typed = words.joined(separator: " ")
+        if title == typed { return 0 }
+        if title.hasPrefix(typed) { return 1 }
+        let parts = title.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+        if words.allSatisfy({ word in parts.contains { $0.hasPrefix(word) } }) { return 2 }
+        if words.allSatisfy({ title.contains($0) }) { return 3 }
+        return 4
+    }
+    /// The entries whose path, or former path, contains every word typed, in any order: best
+    /// name match first, and within one rank the commands run recently before the rest, each in
+    /// a stable order (recency, then menu order). With nothing typed the recent commands lead and
+    /// every other command follows in menu order. A recent command that is not among `entries`,
+    /// because it no longer exists or is hidden now, is not listed.
+    static func matches(_ entries: [Entry], query: String, recent: [String] = []) -> [Entry] {
+        let words = key(query).split(whereSeparator: \.isWhitespace)
+        let recency = Dictionary(recent.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        var ranked: [(rank: Int, recency: Int, order: Int, entry: Entry)] = []
+        for (order, entry) in entries.enumerated() {
+            let text = key(entry.path + " " + entry.legacyPath)
+            guard words.allSatisfy({ text.contains($0) }) else { continue }
+            ranked.append(
+                (
+                    words.isEmpty ? 0 : rank(name: entry.name, query: query), recency[entry.row.id] ?? Int.max, order,
+                    entry
+                ))
+        }
+        return ranked.sorted { ($0.rank, $0.recency, $0.order) < ($1.rank, $1.recency, $1.order) }.map(\.entry)
+    }
+    static func rows(_ entries: [Entry], matching query: String, recent: [String] = []) -> [ChoicePanel.Row] {
+        matches(entries, query: query, recent: recent).map(\.row)
     }
 
-    private var panel: ChoicePanel?
+    static let emptyMessage = "No matching commands"
+    private(set) var panel: ChoicePanel?
+    private let recentsURL: URL?
+    /// Read when the palette is first used, so a launch never waits on it.
+    private(set) lazy var recentsStore = CommandRecentsStore(url: recentsURL)
+    var recentCommands: [String] { recentsStore.recents.ids }
+    init(recentsURL: URL? = nil) { self.recentsURL = recentsURL }
+    /// Called when a command chosen in the palette has been sent to its target.
+    func noteRan(_ entry: Entry) { recentsStore.note(entry.row.id) }
 
     func show(editor: @escaping () -> TTEditor?) {
         if let panel {
-            panel.form.window.makeKeyAndOrderFront(nil)
+            // What was typed stays, selected, so typing replaces it.
+            panel.showAgain()
             return
         }
         guard let menu = NSApp.mainMenu else { return }
@@ -76,8 +184,11 @@ import EditorBridge
             title: "Command Palette", identifier: "command.palette", action: "Run Command",
             filterLabel: "Search commands by name or menu")
         panel = chooser
-        chooser.rows = { entries.map(\.row) }
-        chooser.filteredRows = { Self.rows(entries, matching: $0) }
+        // The list as it was when the palette opened: a command run from this palette closes it.
+        let recent = recentCommands
+        chooser.rows = { Self.rows(entries, matching: "", recent: recent) }
+        chooser.filteredRows = { Self.rows(entries, matching: $0, recent: recent) }
+        chooser.emptyMessage = Self.emptyMessage
         chooser.onClose = { [weak self] in self?.panel = nil }
         let hadWindow = window != nil
         chooser.choose = { [weak self, weak chooser, weak menu, weak window, weak expectedEditor] id in
@@ -117,7 +228,7 @@ import EditorBridge
     @discardableResult func perform(_ original: Entry, in menu: NSMenu) -> Bool {
         guard original.row.enabled, let expected = original.target,
             let current = commands(in: menu).first(where: { $0.row.id == original.row.id }),
-            current.row.enabled, current.target === expected, current.row.detail == original.row.detail,
+            current.row.enabled, current.target === expected, current.scope == original.scope,
             current.item.action == original.item.action, let action = current.item.action
         else { return false }
         // Group invocations carry the original tab, group membership and destination generation.
@@ -125,7 +236,9 @@ import EditorBridge
         if let validator = expected as? NSMenuItemValidation, !validator.validateMenuItem(original.item) {
             return false
         }
-        return NSApp.sendAction(action, to: expected, from: original.item)
+        guard NSApp.sendAction(action, to: expected, from: original.item) else { return false }
+        noteRan(original)
+        return true
     }
 
     func commands(in bar: NSMenu) -> [Entry] {
@@ -172,11 +285,17 @@ import EditorBridge
                 let id = fields.map { "\($0.utf8.count):\($0)" }.joined()
                 guard seen.insert(id).inserted else { continue }
                 let (scope, destination) = Self.scope(item, menu: route.first ?? "", selector: selector)
+                // DS-20: the key shown is the one the menu item has now, including a shortcut
+                // assigned in Settings. The menu that holds the command is the secondary text.
+                let shortcut = ControlPresentation.shortcut(of: item) ?? ""
                 entries.append(
                     Entry(
-                        row: .init(id: id, title: pathLabel, detail: scope, enabled: enabled),
+                        row: .init(
+                            id: id, title: item.title, detail: path.joined(separator: " › "), enabled: enabled,
+                            accessory: shortcut,
+                            accessoryLabel: ControlPresentation.spokenShortcut(of: item).map { "Shortcut " + $0 } ?? ""),
                         item: item, target: target, externalNotice: destination,
-                        legacyPath: Self.legacyPath(for: route)))
+                        legacyPath: Self.legacyPath(for: route), name: item.title, path: pathLabel, scope: scope))
             }
         }
         collect(bar, path: [])
