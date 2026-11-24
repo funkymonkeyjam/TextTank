@@ -377,11 +377,12 @@ import EditorBridge
         // A file whose close is only noted is still found when it is opened again.
         let seventh = delegate()
         let again = try DocumentFactory.openCaptured(WorkspaceStore.captureRegularFile(fileURL), from: fileURL)
-        controller.nativeReviewDepth = 1
-        again.close()
+        // AppKit's own close-all, as at quit: nothing is edited, so nothing is asked, and the
+        // clean file's close is noted.
+        controller.closeAllDocuments(withDelegate: NSApp, didCloseAllSelector: nil, contextInfo: nil)
         try require(
             again.isOpen && again.quitCloseDeferred && !controller.documents.contains(again),
-            "R2 fixture: a file's close is noted while a quit review is pending")
+            "R2 fixture: a file's close is noted by a quit review")
         var link = URLComponents()
         link.scheme = "texttank"
         link.host = "open"
@@ -392,17 +393,63 @@ import EditorBridge
             controller.document(for: fileURL) === again && reopened === again
                 && seventh.workspaceWindow.presentations.count == tabs && !controller.documents.contains(again),
             "R2 opening a noted file again selects its tab instead of making a second document")
-        // A review that AppKit never finished is ended as cancelled once nothing can answer it.
-        controller.endStalledReview(after: 0)
+        seventh.closeAllForTermination()
+        check(!again.isOpen && !controller.isReviewingOpenDocuments, "R2 the certain quit carries the noted close out")
+
+        // Fix round 3. A review reports "all reviewed" although the holds were released while it
+        // ran. An edited untitled document is never closed unkept on that word: the holds are
+        // taken again, and when that fails the quit is refused.
+        let eighth = delegate()
+        let heldLate = DocumentFactory.makeUntitled()
+        _ = heldLate.editor.replaceSelection("late text")
+        let lateID = heldLate.recoveryID
+        let dirty = try DocumentFactory.openCaptured(WorkspaceStore.captureRegularFile(fileURL), from: fileURL)
+        _ = dirty.editor.replaceSelection("DIRTY ")
+        eighth.requestUnsavedReview = { _ in requests += 1 }
+        eighth.replyToTerminate = { replies.append($0) }
+        let askedBefore = requests
+        check(eighth.applicationShouldTerminate(app) == .terminateLater, "R3 fixture: the delegate's review is requested")
+        guard spinUntil("R3 the review request", { requests == askedBefore + 1 }) else { return }
+        try require(heldLate.isHeldForQuit, "R3 fixture: the untitled document is held with a verified copy")
+        controller.didReviewOpenDocuments?(false)
+        try require(!heldLate.isHeldForQuit && heldLate.isDocumentEdited, "R3 fixture: the holds were released during the review")
+        heldLate.dependencies.beforeQuitHold = { throw POSIXError(.EIO) }
+        eighth.reviewed(controller, didReviewAll: true, contextInfo: nil)
         check(
-            controller.nativeReviewDepth == 0 && !controller.isReviewingOpenDocuments
-                && controller.documents.contains(again) && !again.quitCloseDeferred && again.isOpen,
-            "R2 a stalled review is ended and every noted document is registered again")
-        again.close()
-        check(!again.isOpen && !controller.documents.contains(again), "R2 after that a close is a close again")
-        controller.endStalledReview(after: 0)
-        check(controller.nativeReviewDepth == 0, "R2 with no review pending there is nothing to end")
-        withExtendedLifetime([first, second, third, fourth, fifth, sixth, seventh]) {}
+            replies.last == false && heldLate.isOpen && dirty.isOpen && controller.documents.contains(heldLate)
+                && controller.documents.contains(dirty) && heldLate.isDocumentEdited && dirty.isDocumentEdited,
+            "R3 a late accepted review does not close an edited untitled document that is not kept: the quit is refused")
+        check(
+            try store.load(id: lateID).text == "late text" && heldLate.editor.text == "late text"
+                && eighth.workspaceWindow.lastTabMessage == AppDelegate.unkeptTextNotice,
+            "R3 its recovery copy is intact and the status line says why")
+
+        // A held, noted document that grows past a bound before the second hold.
+        heldLate.dependencies.beforeQuitHold = nil
+        dirty.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
+        try require(!dirty.isDocumentEdited, "R3 fixture: the file is clean again")
+        controller.willReviewOpenDocuments?()
+        try require(heldLate.isHeldForQuit, "R3 fixture: the review's start held the untitled document")
+        heldLate.close()
+        controller.didReviewOpenDocuments?(true)
+        _ = heldLate.editor.replaceSelection(" and more")
+        eighth.keptUntitledLimits.bytes = heldLate.editor.byteLength - 1
+        check(
+            eighth.applicationShouldTerminate(app) == .terminateCancel && heldLate.isOpen
+                && controller.documents.contains(heldLate) && heldLate.isDocumentEdited && !heldLate.isHeldForQuit,
+            "R3 a held document that outgrew a bound before the second hold refuses the quit and stays open")
+        check(
+            try store.load(id: lateID).text == "late text" && heldLate.editor.text == "late text and more",
+            "R3 its earlier verified copy is still on disk")
+        eighth.keptUntitledLimits.bytes = SizePolicy.standard.keptUntitledTotal
+        check(
+            try eighth.applicationShouldTerminate(app) == .terminateNow && controller.documents.isEmpty
+                && store.load(id: lateID).text == "late text and more",
+            "R3 within the bounds again the quit goes ahead and keeps the newer text")
+        for file in try FileManager.default.contentsOfDirectory(at: store.directory, includingPropertiesForKeys: nil)
+        where file.lastPathComponent.hasPrefix(lateID.uuidString) { try FileManager.default.removeItem(at: file) }
+        try? FileManager.default.removeItem(at: metadata)
+        withExtendedLifetime([first, second, third, fourth, fifth, sixth, seventh, eighth]) {}
     }
     private static func rfEdit(_ controller: TextDocumentController) -> TextDocument? {
         controller.documents.compactMap { $0 as? TextDocument }.first { $0.fileURL != nil }

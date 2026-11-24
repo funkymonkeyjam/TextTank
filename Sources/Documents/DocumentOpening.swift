@@ -93,11 +93,8 @@ final class TextDocumentController: NSDocumentController {
     var willReviewOpenDocuments: (() -> Void)?
     var didReviewOpenDocuments: ((Bool) -> Void)?
     var didRegisterDocument: (() -> Void)?
-    /// Internal, not private, so that a check can stand for a review AppKit never finished.
-    var nativeReviewDepth = 0
+    private var nativeReviewDepth = 0
     var isReviewingOpenDocuments: Bool { nativeReviewDepth > 0 }
-    /// Counts reviews begun, so a stalled one can be told from the next one.
-    private var nativeReviewGeneration = 0
     /// A document whose close a quit review only noted is still open in its tab although it has
     /// left `documents`. Opening its file again, from Finder or a link, finds that document
     /// instead of making a second one for the same file.
@@ -108,33 +105,6 @@ final class TextDocumentController: NSDocumentController {
             !$0.isClosed && ($0.fileURL?.standardizedFileURL == wanted || $0.diskURL == disk)
         }
     }
-    /// AppKit calls a review's completion exactly once, and every close until then is only
-    /// noted. Should that call never come, every later close would only be noted too. This is
-    /// the way out: called when the application becomes active, it looks for a review in
-    /// progress with nothing on screen that could still answer it (no sheet, no modal window),
-    /// looks again after `delay`, and only if the same review is still pending and still has
-    /// nothing on screen ends it as cancelled, which registers every noted document again.
-    func endStalledReview(after delay: TimeInterval = 1) {
-        guard reviewHasNothingToAnswerIt else { return }
-        let generation = nativeReviewGeneration
-        if delay <= 0 {
-            finishStalledReview(generation)
-        } else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                self?.finishStalledReview(generation)
-            }
-        }
-    }
-    private var reviewHasNothingToAnswerIt: Bool {
-        nativeReviewDepth > 0 && NSApp.modalWindow == nil && !NSApp.windows.contains { $0.attachedSheet != nil }
-    }
-    private func finishStalledReview(_ generation: Int) {
-        guard nativeReviewGeneration == generation, reviewHasNothingToAnswerIt else { return }
-        nativeReviewDepth = 0
-        nativeReviewGeneration += 1
-        didReviewOpenDocuments?(false)
-    }
-
     /// AppKit can close the documents before it asks its application delegate about quitting.
     /// Its stock review may nest a close-all callback. Capture once around the outer operation.
     override func reviewUnsavedDocuments(
@@ -192,10 +162,7 @@ final class TextDocumentController: NSDocumentController {
         -> UnsafeMutableRawPointer
     {
         nativeReviewDepth += 1
-        if nativeReviewDepth == 1 {
-            nativeReviewGeneration += 1
-            willReviewOpenDocuments?()
-        }
+        if nativeReviewDepth == 1 { willReviewOpenDocuments?() }
         return Unmanaged.passRetained(NativeReviewCallback(target, selector, info)).toOpaque()
     }
     @objc private func nativeReviewCompleted(
@@ -203,10 +170,8 @@ final class TextDocumentController: NSDocumentController {
     ) {
         guard let contextInfo else { return }
         let callback = Unmanaged<NativeReviewCallback>.fromOpaque(contextInfo).takeRetainedValue()
-        // A review that was ended as stalled has no depth left to give back.
-        let pending = nativeReviewDepth > 0
-        if pending { nativeReviewDepth -= 1 }
-        if pending, nativeReviewDepth == 0 { didReviewOpenDocuments?(accepted) }
+        nativeReviewDepth -= 1
+        if nativeReviewDepth == 0 { didReviewOpenDocuments?(accepted) }
         callback.forward(controller, accepted: accepted)
     }
 
