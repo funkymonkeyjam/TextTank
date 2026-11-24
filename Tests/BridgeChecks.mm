@@ -1514,10 +1514,13 @@ int main(int argc, char **argv) {
               "A new view has the ordinary layout: the engine's own small margins");
         auto centred=[&](TTEditor *view,NSInteger characters){
             const NSInteger left=view.textMarginLeft,right=view.textMarginRight;
-            return left>plainLeft && labs((long)(left-right))<=1 && left+right+[view textWidthOfColumns:characters]==view.textAreaWidth;
+            const NSInteger spare=view.textAreaWidth-[view textWidthOfColumns:characters];
+            // With Wrap Lines off the column has its left margin only, and a long line runs to the pane's edge.
+            return left>plainLeft && left==spare/2 && right==(view.wrap ? spare-left : plainRight);
         };
         ed.centeredColumnCharacters=90;
-        check(ed.textAreaWidth>[ed textWidthOfColumns:90] && centred(ed,90), "A 90-character column sits between equal margins that fill the text area");
+        check(ed.textAreaWidth>[ed textWidthOfColumns:90] && centred(ed,90), "A 90-character column starts where equal margins would put it");
+        check(!ed.wrap && ed.textMarginRight==plainRight, "With Wrap Lines off there is no right margin: a long line is not painted through a blank band");
         paint(ed);
         const sptr_t height=[sv message:SCI_TEXTHEIGHT wParam:0];
         const sptr_t shortStart=[sv message:SCI_POSITIONFROMLINE wParam:1], shortEnd=[sv message:SCI_GETLINEENDPOSITION wParam:1];
@@ -1528,12 +1531,40 @@ int main(int argc, char **argv) {
               && [sv message:SCI_POSITIONFROMPOINTCLOSE wParam:(uptr_t)(gutter+ed.textMarginLeft-4) lParam:row]==-1, "The text starts at the left margin, and the gutter stays at the view's edge");
         check([sv message:SCI_POSITIONFROMPOINT wParam:(uptr_t)(gutter+3) lParam:row]==shortStart && [sv message:SCI_POSITIONFROMPOINT wParam:(uptr_t)(gutter+ed.textMarginLeft-3) lParam:row]==shortStart
               && [sv message:SCI_POSITIONFROMPOINT wParam:(uptr_t)(gutter+ed.textAreaWidth-3) lParam:row]==shortEnd,
-              "A click in the left margin is a click at the start of that line, and one in the right margin at its end");
+              "A click in the left margin is a click at the start of that line, and one past the text at its end");
         check(!ed.wrap && [sv message:SCI_WRAPCOUNT wParam:0]==1, "The column implies nothing about wrapping: a long line stays one row with Wrap Lines off");
+        {
+            // Sideways scrolling with Wrap Lines off is the ordinary layout's, moved right by the left margin.
+            TTEditor *ordinary=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,1200,400)];
+            ScintillaView *plain=(ScintillaView *)ordinary.subviews.firstObject;
+            [ordinary loadDocumentText:text]; paint(ordinary);
+            const sptr_t shift=ed.textMarginLeft-plainLeft, letter=[sv message:SCI_TEXTWIDTH wParam:STYLE_DEFAULT lParam:(sptr_t)"x"];
+            auto offsetAt=[&](TTEditor *view,ScintillaView *engine,NSInteger column){ [view setSelectionAnchor:column caret:column]; [engine message:SCI_SCROLLCARET]; paint(view); return [engine message:SCI_GETXOFFSET]; };
+            const NSInteger inside=(ed.textAreaWidth-ed.textMarginLeft)/letter-12;
+            check(inside>95 && offsetAt(ed,sv,inside)==0 && offsetAt(ordinary,plain,inside)==0,
+                  "A caret past the column's width but inside the pane does not scroll the view sideways");
+            const sptr_t centredEnd=offsetAt(ed,sv,200), ordinaryEnd=offsetAt(ordinary,plain,200);
+            check(ordinaryEnd>0 && centredEnd-ordinaryEnd==shift, "At the end of a long line the view has scrolled exactly as the ordinary layout does, plus the left margin");
+            // The engine measures the widest line a pixel or two differently beside a wide margin.
+            auto padded=[&]{ return labs((long)([sv message:SCI_GETSCROLLWIDTH]-[plain message:SCI_GETSCROLLWIDTH]-shift))<=2; };
+            check(padded() && labs((long)(([sv message:SCI_GETSCROLLWIDTH]-centredEnd)-([plain message:SCI_GETSCROLLWIDTH]-ordinaryEnd)))<=2,
+                  "and the horizontal scroll range is the ordinary one plus the left margin, so the scroller reaches as far as it does in the ordinary layout");
+            check(offsetAt(ed,sv,0)==0 && offsetAt(ordinary,plain,0)==0, "fixture: both views scrolled back to the start");
+            ed.wrap=YES; paint(ed); ed.wrap=NO; paint(ed);
+            check(padded(), "The range is padded once, however often Wrap Lines is toggled");
+            ed.centeredColumnCharacters=0; paint(ed);
+            check(labs((long)([sv message:SCI_GETSCROLLWIDTH]-[plain message:SCI_GETSCROLLWIDTH]))<=2, "and with the column off it is the ordinary range again");
+            ed.centeredColumnCharacters=90; paint(ed);
+        }
         ed.wrap=YES; paint(ed);
+        check(centred(ed,90) && labs((long)(ed.textMarginLeft-ed.textMarginRight))<=1 && ed.textMarginLeft+ed.textMarginRight+[ed textWidthOfColumns:90]==ed.textAreaWidth,
+              "Turning Wrap Lines on gives the column its right margin: equal margins that fill the text area");
+        check([sv message:SCI_POSITIONFROMPOINT wParam:(uptr_t)(gutter+ed.textAreaWidth-3) lParam:[sv message:SCI_POINTYFROMPOSITION wParam:0 lParam:shortEnd]+height/2]==shortEnd,
+              "With Wrap Lines on a click in the right margin is a click at the end of that line");
         const sptr_t fit=[ed textWidthOfColumns:90]/MAX((sptr_t)1,[sv message:SCI_TEXTWIDTH wParam:STYLE_DEFAULT lParam:(sptr_t)"x"]);
         check([sv message:SCI_WRAPCOUNT wParam:0]==(200+fit-1)/fit && [sv message:SCI_WRAPCOUNT wParam:1]==1, "With Wrap Lines on the text wraps at the column");
         ed.wrap=NO; paint(ed);
+        check(centred(ed,90) && ed.textMarginRight==plainRight, "Turning Wrap Lines off removes the right margin again");
         const NSInteger wideLeft=ed.textMarginLeft;
         ed.zoomLevel=4;
         check(centred(ed,90) && ed.textMarginLeft<wideLeft, "Zooming in recomputes the margins for the larger font");
@@ -1556,6 +1587,11 @@ int main(int argc, char **argv) {
         TTEditor *clone=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,1000,400)];
         [clone shareDocumentWith:ed]; [clone adoptViewStateFrom:ed];
         check(clone.centeredColumnCharacters==60 && centred(clone,60) && clone.textMarginLeft!=ed.textMarginLeft, "A second view takes the choice and centres the column in its own width");
+        ed.wrap=YES;
+        TTEditor *wrapped=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,1000,400)];
+        [wrapped shareDocumentWith:ed]; [wrapped adoptViewStateFrom:ed];
+        check(wrapped.wrap && centred(wrapped,60) && wrapped.textMarginRight>plainRight, "A second view of a wrapped view takes the wrap mode and has both margins");
+        ed.wrap=NO;
         ed.comparisonPresentation=YES;
         check(ed.textMarginLeft==plainLeft && ed.textMarginRight==plainRight, "A comparison pane keeps the ordinary margins");
         ed.comparisonPresentation=NO;

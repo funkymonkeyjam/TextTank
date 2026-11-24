@@ -341,7 +341,8 @@ __attribute__((objc_subclassing_restricted))
 /// wide in the default style's font at the current zoom, with equal blank margins either side,
 /// recomputed whenever the text area's width, the font or the zoom changes. Zero, the default,
 /// is the ordinary layout. A text area narrower than the column, and a comparison pane, use the
-/// ordinary layout. The margins are view state: text, selection, wrapping mode and the line-number
+/// ordinary layout. With Wrap Lines off only the left margin is applied: the text starts at the
+/// column's left edge and a long line runs to the pane's edge, scrolling sideways as usual. The margins are view state: text, selection, wrapping mode and the line-number
 /// gutter are not changed, and a click in either margin acts as a click at the line's start or end.
 @property(nonatomic) NSInteger centeredColumnCharacters;
 /// The blank margins left and right of the text now, in points.

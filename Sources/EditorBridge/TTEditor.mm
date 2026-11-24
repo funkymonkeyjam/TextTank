@@ -653,6 +653,7 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     NSInteger _unsavedChangeColour, _savedChangeColour;
     NSInteger _centeredColumnCharacters;
     sptr_t _plainMarginLeft, _plainMarginRight;
+    sptr_t _naturalScrollWidth, _paddedScrollWidth;
     id _textAreaObserver;
 }
 @property(nonatomic, strong) ScintillaView *engine;
@@ -1040,6 +1041,11 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
 }
 /// Equal margins around a column of `_centeredColumnCharacters` zeros in the default style, which
 /// Scintilla measures at the current zoom. With no room for both, the engine's own margins.
+/// With Wrap Lines off only the left margin is applied: Scintilla's right margin narrows the
+/// rectangle the caret is kept in without clipping what is drawn, so a long line would paint
+/// through it while the view scrolled sideways at the column's edge with half the pane empty.
+/// The text then starts at the column's left edge and runs to the pane's edge, and horizontal
+/// scrolling is the ordinary layout's.
 - (void)updateCenteredColumn {
     if (!_engine) return;
     sptr_t left = _plainMarginLeft, right = _plainMarginRight;
@@ -1047,10 +1053,29 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
         const sptr_t available = self.textAreaWidth;
         const sptr_t column = [self textWidthOfColumns:_centeredColumnCharacters];
         const sptr_t spare = available - column;
-        if (spare > left + right) { left = spare / 2; right = spare - left; }
+        if (spare > left + right) {
+            left = spare / 2;
+            if ([_engine message:SCI_GETWRAPMODE] != SC_WRAP_NONE) right = spare - left;
+        }
     }
     if ([_engine message:SCI_GETMARGINLEFT] != left) [_engine message:SCI_SETMARGINLEFT wParam:0 lParam:left];
     if ([_engine message:SCI_GETMARGINRIGHT] != right) [_engine message:SCI_SETMARGINRIGHT wParam:0 lParam:right];
+    [self updateScrollRangePad];
+}
+/// The engine's horizontal range is the widest line it has drawn and takes no account of a left
+/// margin, so with the column's margin the end of the widest line could be reached by the caret
+/// and not by the scroller. With Wrap Lines off the range is kept that margin wider. The engine
+/// replaces the range when it draws a line wider than it; the pad is put back after that paint.
+- (void)updateScrollRangePad {
+    if (!_engine) return;
+    const BOOL unwrapped = [_engine message:SCI_GETWRAPMODE] == SC_WRAP_NONE && !_comparisonPresentation;
+    const sptr_t pad = unwrapped ? MAX((sptr_t)0, [_engine message:SCI_GETMARGINLEFT] - _plainMarginLeft) : 0;
+    const sptr_t current = [_engine message:SCI_GETSCROLLWIDTH];
+    // A width other than the one set here is the engine's own.
+    const sptr_t natural = (_paddedScrollWidth && current == _paddedScrollWidth) ? _naturalScrollWidth : current;
+    _naturalScrollWidth = natural;
+    _paddedScrollWidth = pad > 0 ? natural + pad : 0;
+    if (current != natural + pad) [_engine message:SCI_SETSCROLLWIDTH wParam:(uptr_t)(natural + pad)];
 }
 - (void)dealloc {
     if (_accessibilityDisplayObserver) [NSWorkspace.sharedWorkspace.notificationCenter removeObserver:_accessibilityDisplayObserver];
@@ -1881,6 +1906,8 @@ static sptr_t TTMacWordDestination(ScintillaView *engine, sptr_t caret, bool rig
 - (BOOL)wrap { [self assertThread]; return [_engine message:SCI_GETWRAPMODE] != SC_WRAP_NONE; }
 - (void)setWrap:(BOOL)wrap {
     [self assertThread]; _pendingWrappedViewport = nil; [_engine message:SCI_SETWRAPMODE wParam:wrap ? SC_WRAP_WORD : SC_WRAP_NONE];
+    // The centred column has a right margin only while lines wrap at it.
+    [self updateCenteredColumn];
     // Rows are re-wrapped lazily, so the row count compared by -invalidateLineNumbersIfChanged may not have moved yet.
     _emptyLineNumbers.needsDisplay = YES;
     [self scheduleStateNotification];
@@ -1940,6 +1967,8 @@ static sptr_t TTMacWordDestination(ScintillaView *engine, sptr_t caret, bool rig
         [_engine message:SCI_SETCHANGEHISTORY wParam:SC_CHANGE_HISTORY_ENABLED];
     [self applyChangeTracking];
     self.centeredColumnCharacters = other.centeredColumnCharacters;
+    // The wrap mode was copied above without the setter.
+    [self updateCenteredColumn];
 }
 - (void)retireInFavorOf:(TTEditor *)successor {
     [self assertThread];
@@ -3081,6 +3110,7 @@ static sptr_t TTMacWordDestination(ScintillaView *engine, sptr_t caret, bool rig
     // numbers are compared, not redrawn, and for a modification only when its lines changed.
     if (code == SCN_PAINTED || code == SCN_UPDATEUI || code == SCN_ZOOM ||
         (code == SCN_MODIFIED && (notification->linesAdded != 0 || (type & SC_MOD_CHANGEFOLD)))) [self invalidateLineNumbersIfChanged];
+    if (code == SCN_PAINTED && _paddedScrollWidth) [self updateScrollRangePad];
     // Native responder Undo/Redo bypasses the application command dispatcher and
     // Scintilla does not emit MacroRecord for these operations. Never save a macro
     // that silently omits their changes.
