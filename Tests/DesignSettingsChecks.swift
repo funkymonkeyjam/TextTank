@@ -20,7 +20,10 @@ import NativeSearch
             return
         }
         let ids: Set<String> = [
-            "settings.close", "settings.reset", "settings.font.choose", "automation.create",
+            "settings.close", "settings.reset", "settings.font.choose", "settings.shortcuts.recorder",
+            "settings.shortcuts.default", "settings.shortcuts.clear", "settings.shortcuts.resetAll",
+            "settings.shortcuts.replace", "settings.shortcuts.cancel", "settings.reveal", "settings.clearLocalHistory",
+            "automation.create",
             "automation.edit",
             "automation.rules", "automation.duplicate", "automation.delete", "automation.favorite", "automation.json"
         ]
@@ -551,6 +554,8 @@ import NativeSearch
             window.sendEvent(try key(characters, flags, code: code))
         }
         func button(_ id: String) throws -> NSButton { try DesignSettingsChecks.control("settings.shortcuts." + id, window) }
+        /// The command of the selected row, or nil.
+        var selectedTitle: String? { table.selectedRow >= 0 ? text(table.selectedRow, 0) : nil }
     }
     /// V8, in the real menu bar: the list of every command, the recorder, a key in use, a
     /// reserved key, Replace, Use Default, Reset All Shortcuts and the live menu.
@@ -597,6 +602,53 @@ import NativeSearch
                     !((try? button($0))?.accessibilityLabel() ?? "").isEmpty
                 },
             "V8 DS-70 the list and every button of the pane have accessibility labels")
+
+        // The recorder as assistive technology finds it in the window: a button named for the
+        // selected command, whose value is that command's key, following the selection.
+        for (title, value) in [("File › New", "Command-N"), ("File › Save Copy…", "no shortcut")] {
+            try select(title)
+            window.contentView?.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            let purpose = "Record a shortcut for \(title), now \(value)"
+            check(
+                nativeTree(window).contains {
+                    exposes($0, purpose: purpose, role: "AXButton")
+                        && modernAttribute($0, "accessibilityValue") as? String == value
+                } && recorder.accessibilityHelp() == nil,
+                "V8 DS-70 the window's accessibility tree has the recorder as a button named “\(purpose)” with that value")
+        }
+        table.deselectAll(nil)
+        // The list takes the height the window gives the pane.
+        let scroll: NSScrollView = try control("settings.shortcuts.scroll", window)
+        let content = try requireValue(window.contentView, "V8 fixture: content")
+        content.layoutSubtreeIfNeeded()
+        let listHeight = scroll.frame.height, paneHeight = content.bounds.height, recorderHeight = recorder.frame.height
+        check(
+            abs(listHeight - 240) <= 1 && window.contentMinSize.height == paneHeight
+                && window.contentMaxSize.height >= paneHeight + 1000,
+            "V8 the Shortcuts pane opens with its list at the least height and can be made taller: \(listHeight)")
+        var taller = window.frame
+        taller.size.height += 160
+        taller.origin.y -= 160
+        window.setFrame(taller, display: true)
+        content.layoutSubtreeIfNeeded()
+        check(
+            abs(scroll.frame.height - (listHeight + 160)) <= 1 && recorder.frame.height == recorderHeight
+                && abs(content.bounds.height - (paneHeight + 160)) <= 1,
+            "V8 a taller window gives all of the extra height to the list: \(scroll.frame.height)")
+        try find("save")
+        try find("")
+        content.layoutSubtreeIfNeeded()
+        check(
+            abs(scroll.frame.height - (listHeight + 160)) <= 1,
+            "V8 the list keeps the height the person gave it while the pane is in use")
+        try choosePane("editing", in: window)
+        check(
+            window.contentMaxSize == window.contentMinSize && content.bounds.height < paneHeight,
+            "V8 another pane is exactly its content again")
+        try choosePane("shortcuts", in: window)
+        content.layoutSubtreeIfNeeded()
+        check(abs(scroll.frame.height - listHeight) <= 1, "V8 fixture: the list is at its least height again")
 
         // (a) Every command, with its key and whether that is the default.
         let palette = composition.commandDiscovery.commands(in: bar)
@@ -916,6 +968,52 @@ import NativeSearch
             try text(try row("Fixture › First"), 2) == "Default · Same key as “Fixture › Second”"
                 && text(try row("Fixture › Second"), 2) == "Default · Same key as “Fixture › First”",
             "V8 commands on the same key are marked in words: \(text(try row("Fixture › First"), 2))")
+    }
+    /// The Files pane's Clear Local History… button sends the Compare menu's command. The
+    /// confirmation is the injected one the command's own checks use, so nothing is presented.
+    static func clearLocalHistoryRowChecks(root: URL, composition: AppDelegate) throws {
+        let priorStore = LocalHistory.store, priorConfirm = LocalHistory.confirmClear
+        defer {
+            LocalHistory.store = priorStore
+            LocalHistory.confirmClear = priorConfirm
+        }
+        let home = root.appendingPathComponent("history-row/LocalHistory", isDirectory: true)
+        let store = LocalHistoryStore(directory: home)
+        LocalHistory.store = store
+        for text in ["first", "second", "third"] { store.record(path: "/fixture/notes.txt", bytes: Data(text.utf8)) }
+        store.waitUntilIdle()
+        let before = store.usage()
+        try require(before.versions == 3, "V10 fixture: three earlier versions are kept")
+        var prompts: [LocalHistory.ClearPrompt] = [], answer = LocalHistory.ClearChoice.cancel
+        LocalHistory.confirmClear = { prompt, _, reply in
+            prompts.append(prompt)
+            reply(answer)
+        }
+        // The command asks in a sheet on the workspace window, so there must be one.
+        let document = DocumentFactory.makeUntitled()
+        defer { document.close() }
+        composition.settings.showSettings(nil)
+        let form = try requireValue(
+            FormPanel.visible.last { $0.window.identifier?.rawValue == "TextTank.Settings" }, "V10 fixture: Settings")
+        defer { form.close() }
+        try choosePane("files", in: form.window)
+        let row: NSButton = try control("settings.clearLocalHistory", form.window)
+        row.performClick(nil)
+        check(
+            prompts.count == 1 && prompts.first?.buttons.first?.choice == .cancel
+                && prompts.first?.buttons.last?.choice == .everything
+                && form.window.isVisible && form.window.attachedSheet == nil,
+            "V10 the Settings row sends Clear Local History…, which asks with the command's own confirmation")
+        store.waitUntilIdle()
+        check(
+            try store.usage() == before && store.versions(forPath: "/fixture/notes.txt").count == 3,
+            "V10 Cancel from the Settings row deletes nothing")
+        answer = .everything
+        row.performClick(nil)
+        store.waitUntilIdle()
+        check(
+            prompts.count == 2 && store.usage().versions == 0,
+            "V10 and the same row, confirmed, clears the history as the menu command does")
     }
     static func maintenanceSheetChecks(root: URL) throws {
         let url = root.appendingPathComponent("maintenance-settings.json")
@@ -1350,7 +1448,6 @@ extension DesignSettingsChecks {
             "TextTank.Settings",
             [("Search commands by name, menu or shortcut", "AXTextField"), ("Commands and their shortcuts", "AXTable")])
         settingsForm.close()
-        try shortcutPaneChecks(composition: composition)
 
         let document = DocumentFactory.makeUntitled()
         defer { document.close() }
@@ -1452,6 +1549,12 @@ extension DesignSettingsChecks {
             editorProvider: { editor }, languageProvider: { "plain" }, setLanguage: { _ in })
         language.configure()
         try checkInputs("language.json", [("Language profiles JSON", "AXTextArea")]).close()
+        // The Shortcuts pane and the Files row are driven last, after every other window of this
+        // process has been checked, so they find no window of another check open.
+        document.close()
+        try shortcutPaneChecks(composition: composition)
+        try SettingsShortcutValidationChecks.paneScenarios(root: isolated.url)
+        try clearLocalHistoryRowChecks(root: isolated.url, composition: composition)
     }
 }
 

@@ -1020,7 +1020,8 @@ extension DocumentChecks {
             // readable command names and the selected command's current shortcut, and that reading
             // one saves nothing, is checked through the real window as "G396 Settings shows readable
             // command names…" in DesignSettingsChecks.shortcutPaneChecks, in the
-            // design-settings-input-checks process of this suite.
+            // design-settings-input-checks process of this suite. The five DS45 scenarios drive the
+            // same window there too: SettingsShortcutValidationChecks.paneScenarios.
         }
 
         section("audit25 actual shortcut drafts and menu updates", #line) {
