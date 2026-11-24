@@ -717,7 +717,10 @@ import Darwin
                 as? NSMenuToolbarItem, "T3 Editor Layout toolbar item")
         check(
             picker.view == nil && picker.label == "Editor Layout" && !(picker.toolTip ?? "").isEmpty
-                && !descendants(strip).contains { $0 is NSPopUpButton },
+                && descendants(strip).compactMap { $0 as? NSPopUpButton }.allSatisfy {
+                    $0.identifier?.rawValue == "tabs.openTabs"
+                        && !$0.itemArray.contains { $0.identifier?.rawValue.hasPrefix("groups.layout.") == true }
+                },
             "T3 the layout choice is a labelled toolbar item, outside the scrolling strips (DS-D12)")
         let choices = picker.menu.items.filter {
             $0.identifier?.rawValue.hasPrefix("groups.layout.") == true

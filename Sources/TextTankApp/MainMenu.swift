@@ -345,12 +345,22 @@ extension AppDelegate {
             title: "Previous Tab", action: #selector(previousDocumentTab(_:)), keyEquivalent: "\t",
             modifiers: [.control, .shift], target: self)
         window.addItem(title: "Open Documents…", action: #selector(showDocumentTabs(_:)))
-        // DS-73: the keyboard route between the window's areas. The two commands share one
-        // submenu, which keeps this level at twenty items (DS-23).
+        // DS-73: the keyboard route between the window's areas, in one submenu.
         workspaceWindow.areaFocus.addMenuItems(to: window.addSubmenu(titled: WindowAreaFocusController.menuTitle))
+        // DS-23: AppKit lists the open windows at the end of this menu, so its own commands must
+        // leave room for them. The five commands that close several tabs at once share a
+        // submenu; every tab's own menu lists them too. Close Tab stays at this level.
+        let several: Set<TabCommand> = [.closeOthers, .closeLeft, .closeRight, .closeGroup, .closeSaved]
+        var closeSeveral: NSMenu?
         for section in TabCommandController.sections {
             window.addItem(.separator())
             for command in section {
+                var window = window
+                if several.contains(command) {
+                    let submenu = closeSeveral ?? window.addSubmenu(titled: "Close Multiple Tabs")
+                    closeSeveral = submenu
+                    window = submenu
+                }
                 let item = window.addItem(
                     title: command.title, action: #selector(performTabCommand(_:)),
                     fallback: command.defaultMenuShortcut, target: self,

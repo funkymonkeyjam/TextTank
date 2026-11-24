@@ -3798,11 +3798,20 @@
     "title" : "Close Tab"
   },
   {
+    "action" : "submenuAction:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "7.9",
+    "target" : "explicit",
+    "title" : "Close Multiple Tabs"
+  },
+  {
     "action" : "performTabCommand:",
     "key" : "",
     "modifiers" : "1048576",
     "object" : "closeOthers",
-    "position" : "7.9",
+    "position" : "7.9.0",
     "target" : "explicit",
     "title" : "Close Other Tabs"
   },
@@ -3811,7 +3820,7 @@
     "key" : "",
     "modifiers" : "1048576",
     "object" : "closeLeft",
-    "position" : "7.10",
+    "position" : "7.9.1",
     "target" : "explicit",
     "title" : "Close Tabs to the Left"
   },
@@ -3820,7 +3829,7 @@
     "key" : "",
     "modifiers" : "1048576",
     "object" : "closeRight",
-    "position" : "7.11",
+    "position" : "7.9.2",
     "target" : "explicit",
     "title" : "Close Tabs to the Right"
   },
@@ -3829,7 +3838,7 @@
     "key" : "",
     "modifiers" : "1048576",
     "object" : "closeGroup",
-    "position" : "7.12",
+    "position" : "7.9.3",
     "target" : "explicit",
     "title" : "Close All in Group"
   },
@@ -3838,9 +3847,45 @@
     "key" : "",
     "modifiers" : "1048576",
     "object" : "closeSaved",
-    "position" : "7.13",
+    "position" : "7.9.4",
     "target" : "explicit",
     "title" : "Close Saved Tabs"
+  },
+  {
+    "action" : "",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "",
+    "position" : "7.10",
+    "target" : "responder",
+    "title" : ""
+  },
+  {
+    "action" : "performTabCommand:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "pin",
+    "position" : "7.11",
+    "target" : "explicit",
+    "title" : "Pin Tab"
+  },
+  {
+    "action" : "performTabCommand:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "moveLeft",
+    "position" : "7.12",
+    "target" : "explicit",
+    "title" : "Move Tab Left"
+  },
+  {
+    "action" : "performTabCommand:",
+    "key" : "",
+    "modifiers" : "1048576",
+    "object" : "moveRight",
+    "position" : "7.13",
+    "target" : "explicit",
+    "title" : "Move Tab Right"
   },
   {
     "action" : "",
@@ -3855,44 +3900,8 @@
     "action" : "performTabCommand:",
     "key" : "",
     "modifiers" : "1048576",
-    "object" : "pin",
-    "position" : "7.15",
-    "target" : "explicit",
-    "title" : "Pin Tab"
-  },
-  {
-    "action" : "performTabCommand:",
-    "key" : "",
-    "modifiers" : "1048576",
-    "object" : "moveLeft",
-    "position" : "7.16",
-    "target" : "explicit",
-    "title" : "Move Tab Left"
-  },
-  {
-    "action" : "performTabCommand:",
-    "key" : "",
-    "modifiers" : "1048576",
-    "object" : "moveRight",
-    "position" : "7.17",
-    "target" : "explicit",
-    "title" : "Move Tab Right"
-  },
-  {
-    "action" : "",
-    "key" : "",
-    "modifiers" : "1048576",
-    "object" : "",
-    "position" : "7.18",
-    "target" : "responder",
-    "title" : ""
-  },
-  {
-    "action" : "performTabCommand:",
-    "key" : "",
-    "modifiers" : "1048576",
     "object" : "reveal",
-    "position" : "7.19",
+    "position" : "7.15",
     "target" : "explicit",
     "title" : "Reveal in Finder"
   },
@@ -3901,7 +3910,7 @@
     "key" : "",
     "modifiers" : "1048576",
     "object" : "copyPath",
-    "position" : "7.20",
+    "position" : "7.16",
     "target" : "explicit",
     "title" : "Copy File Path"
   },
@@ -3910,7 +3919,7 @@
     "key" : "",
     "modifiers" : "1048576",
     "object" : "",
-    "position" : "7.21",
+    "position" : "7.17",
     "target" : "responder",
     "title" : ""
   },
@@ -3919,7 +3928,7 @@
     "key" : "m",
     "modifiers" : "1048576",
     "object" : "",
-    "position" : "7.22",
+    "position" : "7.18",
     "target" : "responder",
     "title" : "Minimize"
   },
@@ -3928,7 +3937,7 @@
     "key" : "",
     "modifiers" : "1048576",
     "object" : "",
-    "position" : "7.23",
+    "position" : "7.19",
     "target" : "responder",
     "title" : "Zoom"
   },
@@ -3937,7 +3946,7 @@
     "key" : "",
     "modifiers" : "1048576",
     "object" : "",
-    "position" : "7.24",
+    "position" : "7.20",
     "target" : "responder",
     "title" : ""
   },
@@ -3946,7 +3955,7 @@
     "key" : "",
     "modifiers" : "1048576",
     "object" : "",
-    "position" : "7.25",
+    "position" : "7.21",
     "target" : "responder",
     "title" : "Bring All to Front"
   },
@@ -3955,7 +3964,7 @@
     "key" : "}",
     "modifiers" : "1048576",
     "object" : "",
-    "position" : "7.26",
+    "position" : "7.22",
     "target" : "explicit",
     "title" : "Next Tab"
   },
@@ -3964,7 +3973,7 @@
     "key" : "{",
     "modifiers" : "1048576",
     "object" : "",
-    "position" : "7.27",
+    "position" : "7.23",
     "target" : "explicit",
     "title" : "Previous Tab"
   },
@@ -3973,7 +3982,7 @@
     "key" : "\u0019",
     "modifiers" : "393216",
     "object" : "",
-    "position" : "7.28",
+    "position" : "7.24",
     "target" : "explicit",
     "title" : "Previous Tab"
   },

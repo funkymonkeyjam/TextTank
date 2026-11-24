@@ -31,28 +31,36 @@ final class EditorGroupSurface: NSView {
     /// shortcut assigned in Settings is the one shown (DS-20).
     private struct HintCommand {
         let action: Selector
-        let withKey: (key: String, english: String)
-        let withoutKey: (key: String, english: String)
+        /// The sentence with a place for the key, and the sentence that names the menu instead.
+        /// Each is a whole catalogue entry (DS-84).
+        let withKey: @MainActor () -> String
+        let withoutKey: @MainActor () -> String
     }
     private static let hintCommands: [HintCommand] = [
         HintCommand(
             action: EditorToolbarCommand.new.action,
-            withKey: ("emptyGroup.hint.new", "Press %@ for a new document."),
-            withoutKey: ("emptyGroup.hint.new.menu", "Choose File > New for a new document.")),
+            withKey: { Strings.text("emptyGroup.hint.new", "Press %@ for a new document.") },
+            withoutKey: { Strings.text("emptyGroup.hint.new.menu", "Choose File > New for a new document.") }),
         HintCommand(
             action: EditorToolbarCommand.open.action,
-            withKey: ("emptyGroup.hint.open", "Press %@ to open a document."),
-            withoutKey: ("emptyGroup.hint.open.menu", "Choose File > Open… to open a document.")),
+            withKey: { Strings.text("emptyGroup.hint.open", "Press %@ to open a document.") },
+            withoutKey: { Strings.text("emptyGroup.hint.open.menu", "Choose File > Open… to open a document.") }),
         HintCommand(
             action: #selector(WorkspaceBrowserController.quickOpen(_:)),
-            withKey: ("emptyGroup.hint.quickOpen", "Press %@ for Quick Open, to find a file by name."),
-            withoutKey: ("emptyGroup.hint.quickOpen.menu", "Choose File > Quick Open… to find a file by name.")),
+            withKey: {
+                Strings.text("emptyGroup.hint.quickOpen", "Press %@ for Quick Open, to find a file by name.")
+            },
+            withoutKey: {
+                Strings.text(
+                    "emptyGroup.hint.quickOpen.menu", "Choose File > Quick Open… to find a file by name.")
+            }),
         HintCommand(
             action: NSSelectorFromString("paletteAction"),
-            withKey: ("emptyGroup.hint.palette", "Press %@ for the Command Palette."),
-            withoutKey: (
-                "emptyGroup.hint.palette.menu", "Choose Help > Command Palette… to run any command."
-            ))
+            withKey: { Strings.text("emptyGroup.hint.palette", "Press %@ for the Command Palette.") },
+            withoutKey: {
+                Strings.text(
+                    "emptyGroup.hint.palette.menu", "Choose Help > Command Palette… to run any command.")
+            })
     ]
     /// One label for each command, in secondary label style. A command the menu bar does not
     /// list has no row.
@@ -294,11 +302,11 @@ final class EditorGroupSurface: NSView {
             var text = "", spoken = ""
             if let item = Self.menuItem(command.action, in: NSApp.mainMenu) {
                 if let key = ControlPresentation.shortcut(of: item) {
-                    let format = Strings.text(command.withKey.key, command.withKey.english)
+                    let format = command.withKey()
                     text = String(format: format, key)
                     spoken = String(format: format, ControlPresentation.spokenShortcut(of: item) ?? key)
                 } else {
-                    text = Strings.text(command.withoutKey.key, command.withoutKey.english)
+                    text = command.withoutKey()
                     spoken = text
                 }
             }
@@ -563,32 +571,39 @@ final class EditorGroupContainer: NSView, NSSplitViewDelegate {
     }
     func splitViewDidResizeSubviews(_ notification: Notification) {
         guard alignColumns, !synchronizing, let source = notification.object as? NSSplitView, source.isVertical,
-            let other = dividers.first(where: { $0.isVertical && $0 !== source }), let first = source.subviews.first
+            let other = dividers.first(where: { $0.isVertical && $0 !== source })
         else { return }
         // While the window is being resized the two rows are resized one after the other. A
         // position copied from the row already resized to the row still at its old width was
         // then scaled again, which left the columns out of line and one narrower than its
-        // minimum. The rows are aligned once both have their new width, in `resizeSubviews`.
+        // minimum. The rows are aligned only once both have the same width.
         guard abs(other.bounds.width - source.bounds.width) < 0.5 else { return }
-        guard abs((other.subviews.first?.frame.width ?? 0) - first.frame.width) > 0.5 else { return }
-        synchronizing = true
-        other.setPosition(first.frame.width, ofDividerAt: 0)
-        synchronizing = false
+        alignGridColumns(following: source)
     }
+    // A split view reports a resize when it has laid its panes out, which under its own layout
+    // pass can be after `resizeSubviews` returns. The rows are therefore aligned at each of the
+    // three moments a frame can have changed: here, in `layout` and when a row reports.
     override func resizeSubviews(withOldSize oldSize: NSSize) {
         super.resizeSubviews(withOldSize: oldSize)
         alignGridColumns()
     }
-    /// Puts the column divider of both rows at the same place: where the first row's is after
-    /// the resize, which keeps its share of the width, never leaving a column narrower than its
-    /// minimum.
-    private func alignGridColumns() {
+    override func layout() {
+        super.layout()
+        alignGridColumns()
+    }
+    /// Puts the column divider of both rows at the same place: where `leader`'s is (the row
+    /// that was dragged, otherwise the first row), held so that no column is narrower than its
+    /// minimum. A resize keeps the divider's share of the width; a share given up to the minimum
+    /// is not taken back when the window widens, as with every other divider in the window.
+    private func alignGridColumns(following leader: NSSplitView? = nil) {
         guard alignColumns, !synchronizing else { return }
         let rows = dividers.filter(\.isVertical)
-        guard rows.count == 2, let width = rows.map(\.bounds.width).min(), width > 0 else { return }
-        let least = splitMinimum[ObjectIdentifier(rows[0])] ?? 0
+        guard rows.count == 2, abs(rows[0].bounds.width - rows[1].bounds.width) < 0.5, rows[0].bounds.width > 0,
+            let current = (leader ?? rows[0]).subviews.first?.frame.width
+        else { return }
+        let width = rows[0].bounds.width, least = splitMinimum[ObjectIdentifier(rows[0])] ?? 0
         let most = max(least, width - least - rows[0].dividerThickness)
-        let position = min(most, max(least, rows[0].subviews.first?.frame.width ?? width / 2))
+        let position = min(most, max(least, current))
         synchronizing = true
         for row in rows where abs((row.subviews.first?.frame.width ?? 0) - position) > 0.5 {
             row.setPosition(position, ofDividerAt: 0)
@@ -667,8 +682,8 @@ final class EditorGroupContainer: NSView, NSSplitViewDelegate {
         }
     }
     var isAvailable: Bool {
-        guard let window = host.window else { return false }
-        return window.attachedSheet == nil && !host.isMutatingGroups && !host.tabCommands.isBusy
+        guard host.window != nil else { return false }
+        return !host.hasAttachedSheet && !host.isMutatingGroups && !host.tabCommands.isBusy
             && !CompareCommandScope.blocksWorkspace
     }
     func validateMenuItem(_ item: NSMenuItem) -> Bool { isAvailable }
@@ -749,15 +764,18 @@ final class EditorGroupContainer: NSView, NSSplitViewDelegate {
         case (.emptyGroup, let group?): return String(format: Strings.text("areas.empty.group", "%@, empty."), group)
         }
     }
+    /// The view that has the keyboard. A text field's typing is done by the window's field
+    /// editor on the field's behalf, so the field is what is returned for it.
+    private func currentResponderView(in window: NSWindow?) -> NSView? {
+        guard let responder = window?.firstResponder else { return nil }
+        if let editor = responder as? NSText, editor.isFieldEditor, let field = editor.delegate as? NSView {
+            return field
+        }
+        return responder as? NSView
+    }
     /// The area that holds the keyboard, or nil when none does.
     func currentArea(in areas: [Area]) -> Int? {
-        guard let responder = host.window?.firstResponder else { return nil }
-        var view = responder as? NSView
-        // A text field's typing is done by the window's field editor on the field's behalf.
-        if let editor = responder as? NSText, editor.isFieldEditor, let field = editor.delegate as? NSView {
-            view = field
-        }
-        guard let view else { return nil }
+        guard let view = currentResponderView(in: host.window) else { return nil }
         return areas.firstIndex { view.isDescendant(of: $0.container) }
     }
     /// Moves the keyboard `direction` areas round the ring (1 or -1), skipping an area that
@@ -786,6 +804,16 @@ final class EditorGroupContainer: NSView, NSSplitViewDelegate {
     }
     private func enter(_ area: Area, in window: NSWindow) -> Bool {
         guard area.target.window === window, !area.target.isHiddenOrHasHiddenAncestor else { return false }
+        // Leaving Go to Line by this route is not Return: the bar closes and the caret, the
+        // selection and the scroll position go back to what they were before it opened.
+        if let responder = currentResponderView(in: window) {
+            for presentation in host.presentations
+            where presentation.goToLineBarVisible && responder.isDescendant(of: presentation.goToLineBar)
+                && !area.target.isDescendant(of: presentation.goToLineBar)
+            {
+                presentation.closeGoToLineBar(restoring: true, returningKeyboard: false)
+            }
+        }
         if let slot = area.slot, slot != host.model.focusedGroup { host.focusGroup(slot, focus: false) }
         if area.kind == .sidebar { host.sidebarWillTakeKeyboardByArea() }
         guard window.makeFirstResponder(area.target) else { return false }

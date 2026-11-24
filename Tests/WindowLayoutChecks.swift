@@ -134,6 +134,22 @@ import EditorBridge
                     host.groupCommands.validateMenuItem($0) == host.groupCommands.commandsAvailable
                 },
             "the toolbar item and each layout in its menu are enabled by the group commands' own test")
+        // A sheet: the item goes off when one begins and comes back when it ends. The sheet's
+        // presence is supplied to the host here, so none is shown.
+        var sheet = true
+        host.attachedSheetProbe = { sheet }
+        defer { host.attachedSheetProbe = nil }
+        NotificationCenter.default.post(name: NSWindow.willBeginSheetNotification, object: window)
+        check(
+            !layout.isEnabled && !host.groupCommands.commandsAvailable
+                && !host.groupCommands.validateMenuItem(offered[0]) && !host.areaFocus.isAvailable,
+            "while a sheet is attached Editor Layout, its layouts and Move Focus are disabled together (DS-21)")
+        sheet = false
+        NotificationCenter.default.post(name: NSWindow.didEndSheetNotification, object: window)
+        check(
+            layout.isEnabled && host.groupCommands.validateMenuItem(offered[0]),
+            "when the sheet ends the toolbar item is enabled again without any other event")
+        host.attachedSheetProbe = nil
 
         // Removing the item from the toolbar leaves the menu route.
         let index = try requireValue(
@@ -291,7 +307,23 @@ import EditorBridge
         let listed = windowMenu.items.filter {
             !$0.isSeparatorItem && !$0.isHidden && $0.action != #selector(NSWindow.makeKeyAndOrderFront(_:))
         }
-        check(listed.count <= 20, "DS-23 the Window menu still lists no more than twenty items: \(listed.count)")
+        let drawn = windowMenu.items.filter { !$0.isSeparatorItem && !$0.isHidden }
+        check(
+            listed.count == 16 && drawn.count <= 20,
+            "DS-23 the Window menu has sixteen items of its own, which leaves room for the windows AppKit lists after them: \(listed.count) own, \(drawn.count) drawn"
+        )
+        let several = try requireValue(
+            try item(["Window", "Close Multiple Tabs"]).submenu, "the commands that close several tabs share a submenu")
+        check(
+            several.items.compactMap { $0.representedObject as? String } == [
+                "closeOthers", "closeLeft", "closeRight", "closeGroup", "closeSaved"
+            ]
+                && several.items.allSatisfy {
+                    $0.target === app && $0.action == #selector(AppDelegate.performTabCommand(_:))
+                }
+                && windowMenu.items.contains { $0.representedObject as? String == "close" },
+            "Close Multiple Tabs holds the five bulk closes with their command identities; Close Tab stays at the top level"
+        )
         // The fixture's Window rows are the menu as built: position, title, action, key, target.
         func rows(_ menu: NSMenu, path: [Int]) -> [[String: String]] {
             menu.items.enumerated().flatMap { index, item -> [[String: String]] in
@@ -357,6 +389,14 @@ import EditorBridge
             aliases.map { alias in catalog.aliases.first { $0.item === alias }?.standard }
                 == [WindowAreaFocusController.nextAlternate, WindowAreaFocusController.previousAlternate],
             "their second keys are known to the shortcut model as aliases, which give way to an assigned key")
+        check(
+            [WindowAreaFocusController.nextAlternate, WindowAreaFocusController.previousAlternate].map(\.spokenText)
+                == [
+                    "Option-Command-Backtick", "Option-Shift-Command-Backtick"
+                ] && MenuShortcut("~", [.command]).spokenText == "Shift-Command-Backtick"
+                && MenuShortcut("?", [.command]).spokenText == "Command-?",
+            "the second keys are said as the key presses they are; other shifted symbols are said as before: \([WindowAreaFocusController.nextAlternate, WindowAreaFocusController.previousAlternate].map(\.spokenText))"
+        )
         let pressF6 = try key(97, f6, [.function], in: window)
         let pressShiftF6 = try key(97, f6, [.function, .shift], in: window)
         check(
@@ -573,21 +613,31 @@ import EditorBridge
         check(
             !plainTab.goToLineBarVisible && keyboard(in: editor) && snapshot() == before,
             "Escape on a button of Go to Line closes it and puts the caret, selection and scroll position back")
+        // Leaving Go to Line by Move Focus is not Return: nothing of the previewed line is kept.
+        for direction in [1, -1] {
+            plainTab.goToLine(nil)
+            window.contentView?.layoutSubtreeIfNeeded()
+            let field = plainTab.goToLineBar.field
+            check(
+                plainTab.goToLineBarVisible && keyboard(in: field),
+                "fixture: Go to Line is open with the keyboard in its field")
+            field.stringValue = "300"
+            NotificationCenter.default.post(name: NSControl.textDidChangeNotification, object: field)
+            let previewed = snapshot() != before
+            focus.move(direction)
+            settle(0.1)
+            check(
+                !plainTab.goToLineBarVisible && current() == (direction == 1 ? .text : .tabs) && snapshot() == before,
+                "Move Focus \(direction == 1 ? "forward" : "back") out of Go to Line closes it and leaves the caret, selection and scroll as they were before it opened (line 300 was previewed: \(previewed))"
+            )
+            window.makeFirstResponder(plainTab.keyboardFocusView)
+        }
         plainTab.goToLine(nil)
         window.contentView?.layoutSubtreeIfNeeded()
-        window.makeFirstResponder(plainTab.keyboardFocusView)
-        settle(0.1)
-        if plainTab.goToLineBarVisible {
-            focus.move(-1)
-            check(
-                current() == .goToLine && focus.lastAnnouncement == "Go to Line.",
-                "Move Focus reaches Go to Line and names it")
-            plainTab.cancelGoToLine(nil)
-        } else {
-            check(
-                kinds() == [.tabs, .text, .status], "Go to Line closes when the keyboard leaves it, and leaves the ring"
-            )
-        }
+        check(
+            kinds() == [.tabs, .goToLine, .text, .status],
+            "Go to Line is in the ring while it is shown")
+        plainTab.cancelGoToLine(nil)
         window.makeFirstResponder(plainTab.keyboardFocusView)
         check(
             !plainTab.goToLineBarVisible && snapshot() == before,
@@ -604,6 +654,31 @@ import EditorBridge
         )
         center.end(operation)
         center.revealDelay = delay
+        window.contentView?.layoutSubtreeIfNeeded()
+        var followed = 0
+        plainTab.offerStatusFollowUp(
+            StatusFollowUp(
+                title: "Show Fixture", accessibilityLabel: "Show the fixture's result",
+                toolTip: "Shows the fixture's result.",
+                run: { followed += 1 }, isCurrent: { true }))
+        window.contentView?.layoutSubtreeIfNeeded()
+        let withFollowUp = surface.statusControls
+        let followUp = try requireValue(
+            withFollowUp.first { $0.identifier?.rawValue == StatusBadgeRow.followUpIdentifier },
+            "a follow-up button is one of the status row's keyboard stops: \(withFollowUp.map { $0.identifier?.rawValue ?? "" })"
+        )
+        let followUpAt = try requireValue(withFollowUp.firstIndex { $0 === followUp }, "fixture: follow-up position")
+        window.makeFirstResponder(withFollowUp[0])
+        for _ in 0..<followUpAt { surface.keyDown(with: try key(124, right, in: window)) }
+        check(
+            window.firstResponder === followUp && current() == .status && followUp.focusRingType != .none
+                && followUp.accessibilityLabel() == "Show the fixture's result",
+            "the arrow keys reach the follow-up button, which is named for what it does (DS-70)")
+        surface.keyDown(with: try key(36, "\r", in: window))
+        check(followed == 1 && snapshot() == before, "Return presses it once and changes nothing else")
+        surface.keyDown(with: try key(53, "\u{1B}", in: window))
+        check(keyboard(in: editor), "Escape from it returns the keyboard to the text")
+        plainTab.offerStatusFollowUp(nil)
         window.contentView?.layoutSubtreeIfNeeded()
         // Narrow: the fields that do not fit move into More, which is the last stop.
         window.setContentSize(NSSize(width: 800, height: 700))
@@ -1006,6 +1081,42 @@ import EditorBridge
         check(
             aligned(groupFrames()),
             "and wide again the rows are still in line: \(groupFrames().map { NSStringFromRect($0) })")
+        // The window's frame changed in steps, as a drag of its edge does, each step laid out
+        // and drawn: the rows are in line after every one, down to the minimum and back.
+        var misaligned: [String] = []
+        let origin = window.frame.origin
+        for width in Array(stride(from: 1400, through: 800, by: -37)) + Array(stride(from: 800, through: 1400, by: 53))
+        {
+            window.setFrame(
+                NSRect(
+                    origin: origin,
+                    size: window.frameRect(forContentRect: NSRect(x: 0, y: 0, width: CGFloat(width), height: 520)).size),
+                display: true)
+            window.contentView?.layoutSubtreeIfNeeded()
+            if !aligned(groupFrames()) { misaligned.append("\(width): \(groupFrames().map { NSStringFromRect($0) })") }
+        }
+        check(
+            misaligned.isEmpty, "resized in steps, the grid's rows stay in line at every width: \(misaligned.prefix(3))"
+        )
+        // The rule for a share given up to the minimum: it is not taken back on widening.
+        window.setContentSize(NSSize(width: 1400, height: 700))
+        window.contentView?.layoutSubtreeIfNeeded()
+        columns[1].setPosition(1000, ofDividerAt: 0)
+        window.contentView?.layoutSubtreeIfNeeded()
+        check(
+            aligned(groupFrames()) && abs(groupFrames()[2].width - 1000) < 1,
+            "the second row's divider leads the first when it is the one moved: \(groupFrames().map { NSStringFromRect($0) })"
+        )
+        window.setContentSize(NSSize(width: 800, height: 500))
+        window.contentView?.layoutSubtreeIfNeeded()
+        let clamped = groupFrames()[0].width / 800
+        window.setContentSize(NSSize(width: 1400, height: 700))
+        window.contentView?.layoutSubtreeIfNeeded()
+        check(
+            aligned(groupFrames()) && abs(groupFrames()[0].width / 1400 - clamped) < 0.01
+                && groupFrames()[0].width < 900,
+            "a divider held at the other column's minimum keeps the share it then had when the window widens: \(groupFrames()[0].width) of 1400"
+        )
 
         // The minimum group size: rows that do not fit are hidden, never clipped (DS-67).
         check(host.setEditorLayout(.single), "fixture: one group before the window shrinks")
