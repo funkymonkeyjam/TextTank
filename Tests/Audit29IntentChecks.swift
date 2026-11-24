@@ -59,14 +59,15 @@ import NativeSearch
                 composition,
                 [
                     "installCommandLine:", "findNextShared:", "findPreviousShared:", "actualSize:",
-                    "performCompareCommand:", "nextDocumentTab:", "previousDocumentTab:", "performTabCommand:"
+                    "performCompareCommand:", "nextDocumentTab:", "previousDocumentTab:", "performTabCommand:",
+                    "clearLocalHistory:"
                 ]
             ),
             (
                 composition.settings,
                 [
                     "showSettings:", "toggleAutoIndent:", "toggleAutoPair:", "toggleBraceHighlight:",
-                    "toggleCurrentLineHighlight:", "toggleIndentGuides:"
+                    "toggleCurrentLineHighlight:", "toggleIndentGuides:", "toggleChangeBars:", "toggleCenteredColumn:"
                 ]
             ),
             (composition.workspace, ["saveSession:", "openSession:"]),
@@ -82,6 +83,7 @@ import NativeSearch
             (composition.runner, ["configure:", "manage:", "addSample:", "cancel:"]),
             (composition.utilities, ["run:", "hexOptions:", "convertNumber:", "exportStyled:"]),
             (composition.workspaceWindow.groupCommands, ["invoke:"]),
+            (composition.workspaceWindow.areaFocus, ["moveFocusToNextArea:", "moveFocusToPreviousArea:"]),
             (
                 composition.languages,
                 [

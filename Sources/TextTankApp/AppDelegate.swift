@@ -60,7 +60,7 @@ import AppKit
         case #selector(CompareController.performCompareCommand(_:)):
             return CompareController.key?.validateMenuItem(item) ?? false
         case #selector(actualSize(_:)): return CompareController.key != nil || currentEditor != nil
-        case #selector(newDocument(_:)): return !CompareCommandScope.blocksWorkspace
+        case #selector(newDocument(_:)), #selector(clearLocalHistory(_:)): return !CompareCommandScope.blocksWorkspace
         case #selector(performTabCommand(_:)):
             guard let raw = item.representedObject as? String, let command = TabCommand(rawValue: raw) else {
                 return false
@@ -104,6 +104,18 @@ import AppKit
                 ($0.languageIdentifier, $0.editor)
             }
         }
+        // The chooser lists first what the document's name and first line suggest, and is a
+        // sheet on the workspace window.
+        controller.detectedLanguage = { [weak self, weak controller] in
+            guard let document = self?.currentDocument else { return nil }
+            // Only a "#!" first line is read from the text. A document too large to copy for
+            // that on the main thread is detected by its name alone.
+            let editor = document.editor
+            let sample =
+                editor.byteLength <= 1_048_576 ? String(decoding: editor.utf8Data.prefix(512), as: UTF8.self) : ""
+            return controller?.detect(filename: document.fileURL?.lastPathComponent ?? "", text: sample)
+        }
+        controller.chooserParent = { [weak self] in self?.currentDocumentController?.hostWindow }
         return controller
     }()
     // The providers below only answer "which editor". A macro recording is invalidated where
@@ -132,10 +144,19 @@ import AppKit
                 document.presentations.forEach { $0.acceptSharedFindFlags() }
             }
         }
-        controller.writeFindText = { [weak self] text in
-            EditorWindowController.findPasteboardText = text
-            self?.currentDocumentController?.acceptSharedFindText(text)
+        controller.writeFindText = { text in EditorWindowController.findPasteboardText = text }
+        // DS-35, one Find: text typed in the window or in any find bar is shown by all the others.
+        controller.sharedTextChanged = { source in
+            for case let document as TextDocument in NSDocumentController.shared.documents {
+                document.presentations.forEach { if $0 !== source { $0.acceptSharedFindText() } }
+            }
         }
+        controller.historyChanged = {
+            for case let document as TextDocument in NSDocumentController.shared.documents {
+                document.presentations.forEach { $0.refreshFindHistory() }
+            }
+        }
+        controller.adoptFindPasteboard()
         controller.currentEditor = { [weak self] in self?.currentEditor }
         // One view per document, and the one the person last worked in: Find Next compares
         // these with the current editor, and a replace reads that view's selection.
@@ -364,6 +385,8 @@ import AppKit
             return
         }
         startReplacementRetention()
+        // Local history's thirty-day limit also holds for a file that is not saved again.
+        LocalHistory.pruneAtLaunch()
         TextDocument.recovery.scanForLaunch { [weak self] result in
             self?.launchInventory = result
             self?.deliverLaunchInventory()
@@ -381,6 +404,7 @@ import AppKit
         restoreLaunchDocuments(
             createUntitledIfEmpty: !CommandLine.arguments.contains("--texttank-external-request"),
             welcomeIfEmpty: firstLaunchProfile && defaultDocumentLaunch,
+            recovery: try? result.get(),
             review: { originals in self.restoreRecovery(result, originals: originals) }
         ) {
             sessionNotices.append(contentsOf: $0)
@@ -398,22 +422,62 @@ import AppKit
         alert.addButton(withTitle: "OK")
         alert.beginSheetModal(for: window) { _ in }
     }
+    /// `recovery` is the launch scan of the recovery folder. With "Keep unsaved untitled
+    /// documents when quitting" on (DS-D9), the untitled copies in it reopen here without a
+    /// question: those the session names in their saved tab, group and pin position, and any
+    /// others (a crash, or a session file that could not be written) as tabs after them. A copy
+    /// that cannot be opened stays in the folder and reaches `review`, which asks as before.
     func restoreLaunchDocuments(
-        createUntitledIfEmpty: Bool = true, welcomeIfEmpty: Bool = false,
+        createUntitledIfEmpty: Bool = true, welcomeIfEmpty: Bool = false, recovery: RecoveryInventory? = nil,
         review: ([URL: TextDocument]) -> Void, report: ([String]) -> Void
     ) {
         let session = AutomaticSession()
+        session.keepsUntitled = { [weak self] document, quitting in
+            quitting
+                ? document.isHeldForQuit
+                : self?.settings.value.keepsUntitledOnQuit == true && document.isEditedUntitled
+        }
         automaticSession = session
         var originals = [URL: TextDocument]()
+        let keeps = settings.value.keepsUntitledOnQuit
+        var copies = [UUID: RecoveryHeader]()
+        if keeps, let recovery {
+            let live = Set(NSDocumentController.shared.documents.compactMap { ($0 as? TextDocument)?.recoveryID })
+            for header in recovery.headers where !live.contains(header.id) { copies[header.id] = header }
+        }
+        var restoredUntitled = 0
+        func reopenUntitled(_ id: UUID, language: String? = nil, lineEnding: String? = nil) -> TextDocument? {
+            guard let header = copies.removeValue(forKey: id),
+                let snapshot = try? TextDocument.recovery.load(listed: header),
+                let document = try? TextDocument.openKeptUntitled(
+                    snapshot, language: language, lineEnding: lineEnding.flatMap(LineEnding.init(rawValue:)))
+            else { return nil }
+            restoredUntitled += 1
+            return document
+        }
         do {
-            if let state = try session.read(), settings.value.reopensLastSession {
-                let result = session.reopen(state, in: workspaceWindow)
-                originals = result.files
-                if !result.notices.isEmpty { report(result.notices) }
+            if var state = try session.read() {
+                // The sidebar is part of the window, like its frame: it comes back whether or
+                // not last session's documents do. An older file has no sidebar keys and
+                // leaves it hidden.
+                workspaceWindow.applySidebar(from: state.layout)
+                if !settings.value.reopensLastSession { state = try state.untitledOnly() }
+                if settings.value.reopensLastSession || (keeps && state.untitled != nil) {
+                    let result = session.reopen(state, in: workspaceWindow) {
+                        reopenUntitled($0.id.rawValue, language: $0.language, lineEnding: $0.lineEnding)
+                    }
+                    originals = result.files
+                    if !result.notices.isEmpty { report(result.notices) }
+                }
             }
         } catch {
             if settings.value.reopensLastSession { report([error.localizedDescription]) }
         }
+        // Untitled copies no session placed. A copy that names a file is a draft of that file
+        // and keeps the Recover question.
+        let unplaced = copies.values.filter { $0.originalURL == nil }.sorted { $0.savedAt < $1.savedAt }
+        let appended = unplaced.compactMap { reopenUntitled($0.id) }
+        if knownWorkspace?.active == nil { appended.last?.showWindows() }
         if let active = knownWorkspace?.active {
             active.showWindow(nil)
         } else {
@@ -431,7 +495,16 @@ import AppKit
                 }
             } else { newDocument(nil) }
         }
+        if restoredUntitled > 0 {
+            // DS-40: a quiet status message, announced, never an alert.
+            knownWorkspace?.showTabMessage(Self.restoredUntitledNotice(restoredUntitled))
+        }
         session.start { [weak self] in self?.checkpointSession() }
+    }
+    nonisolated static func restoredUntitledNotice(_ count: Int) -> String {
+        count == 1
+            ? "Restored 1 untitled document with unsaved text. It is still unsaved."
+            : "Restored \(count) untitled documents with unsaved text. They are still unsaved."
     }
     func checkpointSession() {
         automaticSession?.checkpoint(knownWorkspace) { [weak self] error in
@@ -482,11 +555,15 @@ import AppKit
     /// Weak providers preserve the lazy feature graph without retaining a discarded composition root.
     @MainActor func installEditorServices() {
         if let controller = NSDocumentController.shared as? TextDocumentController {
+            // AppKit reviews and closes the documents itself before it asks this delegate about
+            // quitting, so the untitled documents are held here, before that review looks (DS-D9).
             controller.willReviewOpenDocuments = { [weak self] in
                 self?.initializedCompare?.cancelPendingSavedComparisons()
+                self?.holdUntitledForQuit()
                 self?.automaticSession?.beginReview(self?.knownWorkspace)
             }
             controller.didReviewOpenDocuments = { [weak self] accepted in
+                if !accepted { self?.releaseQuitHolds() }
                 self?.automaticSession?.nativeReviewEnded(accepted: accepted)
                 DispatchQueue.main.async { [weak self] in self?.deliverLaunchInventory() }
             }
@@ -495,6 +572,7 @@ import AppKit
         var services = EditorServices()
         services.activePresentationProvider = { [weak self] in self?.currentDocumentController }
         services.workspaceHostProvider = { [weak self] in self?.workspaceWindow }
+        services.workspaceBrowserProvider = { [weak self] in self?.workspaceBrowser }
         services.isAvailable = { [weak self] in self != nil }
         services.settingsProvider = { [weak self] in self?.settings }
         services.languagesProvider = { [weak self] in self?.languages }
@@ -515,6 +593,12 @@ import AppKit
         if let controller { knownWorkspace = controller.host }
         lastDocumentController = controller
     }
+    /// Compare › Clear Local History… (DS-D10): for the current file, or for everything, after a
+    /// confirmation sheet. It deletes private copies only.
+    @objc func clearLocalHistory(_ sender: Any?) {
+        guard !CompareCommandScope.blocksWorkspace else { return }
+        LocalHistory.clear(for: currentDocument, in: workspaceWindow)
+    }
     @objc func performCompareCommand(_ sender: Any?) {
         CompareController.key?.performCompareCommand(sender)
     }
@@ -530,7 +614,14 @@ import AppKit
     /// cancelled. The tab windows are taken off screen first: closing a visible tab shows the
     /// tab that takes its place, and at quit that would show and lay out each remaining document.
     func closeAllForTermination() {
-        let documents = NSDocumentController.shared.documents
+        // Documents that AppKit's review already "closed" are still open here.
+        var documents = NSDocumentController.shared.documents
+        for noted in TextDocument.takeDeferredQuitCloses() + quitHeld where !documents.contains(noted) {
+            documents.append(noted)
+        }
+        quitHeld = []
+        TextDocument.quitIsCertain = true
+        defer { TextDocument.quitIsCertain = false }
         var hidden = Set<ObjectIdentifier>()
         for case let document as TextDocument in documents {
             if let host = document.presentation?.host, hidden.insert(ObjectIdentifier(host)).inserted {
@@ -542,8 +633,97 @@ import AppKit
         defer { hosts.forEach { $0.tabCommands.isTerminating = false } }
         for document in documents { document.close() }
     }
+    /// DS-D9, owner decision of 23 November 2026: quitting does not ask about an edited untitled
+    /// document. Each one's recovery copy is written, confirmed on storage and read back first;
+    /// a document whose copy cannot be verified, or that is beyond the documented bounds, is
+    /// left edited so the ordinary review asks about it. Tab order decides who fits the bounds.
+    private func holdUntitledForQuit() {
+        guard settings.value.keepsUntitledOnQuit else { return }
+        let limits = keptUntitledLimits
+        var count = 0, bytes = 0
+        var documents = knownWorkspace?.presentations.compactMap { $0.document as? TextDocument } ?? []
+        for case let document as TextDocument in NSDocumentController.shared.documents
+        where !documents.contains(where: { $0 === document }) { documents.append(document) }
+        var seen = Set<ObjectIdentifier>()
+        // A document the review already asked about (its close is only noted) is not offered again.
+        for document in documents
+        where seen.insert(ObjectIdentifier(document)).inserted && document.isEditedUntitled
+            && (document.isHeldForQuit || !document.quitCloseDeferred)
+        {
+            let size = document.editor.byteLength
+            guard count < limits.count, size <= limits.bytes - bytes else {
+                document.releaseQuitHold()
+                continue
+            }
+            if document.holdForQuit() {
+                count += 1
+                bytes += size
+                if !quitHeld.contains(document) { quitHeld.append(document) }
+            }
+        }
+    }
+    /// How many untitled documents one quit keeps, and how many bytes of text in all. Each
+    /// document is also bounded by the automatic-recovery ceiling. A property so that a check
+    /// can reach the bounds with small documents.
+    var keptUntitledLimits = (
+        count: SizePolicy.standard.keptUntitledCount, bytes: SizePolicy.standard.keptUntitledTotal
+    )
+    /// The untitled documents this quit is holding. AppKit's review takes them for clean and
+    /// "closes" them before the person can still cancel; they stay here, open and untouched,
+    /// until the quit is certain or cancelled.
+    private var quitHeld: [TextDocument] = []
+    /// The quit was cancelled: every held document is registered again and edited again, in
+    /// its tab, as it was.
+    private func releaseQuitHolds() {
+        let held = quitHeld
+        quitHeld = []
+        TextDocument.cancelDeferredQuitCloses()
+        held.forEach { $0.releaseQuitHold() }
+        for case let document as TextDocument in NSDocumentController.shared.documents { document.releaseQuitHold() }
+    }
+    /// Just before the documents close: every held copy is still the document's text, or is
+    /// written and verified again now. False means one could not be, and nothing may close.
+    private func confirmQuitHolds() -> Bool {
+        for document in quitHeld where document.isHeldForQuit {
+            guard document.holdForQuit() else { return false }
+        }
+        return true
+    }
+    /// Takes the holds again for the text as it is now. False when a document this quit was
+    /// holding is no longer held (it grew past a bound) or its newer copy cannot be verified.
+    private func renewQuitHolds() -> Bool {
+        let before = quitHeld
+        holdUntitledForQuit()
+        if before.contains(where: { !$0.isHeldForQuit && !$0.isClosed && $0.fileURL == nil }) { return false }
+        return confirmQuitHolds()
+    }
+    /// An edited untitled document that is open and registered, with the setting on, and not held.
+    private var hasUnkeptUntitledDocument: Bool {
+        guard settings.value.keepsUntitledOnQuit else { return false }
+        return NSDocumentController.shared.documents.contains {
+            guard let document = $0 as? TextDocument else { return false }
+            return document.isEditedUntitled && !document.isHeldForQuit
+        }
+    }
+    static let unkeptTextNotice =
+        "TextTank did not quit: an untitled document's unsaved text could not be kept. Save it, then quit again."
+    private func refuseQuitForUnkeptText() {
+        automaticSession?.cancelReview()
+        releaseQuitHolds()
+        launchReviewSuspended = false
+        knownWorkspace?.showTabMessage(Self.unkeptTextNotice)
+        DispatchQueue.main.async { [weak self] in self?.deliverLaunchInventory() }
+    }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         launchReviewSuspended = true
+        // AppKit's own review may already have been accepted, with every close noted. A held
+        // document whose text changed since and cannot be written and verified again, or no
+        // longer fits a bound, must not be closed on the strength of its earlier copy: the quit
+        // is refused, everything is open again, and that earlier copy is still on disk.
+        if !reviewingTermination, !renewQuitHolds() {
+            refuseQuitForUnkeptText()
+            return .terminateCancel
+        }
         if NSDocumentController.shared.documents.allSatisfy({ !$0.isDocumentEdited }) {
             commitSession()
             closeAllForTermination()
@@ -569,11 +749,20 @@ import AppKit
     }
     var replyToTerminate: @MainActor (Bool) -> Void = { NSApp.reply(toApplicationShouldTerminate: $0) }
     @objc func reviewed(_ controller: NSDocumentController, didReviewAll: Bool, contextInfo: UnsafeMutableRawPointer?) {
+        var didReviewAll = didReviewAll
+        // Defence in depth for a review that says every document was reviewed: the holds are
+        // taken again, and an edited untitled document that is still registered (so nobody was
+        // asked about it) and is not held is never closed. The quit is refused instead.
+        if didReviewAll, !(renewQuitHolds() && !hasUnkeptUntitledDocument) {
+            didReviewAll = false
+            knownWorkspace?.showTabMessage(Self.unkeptTextNotice)
+        }
         if didReviewAll {
             commitSession()
             closeAllForTermination()
         } else {
             automaticSession?.cancelReview()
+            releaseQuitHolds()
         }
         reviewingTermination = false
         replyToTerminate(didReviewAll)

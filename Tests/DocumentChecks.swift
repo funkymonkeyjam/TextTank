@@ -32,7 +32,12 @@ import NativeSearch
         }
     }
     @MainActor static func main() {
-        let arguments = Array(CommandLine.arguments.dropFirst())
+        var arguments = Array(CommandLine.arguments.dropFirst())
+        // `-AppleShowScrollBars Always` (or WhenScrolling) is read by AppKit from the argument
+        // domain: a hosted runner has no trackpad and always shows scroll bars. It selects no check.
+        if let index = arguments.firstIndex(of: "-AppleShowScrollBars"), index + 1 < arguments.count {
+            arguments.removeSubrange(index...index + 1)
+        }
         if arguments.count == 2, arguments.first == "--write-service-selection", let id = UUID(uuidString: arguments[1])
         {
             let board = NSPasteboard(name: .init("org.texttank.tests.service." + id.uuidString))
@@ -264,8 +269,10 @@ import NativeSearch
                 }
                 check(try Data(contentsOf: editURL) == duplicateFont, "ambiguous font keys remain intact")
                 // F199: a settings file that failed to load is never overwritten without explicit confirmation.
+                // Version 2 became a known settings version with shortcuts for any command; 3 is the
+                // next one this build does not know.
                 var futureSettings = configured
-                futureSettings.version = 2
+                futureSettings.version = 3
                 let futureJSON = String(decoding: try JSONEncoder().encode(futureSettings), as: UTF8.self)
                 for (label, contents) in [
                     ("future version", futureJSON), ("malformed JSON", "{not json")
@@ -1245,8 +1252,10 @@ import NativeSearch
                     "an edit reads Edited in the status line immediately, never Saved")
                 failing.flushRecovery()
                 check(
-                    failing.lastRecoveryError == nil && failingStatus.textColor == .secondaryLabelColor
-                        && failingStatus.toolTip == nil
+                    // DS-61: every state uses the primary label colour; a failure is told apart by
+                    // its words, its symbol, its tooltip and the heavier weight.
+                    failing.lastRecoveryError == nil && failingStatus.textColor == .labelColor
+                        && failingStatus.font?.fontDescriptor.symbolicTraits.contains(.bold) == false && failingStatus.toolTip == nil
                         && failingStatus.stringValue.hasPrefix("Edited — recovery copy kept"),
                     "successful recovery write shows the ordinary status and names the recovery copy")
                 let firstHealthyHeader = try Data(contentsOf: failingFile)
@@ -1256,7 +1265,8 @@ import NativeSearch
                 check(
                     failing.lastRecoveryError != nil
                         && failingStatus.stringValue.hasPrefix("⚠︎ Recovery copy not written:")
-                        && failingStatus.textColor == .labelColor && failingStatus.toolTip?.isEmpty == false,
+                        && failingStatus.textColor == .labelColor && failingStatus.font?.fontDescriptor.symbolicTraits.contains(.bold) == true
+                        && failingStatus.toolTip?.isEmpty == false,
                     "failed recovery write is visibly distinct in the status line")
                 check(notices == 0, "one recovery failure does not raise a notice")
                 failing.editor.text = "abc"
@@ -1268,7 +1278,7 @@ import NativeSearch
                 failing.editor.text = "abcd"
                 failing.flushRecovery()
                 check(
-                    notices == 1 && failingStatus.textColor == .labelColor,
+                    notices == 1 && failingStatus.textColor == .labelColor && failingStatus.font?.fontDescriptor.symbolicTraits.contains(.bold) == true,
                     "further failures stay in the status line without another notice")
                 check(
                     try Data(contentsOf: failingFile) == corruptSnapshot,
@@ -1279,8 +1289,8 @@ import NativeSearch
                 failing.editor.text = "abcde"
                 failing.flushRecovery()
                 check(
-                    try failing.lastRecoveryError == nil && failingStatus.textColor == .secondaryLabelColor
-                        && failingStatus.toolTip == nil
+                    try failing.lastRecoveryError == nil && failingStatus.textColor == .labelColor
+                        && failingStatus.font?.fontDescriptor.symbolicTraits.contains(.bold) == false && failingStatus.toolTip == nil
                         && TextDocument.recovery.load(id: failing.recoveryID).text == "abcde",
                     "next successful recovery write clears the failure state")
                 // F202: a failed cleanup at close is recorded, never blocks, and leaves the file for the next launch's review.
@@ -1528,14 +1538,15 @@ import NativeSearch
                 }
                 let controller = visible.windowControllers[0] as! EditorWindowController
                 let hiddenController = hidden.windowControllers[0] as! EditorWindowController
-                let buttons = { descendants(controller.hostWindow!.contentView!).compactMap { $0 as? NSPopUpButton } }
+                // Every status field is a native button: a pull-down, or a plain button for the
+                // position and the language, which run one command.
+                let buttons = { descendants(controller.hostWindow!.contentView!).compactMap { $0 as? NSButton } }
                 let badges = {
-                    // DB-R3: totals, wrap and access state moved to the position menu. These
-                    // retain the original asynchronous metrics/state assertions at that surface.
+                    // DB-R3: totals, wrap and access state are the position field's statistics,
+                    // shown in its tooltip. These retain the original asynchronous metrics/state
+                    // assertions at that surface.
                     buttons().filter { $0.identifier?.rawValue.hasPrefix("status.") == true }.map(\.title)
-                        + (controller.statusOptionsMenu(.position)?.items.filter {
-                            $0.action == nil && $0.submenu == nil
-                        }.map(\.title) ?? [])
+                        + controller.statusStatistics
                 }
                 let badge = { (identifier: String) in buttons().first { $0.identifier?.rawValue == identifier }?.title }
                 try require(
@@ -1557,7 +1568,7 @@ import NativeSearch
                 }
                 check(
                     badgeMismatches.isEmpty,
-                    "the position-menu character totals and line-ending field reach the previous implementation's values with no explicit refresh \(badgeMismatches)"
+                    "the position field's character totals and the line-ending field reach the previous implementation's values with no explicit refresh \(badgeMismatches)"
                 )
                 visible.editor.text = "a\r\nb\nc\u{1F600}"
                 spinUntil("exact character count and Mixed EOL") {
@@ -1607,15 +1618,16 @@ import NativeSearch
                     "wrap, bookmark and read-only details reach the position menu with no explicit refresh \(badges())")
                 visible.editor.readOnly = false
                 controller.toggleWrap(nil)
-                let hiddenTabTitle = {
-                    descendants(controller.hostWindow!.contentView!).compactMap { $0 as? NSButton }
-                        .first { $0.toolTip == hidden.displayName }?.title
+                // The edited mark is the dot in the tab's close button, not a character in its title.
+                let hiddenTabEdited = { () -> Bool? in
+                    guard let id = hiddenController.tabID else { return nil }
+                    return controller.host.tabStrips.compactMap { $0.tabAppearance(id) }.first?.closeShowsEditedDot
                 }
-                try require(hiddenTabTitle()?.hasSuffix("•") == false, "fixture: the hidden tab starts unedited")
+                try require(hiddenTabEdited() == false, "fixture: the hidden tab starts unedited")
                 _ = hidden.editor.replaceSelection("edited while hidden")
-                spinUntil("the hidden tab's edited marker") { hiddenTabTitle()?.hasSuffix("•") == true }
+                spinUntil("the hidden tab's edited marker") { hiddenTabEdited() == true }
                 check(
-                    hiddenTabTitle()?.hasSuffix("•") == true,
+                    hiddenTabEdited() == true,
                     "editing a hidden document marks its tab in the visible window's tab strip")
                 let idleRefreshes = controller.statusRefreshCount, hiddenRefreshes = hiddenController.statusRefreshCount
                 spinUntil("idle recurring refreshes") { controller.statusRefreshCount >= idleRefreshes + 2 }
@@ -1824,6 +1836,15 @@ import NativeSearch
                     let oldMenu = app.mainMenu
                     defer { app.mainMenu = oldMenu }
                     try AutomaticSessionChecks.run(app: app, controller: documentController)
+                }
+            }
+            section("unsaved untitled text survives quit") {
+                try withIsolatedSupportDirectory("unsaved-untitled") { root in
+                    let oldMenu = app.mainMenu
+                    defer { app.mainMenu = oldMenu }
+                    try UnsavedWorkChecks.untitledSurvivesQuit(app: app, controller: documentController)
+                    try AutomaticSessionQuitChecks.checkUntitled(in: root)
+                    try AutomaticSessionQuitChecks.checkHeldCancel(in: root)
                 }
             }
             section("clean quit") {

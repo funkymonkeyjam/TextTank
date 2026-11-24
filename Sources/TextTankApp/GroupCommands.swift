@@ -1,7 +1,8 @@
 import AppKit
 import TextTankCore
 
-/// One command owner for View > Editor Groups, the trailing picker and captured tab menus (DS-20-24).
+/// One command owner for View > Editor Groups, the Editor Layout toolbar item and captured tab menus
+/// (DS-20-24, DS-D12).
 @MainActor final class GroupCommandController: NSObject, NSMenuDelegate, NSMenuItemValidation {
     private unowned let host: WorkspaceWindowController
     private weak var groupsMenu: NSMenu?
@@ -96,9 +97,11 @@ import TextTankCore
         image.accessibilityDescription = title(layout)
         return image
     }
-    func layoutMenu(picker: Bool = false) -> NSMenu {
+    /// The layout choices, for View > Editor Groups > Editor Group Layout and for the toolbar's
+    /// Editor Layout item (DS-D12). Both list the same commands, so the checkmark and the
+    /// enabled state are the same wherever a layout is chosen (DS-20).
+    func layoutMenu() -> NSMenu {
         let menu = NSMenu(title: "Editor Group Layout")
-        if picker { menu.addItem(withTitle: "Editor Group Layout", action: nil, keyEquivalent: "") }
         for layout in LayoutKind.allCases {
             let item = make(
                 Self.title(layout), Invocation(.layout(layout), host: host, target: nil),
@@ -173,13 +176,9 @@ import TextTankCore
         return items
     }
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
-        guard !CompareCommandScope.blocksWorkspace else { return false }
-        // An item that is not a group command is the layout picker's title. The pop-up button gives
-        // it an action of its own, and disabling it would draw the whole control as unavailable.
-        guard let call = item.representedObject as? Invocation else { return true }
-        guard !host.isMutatingGroups, !host.tabCommands.isBusy, !host.tabCommands.isReopening,
-            host.window?.attachedSheet == nil
-        else { return false }
+        // An item that is not a group command is a heading; only the comparison scope disables it.
+        guard let call = item.representedObject as? Invocation else { return !CompareCommandScope.blocksWorkspace }
+        guard commandsAvailable else { return false }
         if case .layout(let layout) = call.action {
             item.state = host.model.layout == layout ? .on : .off
             return true
@@ -203,6 +202,12 @@ import TextTankCore
             return !call.members.isEmpty && Set(call.members).isSubset(of: Set(group.tabs.map(\.id)))
         }
         return true
+    }
+    /// Whether any group command can run now. The toolbar's Editor Layout item is enabled by
+    /// this same test, so it is never offered while its menu would be all disabled (DS-21).
+    var commandsAvailable: Bool {
+        !CompareCommandScope.blocksWorkspace && !host.isMutatingGroups && !host.tabCommands.isBusy
+            && !host.tabCommands.isReopening && !host.hasAttachedSheet
     }
     @objc private func invoke(_ item: NSMenuItem) {
         guard validateMenuItem(item), let call = item.representedObject as? Invocation else { return }

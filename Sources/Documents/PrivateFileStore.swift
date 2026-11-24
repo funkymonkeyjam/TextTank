@@ -11,7 +11,12 @@ package enum AppStorage {
         case recovery = "Recovery", reminders = "ReminderExports", pasteThroughChoice = "PasteThroughChoice.json", lastSession = "LastSession.json"
         case find = "FindPreferences.json", folderSearch = "FolderSearchPreferences.json"
         case folderReplacements = "FolderReplacements"
-        package var isDirectory: Bool { self == .recovery || self == .reminders || self == .folderReplacements }
+        case commandRecents = "CommandPaletteRecents.json"
+        case localHistory = "LocalHistory"
+        case languageRecents = "LanguageRecents.json"
+        package var isDirectory: Bool {
+            self == .recovery || self == .reminders || self == .folderReplacements || self == .localHistory
+        }
     }
     static package func resolve(override: String?, fallback: URL) -> URL {
         guard let override, override.hasPrefix("/"), !override.contains("\0") else { return fallback }
@@ -608,5 +613,399 @@ package enum PersistedFormatError: LocalizedError {
         case .invalidMinimumReader:
             return "Saved minimumReaderVersion must be a positive integer. The original file has not been changed."
         }
+    }
+}
+
+// MARK: - Local history (owner decision DS-D10)
+
+/// One earlier version of a file: the exact bytes of one save, kept privately.
+/// Persisted format, version 1; see "Local history" in docs/architecture.md. A new field must be
+/// Optional, or old manifests stop loading.
+package struct LocalHistoryVersion: Codable, Equatable, Sendable {
+    /// `saved` is what TextTank wrote at that save. `replaced` is what the file held just before
+    /// a save, kept only when history did not already end with those bytes (the first save
+    /// after opening, or a file changed by something else).
+    package enum Kind: String, Codable, Sendable { case saved, replaced }
+    package let id: UUID
+    package let savedAt: Date
+    package let byteCount: Int
+    package let sha256: String
+    package let kind: Kind
+    /// How the bytes were encoded, when TextTank knew. Nil means detect when reading.
+    package let format: FileFormat?
+}
+
+/// Owner decision B, 23 November 2026. `totalBytes` is decimal megabytes so the store never
+/// exceeds the stated 200 MB; a file above `versionBytes` (the large-file threshold) is not kept.
+package struct LocalHistoryLimits: Equatable, Sendable {
+    package var versionsPerFile = 20
+    package var maximumAge: TimeInterval = 30 * 24 * 60 * 60
+    package var totalBytes = 200 * 1000 * 1000
+    package var versionBytes = SizePolicy.standard.largeDocumentThreshold
+    package init() {}
+}
+
+package struct LocalHistoryUsage: Equatable, Sendable {
+    package let files: Int
+    package let versions: Int
+    package let bytes: Int
+}
+
+package enum LocalHistoryError: LocalizedError, Equatable {
+    case missing, damaged
+    package var errorDescription: String? {
+        switch self {
+        case .missing: return "That earlier version is no longer kept."
+        case .damaged: return "That earlier version could not be read. It has been left untouched."
+        }
+    }
+}
+
+/// What one store operation changed, for the caller's memory of each file's newest version:
+/// the SHA-256 of the newest version now kept for a path, or nil when none is left.
+package struct LocalHistoryChange: Sendable {
+    package let newest: [String: String?]
+}
+
+/// Private copies of what was saved, under `<support>/LocalHistory`, never beside the document.
+/// One folder per file, named by the SHA-256 of the file's resolved path, holds `manifest.json`
+/// and one `<version id>.bytes` per version; folders are 0700 and files 0600, written with the
+/// same temporary-file, flush and rename sequence as every other private store. Nothing here is
+/// sent anywhere and no other process is told.
+///
+/// Every operation runs on one serial utility queue. The save path and the menu use only the
+/// asynchronous entry points, so neither ever waits for that queue; the synchronous ones are
+/// for checks and for an explicit read the person asked for.
+///
+/// A folder is never a dead end. If its manifest is missing or unreadable (a crash between the
+/// first version's bytes and its manifest, or damage), its versions are the `.bytes` files that
+/// are there: they count toward the limits, expire, can be cleared, and the next save of that
+/// file writes a fresh manifest naming them. A manifest of a version this build does not know is
+/// the opposite case: that folder is left entirely alone. Sendable boundary: the stored properties are
+/// immutable and all file access is confined to `queue`.
+final package class LocalHistoryStore: @unchecked Sendable {
+    package let directory: URL
+    package let limits: LocalHistoryLimits
+    private let clock: @Sendable () -> Date
+    private let queue = DispatchQueue(label: "TextTank.local-history", qos: .utility)
+    private static let manifestName = "manifest.json", manifestBytes = 1024 * 1024
+    private struct Manifest: Codable {
+        var version: Int
+        var path: String
+        /// Oldest first.
+        var versions: [LocalHistoryVersion]
+    }
+    /// A folder as found. `manifestPath` is the path its readable manifest states, if it has
+    /// one; `matches` says that path is the one the folder is named for.
+    private struct Loaded {
+        var versions: [LocalHistoryVersion]
+        var manifestPath: String?
+        var matches: Bool
+        /// The manifest is of a version this build does not know. Such a folder is left
+        /// entirely alone: not listed, not counted, not pruned, not cleared, not written to.
+        var foreign = false
+    }
+    package init(
+        directory: URL, limits: LocalHistoryLimits = .init(), clock: @escaping @Sendable () -> Date = { Date() }
+    ) {
+        self.directory = directory
+        self.limits = limits
+        self.clock = clock
+    }
+    /// Keeps `bytes`, which were just written to the file at `path`, and before them `replaced`
+    /// when the caller read what the save replaced. Bytes equal to the newest kept version are
+    /// not stored again; bytes above `limits.versionBytes` are not stored. Retention runs after.
+    package func record(
+        path: String, bytes: Data, format: FileFormat? = nil, replaced: Data? = nil, replacedFormat: FileFormat? = nil,
+        completion: (@Sendable (Result<LocalHistoryChange, Error>) -> Void)? = nil
+    ) {
+        queue.async { [self] in
+            let result = Result { try recordNow(path, [(replaced, .replaced, replacedFormat), (bytes, .saved, format)]) }
+            completion?(result)
+        }
+    }
+    /// A renamed or moved file takes its history with it. A history already at the new path is
+    /// joined with it, in date order.
+    package func relocate(
+        from old: String, to new: String, completion: (@Sendable (Result<LocalHistoryChange, Error>) -> Void)? = nil
+    ) {
+        queue.async { [self] in
+            let result = Result { try relocateNow(from: old, to: new) }
+            completion?(result)
+        }
+    }
+    /// Applies the age, per-file and total limits now. Also run after every `record`.
+    package func prune(completion: (@Sendable (Result<LocalHistoryChange, Error>) -> Void)? = nil) {
+        queue.async { [self] in
+            let result = Result { LocalHistoryChange(newest: try pruneNow()) }
+            completion?(result)
+        }
+    }
+    /// How much is kept for one file, when a path is given, and in all. Never blocks the caller.
+    package func summary(
+        forPath path: String?, completion: @escaping @Sendable (LocalHistoryUsage?, LocalHistoryUsage) -> Void
+    ) {
+        queue.async { [self] in completion(path.map { usageNow([folder($0)]) }, usageNow(folders())) }
+    }
+    /// Deletes the kept versions of one file, or of every file, without blocking the caller.
+    package func clear(path: String?, completion: @escaping @Sendable (Result<LocalHistoryUsage, Error>) -> Void) {
+        queue.async { [self] in completion(Result { try clearNow(path) }) }
+    }
+    /// Newest first.
+    package func versions(forPath path: String) throws -> [LocalHistoryVersion] {
+        queue.sync { Array((load(folder(path), path: path)?.versions ?? []).reversed()) }
+    }
+    /// The SHA-256 of the newest kept version, or nil when none is kept.
+    package func latestDigest(forPath path: String) -> String? {
+        queue.sync { load(folder(path), path: path)?.versions.last?.sha256 }
+    }
+    /// The exact bytes of one version, checked against its recorded length and SHA-256.
+    package func data(forPath path: String, version id: UUID) throws -> Data {
+        try queue.sync {
+            let home = folder(path)
+            guard let listed = load(home, path: path)?.versions.first(where: { $0.id == id }) else {
+                throw LocalHistoryError.missing
+            }
+            let bytes: Data
+            do { bytes = try PrivateFileStore.read(blob(home, id), maximumBytes: listed.byteCount) } catch {
+                throw LocalHistoryError.damaged
+            }
+            guard bytes.count == listed.byteCount, WorkspaceStore.fingerprint(bytes) == listed.sha256 else {
+                throw LocalHistoryError.damaged
+            }
+            return bytes
+        }
+    }
+    package func usage(forPath path: String? = nil) -> LocalHistoryUsage {
+        queue.sync { usageNow(path.map { [folder($0)] } ?? folders()) }
+    }
+    /// Deletes the kept versions of one file, or of every file. Only folders this store made are
+    /// removed; the documents themselves and everything else in the support folder are untouched.
+    @discardableResult package func clear(path: String? = nil) throws -> LocalHistoryUsage {
+        try queue.sync { try clearNow(path) }
+    }
+    /// Returns once everything submitted so far has finished.
+    package func waitUntilIdle() { queue.sync {} }
+
+    private func folder(_ path: String) -> URL {
+        directory.appendingPathComponent(WorkspaceStore.fingerprint(Data(path.utf8)), isDirectory: true)
+    }
+    private func blob(_ home: URL, _ id: UUID) -> URL { home.appendingPathComponent(id.uuidString + ".bytes") }
+    /// Only folders named as this store names them: 64 lowercase hexadecimal digits.
+    private func folders() -> [URL] {
+        let entries =
+            (try? FileManager.default.contentsOfDirectory(
+                at: directory, includingPropertiesForKeys: [.isDirectoryKey], options: [])) ?? []
+        return entries.filter { entry in
+            let name = entry.lastPathComponent
+            var info = stat()
+            return name.utf8.count == 64
+                && name.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+                && lstat(entry.path, &info) == 0 && info.st_mode & S_IFMT == S_IFDIR
+        }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+    }
+    private func usageNow(_ homes: [URL]) -> LocalHistoryUsage {
+        let kept = homes.compactMap { load($0, path: nil) }.filter { !$0.foreign && !$0.versions.isEmpty }
+        return LocalHistoryUsage(
+            files: kept.count, versions: kept.reduce(0) { $0 + $1.versions.count },
+            bytes: kept.reduce(0) { $0 + $1.versions.reduce(0) { $0 + $1.byteCount } })
+    }
+    private func clearNow(_ path: String?) throws -> LocalHistoryUsage {
+        let homes = path.map { [folder($0)] } ?? folders()
+        let removed = usageNow(homes)
+        for home in homes where FileManager.default.fileExists(atPath: home.path) {
+            if load(home, path: nil)?.foreign == true { continue }
+            try FileManager.default.removeItem(at: home)
+        }
+        return removed
+    }
+    private func readManifest(_ home: URL) throws -> Manifest? {
+        let data: Data
+        do {
+            data = try PrivateFileStore.read(
+                home.appendingPathComponent(Self.manifestName), maximumBytes: Self.manifestBytes)
+        } catch let error as FileOperationFailure where error.errorNumber == ENOENT || error.errorNumber == ENOTDIR {
+            return nil
+        }
+        // A manifest that says it is of another version, or needs a newer reader, was written
+        // by a newer TextTank. That is not damage, and the folder is not this build's to touch.
+        struct Probe: Decodable {
+            let version: Int
+            let minimumReaderVersion: Int?
+        }
+        if let probe = try? JSONDecoder().decode(Probe.self, from: data),
+            probe.version != 1 || (probe.minimumReaderVersion ?? 1) > PersistedFormat.readerVersion
+        {
+            throw ForeignManifest()
+        }
+        try PersistedFormat.check(data, context: "Local history")
+        let value = try JSONDecoder().decode(Manifest.self, from: data)
+        guard value.path.hasPrefix("/") else { throw LocalHistoryError.damaged }
+        return value
+    }
+    private struct ForeignManifest: Error {}
+    /// The folder's versions, oldest first, or nil when there is no folder. With a readable
+    /// manifest they are the ones it names. Without one they are the `.bytes` files present,
+    /// dated by when each was written; their digests are computed only when `path` is given,
+    /// which is when a fresh manifest is about to name them.
+    private func load(_ home: URL, path: String?) -> Loaded? {
+        do {
+            if let value = try readManifest(home) {
+                let matches = home.lastPathComponent == WorkspaceStore.fingerprint(Data(value.path.utf8))
+                return Loaded(versions: value.versions, manifestPath: value.path, matches: matches)
+            }
+        } catch is ForeignManifest {
+            return Loaded(versions: [], manifestPath: nil, matches: false, foreign: true)
+        } catch {}
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: home.path) else { return nil }
+        var found: [LocalHistoryVersion] = []
+        for name in names where name.hasSuffix(".bytes") {
+            guard let id = UUID(uuidString: String(name.dropLast(6))) else { continue }
+            var info = stat()
+            let file = home.appendingPathComponent(name)
+            guard lstat(file.path, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { continue }
+            let written = Date(
+                timeIntervalSince1970: TimeInterval(info.st_mtimespec.tv_sec)
+                    + TimeInterval(info.st_mtimespec.tv_nsec) / 1_000_000_000)
+            var digest = ""
+            if path != nil {
+                guard let bytes = try? PrivateFileStore.read(file, maximumBytes: Int(info.st_size)) else { continue }
+                digest = WorkspaceStore.fingerprint(bytes)
+            }
+            found.append(
+                .init(id: id, savedAt: written, byteCount: Int(info.st_size), sha256: digest, kind: .saved, format: nil))
+        }
+        found.sort { ($0.savedAt, $0.id.uuidString) < ($1.savedAt, $1.id.uuidString) }
+        return Loaded(versions: found, manifestPath: nil, matches: false)
+    }
+    private func publish(_ value: Manifest, in home: URL) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        try PrivateFileStore.write(
+            try encoder.encode(value), to: home.appendingPathComponent(Self.manifestName),
+            maximumBytes: Self.manifestBytes, synchronize: PrivateFileStore.flushToStorage,
+            synchronizeDirectory: PrivateFileStore.flushToStorage)
+    }
+    /// A file inside the store is never given a history of its own.
+    private func isInsideStore(_ path: String) -> Bool {
+        let root = directory.resolvingSymlinksInPath().path
+        return path == root || path.hasPrefix(root + "/") || path.hasPrefix(directory.path + "/")
+    }
+    private func recordNow(
+        _ path: String, _ items: [(Data?, LocalHistoryVersion.Kind, FileFormat?)]
+    ) throws -> LocalHistoryChange {
+        guard path.hasPrefix("/"), !isInsideStore(path) else { return LocalHistoryChange(newest: [:]) }
+        let home = folder(path)
+        let found = load(home, path: path)
+        // Kept by a newer TextTank: this save adds nothing there and says nothing about it.
+        if found?.foreign == true { return LocalHistoryChange(newest: [:]) }
+        var value = Manifest(version: 1, path: path, versions: found?.versions ?? [])
+        // A folder without a manifest that names this path gets one now, naming what is there:
+        // the first version's manifest was never written, it was damaged, or a move was interrupted.
+        var changed = found.map { !$0.versions.isEmpty && !($0.matches && $0.manifestPath == path) } ?? false
+        for (data, kind, format) in items {
+            guard let data, data.count <= limits.versionBytes else { continue }
+            let digest = WorkspaceStore.fingerprint(data)
+            if let last = value.versions.last, last.sha256 == digest, last.byteCount == data.count { continue }
+            try PrivateFileStore.prepareDirectory(directory)
+            try PrivateFileStore.prepareDirectory(home)
+            let version = LocalHistoryVersion(
+                id: UUID(), savedAt: clock(), byteCount: data.count, sha256: digest, kind: kind, format: format)
+            // The bytes are published and flushed before the manifest names them. Should the
+            // process stop in between, the bytes are still found as a version by `load`.
+            try PrivateFileStore.write(
+                data, to: blob(home, version.id), maximumBytes: limits.versionBytes,
+                synchronize: PrivateFileStore.flushToStorage, synchronizeDirectory: PrivateFileStore.flushToStorage)
+            value.versions.append(version)
+            changed = true
+        }
+        if changed { try publish(value, in: home) }
+        var newest = try pruneNow()
+        newest[path] = .some(load(home, path: path)?.versions.last?.sha256)
+        return LocalHistoryChange(newest: newest)
+    }
+    /// Crash-safe in order. With nothing at the new path the folder is renamed in one step and
+    /// its manifest rewritten after; in between, the manifest states the old path and `load`
+    /// still reads it. With a history already there, the moving bytes are linked into it first,
+    /// the joined manifest is published, and only then is the old folder removed: at every point
+    /// each manifest names only bytes that exist.
+    private func relocateNow(from old: String, to new: String) throws -> LocalHistoryChange {
+        guard old != new, new.hasPrefix("/"), !isInsideStore(new) else { return LocalHistoryChange(newest: [:]) }
+        let source = folder(old), target = folder(new)
+        guard let moving = load(source, path: old), !moving.versions.isEmpty else {
+            return LocalHistoryChange(newest: [:])
+        }
+        var joined = moving.versions
+        let existing = load(target, path: new)
+        if existing?.foreign == true { return LocalHistoryChange(newest: [:]) }
+        if let existing {
+            for version in moving.versions {
+                let from = blob(source, version.id), to = blob(target, version.id)
+                if link(from.path, to.path) != 0, errno != EEXIST { try FileManager.default.copyItem(at: from, to: to) }
+            }
+            // Stable by date; ties keep each history's own order.
+            joined = (existing.versions + moving.versions).enumerated().sorted {
+                ($0.element.savedAt, $0.offset) < ($1.element.savedAt, $1.offset)
+            }.map(\.element)
+            try publish(Manifest(version: 1, path: new, versions: joined), in: target)
+            try FileManager.default.removeItem(at: source)
+        } else {
+            try FileManager.default.moveItem(at: source, to: target)
+            try publish(Manifest(version: 1, path: new, versions: joined), in: target)
+        }
+        var newest = try pruneNow()
+        newest[old] = .some(nil)
+        newest[new] = .some(load(target, path: new)?.versions.last?.sha256)
+        return LocalHistoryChange(newest: newest)
+    }
+    /// Thirty days, twenty versions a file, then 200 MB in all: the oldest go first. A manifest
+    /// is rewritten before a version's bytes are deleted, so it never names bytes that are gone;
+    /// in a folder with a manifest, bytes it does not name are removed here too. Returns the
+    /// newest digest of every file whose history this changed.
+    private func pruneNow() throws -> [String: String?] {
+        let now = clock()
+        var kept: [(home: URL, state: Loaded, before: [UUID])] = []
+        for home in folders() {
+            guard var state = load(home, path: nil), !state.foreign else { continue }
+            let before = state.versions.map(\.id)
+            state.versions.removeAll { now.timeIntervalSince($0.savedAt) > limits.maximumAge }
+            state.versions = Array(state.versions.suffix(max(0, limits.versionsPerFile)))
+            kept.append((home, state, before))
+        }
+        var total = kept.reduce(0) { $0 + $1.state.versions.reduce(0) { $0 + $1.byteCount } }
+        while total > limits.totalBytes {
+            var oldest: (index: Int, date: Date)?
+            for index in kept.indices {
+                guard let first = kept[index].state.versions.first else { continue }
+                if oldest == nil || first.savedAt < oldest!.date { oldest = (index, first.savedAt) }
+            }
+            guard let oldest else { break }
+            total -= kept[oldest.index].state.versions.removeFirst().byteCount
+        }
+        var newest: [String: String?] = [:]
+        for entry in kept {
+            let changed = entry.state.versions.map(\.id) != entry.before
+            if changed, entry.state.matches, let path = entry.state.manifestPath {
+                newest[path] = .some(entry.state.versions.last?.sha256)
+            }
+            if entry.state.versions.isEmpty {
+                try FileManager.default.removeItem(at: entry.home)
+                continue
+            }
+            let named = Set(entry.state.versions.map { $0.id.uuidString + ".bytes" })
+            if let path = entry.state.manifestPath {
+                if changed { try publish(Manifest(version: 1, path: path, versions: entry.state.versions), in: entry.home) }
+                for file in try FileManager.default.contentsOfDirectory(atPath: entry.home.path)
+                where file.hasSuffix(".bytes") && !named.contains(file) {
+                    try FileManager.default.removeItem(at: entry.home.appendingPathComponent(file))
+                }
+            } else {
+                // No manifest: only the versions these limits removed are deleted.
+                for id in entry.before where !named.contains(id.uuidString + ".bytes") {
+                    try FileManager.default.removeItem(at: blob(entry.home, id))
+                }
+            }
+        }
+        return newest
     }
 }

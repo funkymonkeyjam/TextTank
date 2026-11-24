@@ -19,16 +19,19 @@ import AppKit
     static func shortcut(for action: Selector, in menu: NSMenu?) -> String? {
         guard let menu else { return nil }
         for item in menu.items {
-            if item.action == action, !item.keyEquivalent.isEmpty {
-                let modifiers = item.keyEquivalentModifierMask
-                return (modifiers.contains(.control) ? "⌃" : "") + (modifiers.contains(.option) ? "⌥" : "")
-                    + (modifiers.contains(.shift) ? "⇧" : "") + (modifiers.contains(.command) ? "⌘" : "")
-                    + item.keyEquivalent.uppercased()
-            }
+            if item.action == action, let text = shortcut(of: item) { return text }
             if let found = shortcut(for: action, in: item.submenu) { return found }
         }
         return nil
     }
+    /// The key equivalent a menu item has now, written the way the menu bar draws it, or nil
+    /// when it has none. It reads the item itself, so a shortcut assigned in Settings, a default
+    /// that gave way to one and a macro's own key are all shown as they currently are (DS-20).
+    /// It is written by the one shortcut formatter, `MenuShortcut.displayText`, which Settings
+    /// and every message use too.
+    static func shortcut(of item: NSMenuItem) -> String? { MenuShortcut(item)?.displayText }
+    /// The same key equivalent in words, for assistive technology (DS-70).
+    static func spokenShortcut(of item: NSMenuItem) -> String? { MenuShortcut(item)?.spokenText }
     static func selectedID(_ popup: NSPopUpButton) -> String? { popup.selectedItem?.representedObject as? String }
     static func label(_ title: String, control: NSView, caption: NSTextField? = nil) {
         control.setAccessibilityLabel(title)

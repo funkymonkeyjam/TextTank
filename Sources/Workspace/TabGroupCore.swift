@@ -50,18 +50,43 @@ package enum TabGroupGeometry {
     package static let minimumPane = TabGroupExtent(width: 320, height: 200)
     package static func minimumContent(
         _ layout: LayoutKind, normal: TabGroupExtent = TabGroupExtent(width: 800, height: 500),
-        pickerHeight: Double = 36,
         divider: Double = 1
     ) -> TabGroupExtent {
         let columns: Double = layout == .twoColumns || layout == .grid2x2 ? 2 : 1
         let rows: Double = layout == .twoRows || layout == .grid2x2 ? 2 : 1
         return TabGroupExtent(
             width: max(normal.width, columns * minimumPane.width + (columns - 1) * divider),
-            height: max(normal.height, rows * minimumPane.height + (rows - 1) * divider + pickerHeight))
+            height: max(normal.height, rows * minimumPane.height + (rows - 1) * divider))
     }
     package static func fits(_ required: TabGroupExtent, available: TabGroupExtent) -> Bool {
         [required.width, required.height, available.width, available.height].allSatisfy { $0.isFinite && $0 >= 0 }
             && required.width <= available.width && required.height <= available.height
+    }
+}
+
+/// The docked Workspace Browser's share of the workspace window (DS-67).
+///
+/// The sidebar sits at the left edge, beside the editor groups, with a divider that can be
+/// dragged between `minimumWidth` and `maximumWidth`. The editor groups always keep the width
+/// their layout needs: when the window narrows, the sidebar gives up width first, down to its
+/// minimum, and the window cannot be made narrower than that minimum plus the editor groups'
+/// own. Hiding the sidebar returns the window to the editor groups' minimum.
+package enum WorkspaceSidebarGeometry {
+    package static let minimumWidth: Double = 260
+    package static let defaultWidth: Double = 280
+    package static let maximumWidth: Double = 480
+    package static let divider: Double = 1
+    /// The width the sidebar gets when the person asked for `preferred` and the window's content
+    /// is `total` wide.
+    package static func width(preferred: Double, total: Double, editorMinimum: Double) -> Double {
+        let wanted = preferred.isFinite ? preferred : defaultWidth
+        return max(minimumWidth, min(wanted, maximumWidth, total - divider - editorMinimum)).rounded()
+    }
+    /// The smallest window content for `layout` while the sidebar is shown or hidden.
+    package static func minimumContent(_ layout: LayoutKind, sidebarShown: Bool) -> TabGroupExtent {
+        let editors = TabGroupGeometry.minimumContent(layout)
+        guard sidebarShown else { return editors }
+        return TabGroupExtent(width: editors.width + divider + minimumWidth, height: editors.height)
     }
 }
 

@@ -106,6 +106,7 @@ __attribute__((objc_subclassing_restricted))
 ///   bookmarks, search highlights, the undo history and the save point (modified).
 /// - View: automatic indentation on Return, live brace feedback, current-line framing, indentation guides, wrap, zoom, selection and scroll position, syntax styles and fonts (setSyntaxStyle:,
 ///   setSyntaxFont:), margins, whitespace and line-ending visibility, and overtype.
+///   The horizontal scroll range is view state too: it tracks the widest line laid out.
 /// revision is counted per view, but views of one document always report the same value.
 @interface TTEditor : NSView
 /// Reading makes one copy, decoded straight from the engine's buffer. Do not read it only for
@@ -195,6 +196,36 @@ __attribute__((objc_subclassing_restricted))
 /// One-based display coordinates, with tab stops matching the status bar. Coordinates beyond the text
 /// resolve to the last line or its end. Navigation does not change text, Undo, or the saved selection of another view.
 - (void)showLine:(NSInteger)line column:(NSInteger)column NS_SWIFT_NAME(show(line:column:));
+/// Shows a one-based line (and column) without making the jump final: the caret goes there and
+/// is scrolled into view, and folding is left exactly as it is. A line hidden in a fold is shown
+/// by the nearest visible fold header that holds it. Returns the one-based line the caret is
+/// on, or 0, changing nothing, when the line does not exist.
+- (NSInteger)previewLine:(NSInteger)line column:(NSInteger)column NS_SWIFT_NAME(preview(line:column:));
+/// NO for a one-based line that is hidden in a fold or does not exist.
+- (BOOL)lineIsVisible:(NSInteger)line NS_SWIFT_NAME(lineIsVisible(_:));
+/// Every selection of this view exactly as it is: each range with its virtual space, which one
+/// is the main selection, and stream, line or rectangular mode. Opaque; only
+/// restoreSelectionSnapshot: reads it.
+@property(nonatomic, readonly) NSArray<NSNumber *> *selectionSnapshot;
+/// Puts a snapshot of this view's selections back. NO, changing nothing, when it is not a
+/// snapshot or the text is no longer the length it was taken from.
+- (BOOL)restoreSelectionSnapshot:(NSArray<NSNumber *> *)snapshot;
+/// Keeps this view's selections and the line at its top as they are now, and from then on moves
+/// them with every insertion and deletion in the document, by the rule Scintilla applies to its
+/// own selections. One place is held at a time; holding again replaces it.
+- (void)holdPlace;
+- (void)releaseHeldPlace;
+/// The held selections where they are in the text now, for restoreSelectionSnapshot:. Nil when
+/// nothing is held or the view shows another document than the one the place was held in.
+@property(nonatomic, readonly, nullable) NSArray<NSNumber *> *heldSelectionSnapshot;
+/// The zero-based document line that was at the top when the place was held, as it is numbered
+/// now; -1 when nothing is held.
+@property(nonatomic, readonly) NSInteger heldTopDocumentLine;
+/// YES once text that held one of the positions was deleted: that position is now where the
+/// deleted text began, the nearest place left.
+@property(nonatomic, readonly) BOOL heldPlaceDisplaced;
+/// YES for a window point over this view's text, not its line-number, bookmark or fold margins.
+- (BOOL)textAreaContainsWindowPoint:(NSPoint)point NS_SWIFT_NAME(textAreaContains(windowPoint:));
 - (void)scrollCaretIntoView;
 /// Zero-based display line at the top of this view.
 @property(nonatomic, readonly) NSInteger firstVisibleLine;
@@ -268,7 +299,7 @@ __attribute__((objc_subclassing_restricted))
 /// redraws. Never touches the lexer, keyword lists, properties, text, undo or the revision.
 - (void)adoptSyntaxStylesFrom:(TTEditor *)other;
 /// View scope only: adoptSyntaxStylesFrom: plus automatic indentation, live brace feedback, current-line framing, indentation guides, zoom, wrap, whitespace and line-ending
-/// visibility and margin widths. Selection and scroll position are not copied.
+/// visibility, margin widths, change bars and the centred text column. Selection and scroll position are not copied.
 - (void)adoptViewStateFrom:(TTEditor *)other;
 /// Announces that this view is leaving its window while `successor` keeps showing the same
 /// document, so holders of results that do not depend on this view's selection can retarget
@@ -310,7 +341,47 @@ __attribute__((objc_subclassing_restricted))
 - (void)applyDefaultZoomLevel:(NSInteger)level;
 /// Actual Size: returns this view to the default zoom level, which it then follows again.
 - (void)resetZoomLevel;
+/// NO once this view was zoomed away from the default level; a saved session records only such a zoom.
+@property(nonatomic, readonly) BOOL followsDefaultZoom;
+/// The line-number gutter, whitespace marks and line-ending marks of this view. The View menu's
+/// three commands store one choice in Editor Settings and set it on every document view here;
+/// the catalog toggles of the same names flip the same per-view state.
+@property(nonatomic) BOOL lineNumbersVisible;
+@property(nonatomic) BOOL whitespaceVisible;
+@property(nonatomic) BOOL lineEndingsVisible;
 - (BOOL)setSyntaxFont:(NSInteger)index faceOverride:(nullable NSString *)name sizeOverride:(nullable NSNumber *)size;
+/// View > Show > Change Bars. A narrow margin beside the text marks the lines changed since the
+/// document was opened, with Scintilla's own change history: a wide solid bar for a change that is
+/// not saved, a narrow bar at the left for a saved one, a hollow bar in the middle for a line undone to
+/// its original text after a save. Scintilla starts recording only while the document's Undo history is empty, so
+/// turning this on for a document that already has edits shows the margin and no bars; see
+/// `changeTrackingActive`. Turning it off hides the margin and keeps recording, so the bars are
+/// complete when it is turned on again. Always off in a comparison pane. Defaults to NO.
+@property(nonatomic) BOOL changeBarsVisible;
+/// YES while this view's document records its changes. A load, reload or revert through this view
+/// starts the record again from the loaded text.
+@property(nonatomic, readonly) BOOL changeTrackingActive;
+/// Hides the bars and discards the document's change record: for a large-file document, which
+/// never records changes. Undo history is not touched.
+- (void)stopChangeTracking;
+/// The bar colours for the current appearance, as 0xBBGGRR. The engine has no query for them.
+@property(nonatomic, readonly) NSInteger unsavedChangeColour;
+@property(nonatomic, readonly) NSInteger savedChangeColour;
+/// View > Centered Text Column: the text is laid out as a centred column this many characters
+/// wide in the default style's font at the current zoom, with equal blank margins either side,
+/// recomputed whenever the text area's width, the font or the zoom changes. Zero, the default,
+/// is the ordinary layout. A text area narrower than the column, and a comparison pane, use the
+/// ordinary layout. With Wrap Lines off only the left margin is applied: the text starts at the
+/// column's left edge and a long line runs to the pane's edge, scrolling sideways as usual. The margins are view state: text, selection, wrapping mode and the line-number
+/// gutter are not changed, and a click in either margin acts as a click at the line's start or end.
+@property(nonatomic) NSInteger centeredColumnCharacters;
+/// The blank margins left and right of the text now, in points.
+@property(nonatomic, readonly) NSInteger textMarginLeft;
+@property(nonatomic, readonly) NSInteger textMarginRight;
+/// The width of the text area, beside the gutter, that the margins and the column share.
+@property(nonatomic, readonly) NSInteger textAreaWidth;
+/// The width of that many zeros in the default style at the current zoom: the column's measure.
+- (NSInteger)textWidthOfColumns:(NSInteger)columns NS_SWIFT_NAME(textWidth(ofColumns:));
 /// Comparison-only presentation primitives; callers use independent snapshot renderers.
 /// No method below edits text, Undo, savepoint or selections. Indicator21/22 and marker2/3/4
 /// are distinct from search20/bookmark1. Main-thread only; all batches prevalidate.

@@ -170,6 +170,8 @@ package struct WorkspaceLayoutState: Codable, Equatable, Sendable {
         package var activeHorizontalOffset: Int
         package var secondaryActive: Bool
         package var primaryFraction: Double
+        /// The other pane's zoom, with the same meaning as the tab's `zoom`.
+        package var otherZoom: Int?
 
         package init(
             otherAnchorByte: Int, otherCaretByte: Int, otherFirstVisibleLine: Int,
@@ -197,6 +199,10 @@ package struct WorkspaceLayoutState: Codable, Equatable, Sendable {
         package var viewMode: DocumentViewMode?
         /// The share of the tab's width given to the source while the tab shows Both, from 0 to 1.
         package var previewSourceFraction: Double?
+        /// The active pane's zoom level, −10 through 60, when it was zoomed away from the Editor
+        /// Settings default. Absent in earlier files and for a pane at the default, which then
+        /// follows that default, so those files are unchanged.
+        package var zoom: Int?
         package init(documentID: DocumentID, isPinned: Bool, anchorByte: Int, caretByte: Int, firstVisibleLine: Int) {
             self.documentID = documentID
             self.isPinned = isPinned
@@ -219,16 +225,29 @@ package struct WorkspaceLayoutState: Codable, Equatable, Sendable {
     package var layout: LayoutKind
     package var focusedGroup: GroupSlot
     package var groups: [Group]
+    /// Whether the docked Workspace Browser is shown. Absent in files written before the sidebar
+    /// existed and in a workspace where it was never shown, so those files are unchanged and
+    /// load with the sidebar as it is: hidden at launch.
+    package var sidebarShown: Bool?
+    /// The width the person last gave the sidebar, in points. Kept while it is hidden.
+    package var sidebarWidth: Double?
+    /// The person asked for the sidebar and the window could not hold it. Written as true beside
+    /// `sidebarShown` false, and otherwise absent: a build that does not know the key reads the
+    /// layout as hidden, and one that does shows the sidebar when there is room.
+    package var sidebarAwaitsRoom: Bool?
     package init(version: Int = 1, layout: LayoutKind, focusedGroup: GroupSlot, groups: [Group]) {
         self.version = version
         self.layout = layout
         self.focusedGroup = focusedGroup
         self.groups = groups
     }
+    /// The zoom levels an editor view accepts, as Editor Settings' `defaultZoom`.
+    package static let zoomRange = -10...60
     package func validate() throws {
         guard version == 1, groups.count == layout.groupCount,
             groups.map(\.slot) == Array(GroupSlot.allCases.prefix(layout.groupCount)),
-            groups.contains(where: { $0.slot == focusedGroup })
+            groups.contains(where: { $0.slot == focusedGroup }),
+            sidebarWidth.map({ $0.isFinite && $0 > 0 && $0 <= 10_000 }) != false
         else { throw TabModelError.invalid }
         for group in groups {
             guard
@@ -244,9 +263,10 @@ package struct WorkspaceLayoutState: Codable, Equatable, Sendable {
                     guard split.otherAnchorByte >= 0, split.otherCaretByte >= 0, split.otherFirstVisibleLine >= 0,
                         split.otherHorizontalOffset >= 0, split.activeHorizontalOffset >= 0,
                         split.activeWrapping?.valid != false, split.otherWrapping?.valid != false,
-                        (0...1).contains(split.primaryFraction)
+                        (0...1).contains(split.primaryFraction), split.otherZoom.map(Self.zoomRange.contains) != false
                     else { throw TabModelError.invalid }
                 }
+                guard tab.zoom.map(Self.zoomRange.contains) != false else { throw TabModelError.invalid }
                 if let fraction = tab.previewSourceFraction {
                     guard (0...1).contains(fraction) else { throw TabModelError.invalid }
                 }

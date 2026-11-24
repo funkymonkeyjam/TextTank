@@ -2,6 +2,7 @@
 import AppKit
 import Darwin
 import EditorBridge
+import NativeSearch
 @testable import TextTankCore
 @testable import TextTankRuntime
 
@@ -146,10 +147,176 @@ import EditorBridge
         check(search.lastOutcome == .limitReached && document.editor.revision == revision && document.editor.text == overLimit,
               "100,001 matches preserve all bytes and the existing search cap")
     }
+    /// V5: Find in a document above the 64 Mi UTF-16 limit, through the real Find and Replace
+    /// window. The fixture is the existing streaming generator's, with three planted matches of
+    /// multi-byte text: one across the first 4 MiB window boundary, one mid-document, one at the end.
+    @MainActor private static func largeFind(using service: AppDelegate, in root: URL) throws {
+        let size = 72 * mib
+        let url = root.appendingPathComponent("large.txt")
+        try fixture(url, bytes: size)
+        let doc = TextDocument()
+        doc.fileURL = url
+        doc.fileType = TextDocument.plainTextType
+        try doc.read(from: url, ofType: TextDocument.plainTextType)
+        NSDocumentController.shared.addDocument(doc)
+        doc.makeWindowControllers()
+        defer { doc.close() }
+        let editor = doc.editor
+        let marker = "Straddle-\u{c9}\u{dc}\u{1F600}-Mark", length = marker.utf8.count
+        // Descending, so an insertion never moves a position still to be used.
+        let planted = [4 * mib - 7, 36 * mib + 12_345, size]
+        for position in planted.reversed() {
+            try require(editor.setSelectionAnchor(position, caret: position), "valid planting position")
+            try require(editor.replaceSelection(marker), "planted match")
+        }
+        let starts = [planted[0], planted[1] + length, planted[2] + 2 * length]
+        try require(
+            editor.byteLength == size + 3 * length && SearchCore.isLarge(editor.utf8Data),
+            "the fixture is above the engine's 64 Mi UTF-16 limit")
+        let presentation = try requireValue(doc.presentation, "owned document presentation")
+        service.noteActive(presentation)
+        let search = service.searchController
+        func selected(_ index: Int) -> Bool {
+            editor.selectionStart == starts[index] && editor.selectionEnd == starts[index] + length
+        }
+        // Count, case-insensitively (decoded windows) and with Match case (bytes, no decoding).
+        _ = editor.setSelectionAnchor(0, caret: 0)
+        search.queryField.stringValue = marker.uppercased()
+        var before = try peak(), start = now()
+        search.findAll(nil)
+        // What the main thread itself did before handing over: one copy of the bytes, and the
+        // first time a count of their UTF-16 length.
+        let handOver = now() - start
+        check(search.isSearching, "the large count runs off the main thread")
+        var tick = try wait("large case-insensitive count completed") { !search.isSearching }
+        try metric("find72_count_folded", since: start, initialPeak: before)
+        print(
+            String(
+                format: "SWIFT_PERF find72_count_folded max_main_tick_s=%.6f main_hand_over_s=%.6f", tick, handOver))
+        check(handOver < 0.5 * budgetScale(), "starting a large search does not hold the main thread")
+        check(
+            search.lastOutcome == .found(matches: 3, documents: 1, truncated: false),
+            "a literal Find above the limit reports the right count, with the boundary match counted once")
+        check(tick < 0.5 * budgetScale(), "the window stays responsive while a 72 MiB document is counted")
+        check(
+            try peak() - before <= size + 64 * mib,
+            "counting adds no more than one snapshot of the bytes and a few windows of working memory")
+        search.caseButton.state = .on
+        search.queryField.stringValue = marker
+        before = try peak()
+        start = now()
+        search.findAll(nil)
+        tick = try wait("large exact count completed") { !search.isSearching }
+        try metric("find72_count_exact", since: start, initialPeak: before)
+        print(String(format: "SWIFT_PERF find72_count_exact max_main_tick_s=%.6f", tick))
+        check(
+            search.lastOutcome == .found(matches: 3, documents: 1, truncated: false),
+            "Match case counts the same three matches")
+        search.caseButton.state = .off
+        search.queryField.stringValue = marker.lowercased()
+        // Next from the top finds the match that straddles the first window boundary; then on, and around.
+        before = try peak()
+        start = now()
+        for index in [0, 1, 2, 0] {
+            search.next(nil)
+            _ = try wait("large Find Next completed") { !search.isSearching }
+            check(
+                selected(index) && search.lastOutcome == .movedToMatch,
+                "Find Next reaches large-document match \(index + 1)")
+        }
+        try metric("find72_next_x4_with_wrap", since: start, initialPeak: before)
+        start = now()
+        search.previous(nil)
+        tick = try wait("large Find Previous completed") { !search.isSearching }
+        try metric("find72_previous_wrap", since: start, initialPeak: before)
+        check(selected(2), "Find Previous from the first match wraps to the last, searching backwards")
+        // The first visits made the editor lay out and style the places it was moved to. Now that
+        // it has, six more searches may add one snapshot and its windows, not six snapshots.
+        before = try peak()
+        start = now()
+        for index in [0, 1, 2, 0] {
+            search.next(nil)
+            _ = try wait("repeated large Find Next completed") { !search.isSearching }
+            try require(selected(index), "repeated Find Next reaches match \(index + 1)")
+        }
+        for index in [2, 1] {
+            search.previous(nil)
+            _ = try wait("repeated large Find Previous completed") { !search.isSearching }
+            try require(selected(index), "repeated Find Previous reaches match \(index + 1)")
+        }
+        try metric("find72_six_more_moves", since: start, initialPeak: before)
+        check(
+            try peak() - before <= size + 64 * mib,
+            "repeated Find Next and Previous do not accumulate snapshots of the document")
+        // The live count the find bar shows.
+        let snapshot = editor.utf8Data
+        before = try peak()
+        start = now()
+        let live = try SearchController.preview(
+            snapshot, options: SearchOptions(query: marker.lowercased()), openingCaret: 0,
+            cancellation: TTSearchCancellation())
+        try metric("find72_live_count", since: start, initialPeak: before)
+        check(
+            live.countText == "1 of 3" && live.selected?.location == starts[0], "the live count works above the limit")
+        // Cancel, then a regular expression, which says what to do instead.
+        search.queryField.stringValue = "no such token anywhere"
+        search.findAll(nil)
+        search.cancel(nil)
+        _ = try wait("cancelled large search settled") { !search.isSearching }
+        check(search.lastOutcome == .cancelled, "a large search can be cancelled")
+        search.mode.selectItem(at: SearchOptions.Mode.regularExpression.rawValue)
+        search.queryField.stringValue = "Strad+le"
+        search.findAll(nil)
+        _ = try wait("large Regex refusal settled") { !search.isSearching }
+        check(
+            search.lastOutcome == .failed(SearchFailure.largeDocumentRegex.localizedDescription)
+                && search.status.stringValue.contains("Normal"),
+            "a Regex Find above the limit says so in plain words")
+        search.mode.selectItem(at: 0)
+        search.window?.close()
+    }
+    /// Fix round 2: a long search text, case-insensitively, in text with no ASCII. The engine
+    /// then tries positions one at a time; this pins that it stays inside the large-document
+    /// budget (two seconds per 64 MiB), and prints the rate (DS-101).
+    private static func longNeedleInCJK() throws {
+        let size = 16 * mib
+        let line =
+            String(repeating: "\u{65e5}\u{672c}\u{8a9e}\u{306e}\u{6587}\u{7ae0}\u{3092}\u{691c}\u{7d22}", count: 7)
+            + "\n"
+        var data = Data(capacity: size + 16_384)
+        let unit = Data(line.utf8)
+        while data.count < size { data.append(unit) }
+        let needle = String(repeating: "\u{691c}\u{7d22}\u{3059}\u{308b}", count: 750)
+        try require(needle.utf16.count == 3_000, "a 3,000-unit search text: above the by-position threshold")
+        data.append(Data((needle + "\u{3002}").utf8))
+        let budget = SearchCore.largeTimeLimit(bytes: 64 * mib) * Double(data.count) / Double(64 * mib)
+        for (name, query, expected) in [("foldcjk_absent", needle + "\u{7121}", 0), ("foldcjk_found", needle, 1)] {
+            let before = try peak(), start = now()
+            let report = try SearchCore.searchBytes(data, options: SearchOptions(query: query), timeLimit: 600)
+            let elapsed = now() - start
+            try metric(name, since: start, initialPeak: before)
+            print(
+                String(
+                    format: "SWIFT_PERF %@ mib_per_s=%.1f proportional_budget_s=%.3f", name,
+                    Double(data.count) / Double(mib) / elapsed, budget))
+            check(
+                report.hits.count == expected,
+                "\(name): the long case-insensitive search of CJK text finds exactly what is there")
+            check(
+                elapsed <= budget * budgetScale(),
+                "\(name): a long case-insensitive search text in CJK text stays within the large-document budget")
+        }
+    }
+    private static func budgetScale() -> Double {
+        let parsed = ProcessInfo.processInfo.environment["TEXTTANK_PERF_BUDGET_SCALE"].flatMap(Double.init) ?? 1
+        return parsed > 0 ? parsed : 1
+    }
     @MainActor static func main() {
         Checks.run("SwiftPerformanceChecks") {
             let mode = try requireValue(CommandLine.arguments.dropFirst().first, "selected performance workload")
-            try require(["open32", "save32", "recovery32", "recovery64", "replace100k"].contains(mode), "known workload")
+            try require(
+                ["open32", "save32", "recovery32", "recovery64", "replace100k", "find72", "foldcjk"].contains(mode),
+                "known workload")
             let support = try IsolatedSupportDirectory("SwiftPerformance")
             defer { support.restore() }
             let app = NSApplication.shared
@@ -165,6 +332,12 @@ import EditorBridge
             let documents = TextDocumentController(), delegate = AppDelegate()
             delegate.installEditorServices()
             if mode == "replace100k" { try replaceAll(using: delegate) }
+            else if mode == "find72" {
+                try largeFind(using: delegate, in: support.url)
+            }
+            else if mode == "foldcjk" {
+                try longNeedleInCJK()
+            }
             else { try documentCase(mode, in: support.url) }
             withExtendedLifetime(documents) {}
             withExtendedLifetime(delegate) {}

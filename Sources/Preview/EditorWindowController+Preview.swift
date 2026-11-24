@@ -90,6 +90,20 @@ extension EditorWindowController {
     /// checkmark of its own: the three items above it show which mode is on (DS-22).
     func validateToggleDocumentPreview(_ item: NSMenuItem) -> Bool { previewKind != nil }
 
+    /// View > Preview > Sync Scrolling in Both: the stored `syncPreviewScrolling` setting, the same
+    /// value as the Settings row, so changing either shows in the other at once (DS-20).
+    @objc func toggleSyncPreviewScrolling(_ sender: Any?) {
+        guard previewKind != nil, !CompareCommandScope.blocksWorkspace else { return }
+        EditorServices.current?.settings?.toggle(.syncPreviewScrolling, sender: sender)
+    }
+
+    /// A checkmark for the stored value (DS-22); disabled with the rest of the Preview submenu
+    /// for a document that has no preview (DS-21).
+    func validateSyncPreviewScrolling(_ item: NSMenuItem) -> Bool {
+        item.state = (EditorServices.current?.settings?.value.syncsPreviewScrolling ?? true) ? .on : .off
+        return previewKind != nil
+    }
+
     /// Shows what Settings says a document of this format opens in. Called once, when a document
     /// read from a file gets its first tab; never for a tab restored from a session, an untitled
     /// document, or a tab that is already open (see "Opening in Preview or Both" in
@@ -127,10 +141,12 @@ extension EditorWindowController {
 
         let focusWasInPreview = previewHasFocus
         let focusWasInTab = (hostWindow?.firstResponder as? NSView)?.isDescendant(of: presentationRoot) == true
-        // The find bar acts on the source, which Preview hides. Closing it returns the keyboard
-        // to the editor only when this tab holds the keyboard and the change may move it: a tab
+        // The find bar and Go to Line act on the source, which Preview hides. Closing one returns the
+        // keyboard to the editor only when this tab holds the keyboard and the change may move it: a tab
         // changed from its own menu or mark while another is in use must not take the keyboard.
-        if mode == .preview, findBarVisible { closeFindBar(returningKeyboard: movingFocus && focusWasInTab) }
+        if mode == .preview, findBarVisible || goToLineBarVisible {
+            closeFindBar(returningKeyboard: movingFocus && focusWasInTab)
+        }
 
         viewMode = mode
         if mode == .source {
@@ -210,7 +226,13 @@ extension EditorWindowController {
             documentURL: { [weak self] in
                 guard let url = (self?.document as? TextDocument)?.fileURL, url.isFileURL else { return nil }
                 return url
-            })
+            },
+            syncEditors: { [weak self] in
+                guard let self, self.viewMode == .both else { return [] }
+                let inUse = self.activeEditor
+                return [inUse] + self.views.filter { $0 !== inUse }
+            },
+            wantsScrollSync: { EditorServices.current?.settings?.value.syncsPreviewScrolling ?? true })
         let coordinator = PreviewCoordinator(pane: pane, tab: tab)
         previewCoordinator = coordinator
         return coordinator

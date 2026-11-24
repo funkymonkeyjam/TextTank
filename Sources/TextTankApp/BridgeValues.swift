@@ -14,6 +14,16 @@ extension LineEnding {
     }
 }
 
+extension TTLineEndingMode {
+    var lineEnding: LineEnding {
+        switch self {
+        case .crlf: return .crlf
+        case .cr: return .cr
+        default: return .lf
+        }
+    }
+}
+
 extension EditorCommand {
     var nativeIdentifier: TTEditorCommandIdentifier { TTEditorCommandIdentifier(rawValue: rawValue) }
 }

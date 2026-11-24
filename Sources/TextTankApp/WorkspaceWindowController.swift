@@ -49,13 +49,37 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     var tabStrip: DocumentTabStrip { groupSurfaces[.first]!.strip }
     var tabStrips: [DocumentTabStrip] { model.groups.compactMap { groupSurfaces[$0.slot]?.strip } }
     private let content = NSView()
+    /// The root split: the docked Workspace Browser, when shown, beside the editor groups (DS-D11).
+    private(set) lazy var sidebarSplit = WorkspaceSidebarSplit(editorArea: content)
+    private(set) var isSidebarShown = false
+    /// True once the sidebar has been shown or a saved layout described it; until then a saved
+    /// layout carries no sidebar keys and is written exactly as before.
+    private var sidebarWasUsed = false
+    /// The person wants the sidebar, but the window cannot hold it beside the editor groups
+    /// right now (a small display, a narrow full-screen tile). It stays in the saved layout as
+    /// shown and comes back when it fits.
+    private(set) var sidebarAwaitsRoom = false
+    /// The most content the window can have, for checks. Nil asks the window and its screen.
+    var sidebarAvailableContent: (() -> TabGroupExtent)?
+    /// Stands in for the display in every workspace window: the content a window could have on
+    /// it. Checks use it to run as they would on a display of another size.
+    static var simulatedScreenContent: (() -> TabGroupExtent)?
+    private var sidebarObservers: [NSObjectProtocol] = []
+    private weak var sidebarBrowser: WorkspaceBrowserController?
+    /// What had the keyboard when the sidebar took it by command.
+    private weak var sidebarReturnResponder: NSResponder?
     private var observations: [NSKeyValueObservation] = []
     private var automationObserver: NSObjectProtocol?
     private var savingArrangement = false
     private var saveScheduled = false
     lazy var tabCommands = TabCommandController(host: self)
     lazy var groupCommands = GroupCommandController(host: self)
-    let layoutPicker = NSPopUpButton(frame: .zero, pullsDown: true)
+    /// Whether a sheet is attached, for the checks that must not present one.
+    var attachedSheetProbe: (() -> Bool)?
+    var hasAttachedSheet: Bool { attachedSheetProbe?() ?? (window?.attachedSheet != nil) }
+    private var sheetObservers: [NSObjectProtocol] = []
+    /// Window > Move Focus: the keyboard route between the window's areas (DS-73).
+    lazy var areaFocus = WindowAreaFocusController(host: self)
     private var removingTabs = false
     private var returnTab: TabID?
     private var returnSelection: (TabSelectionState, TabWorkspace)?
@@ -73,21 +97,15 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         window.routeCloseButtonToQuit()
         let root = NSView()
         window.contentView = root
-        content.frame = root.bounds
-        content.autoresizingMask = [.width, .height]
-        root.addSubview(content)
+        sidebarSplit.frame = root.bounds
+        sidebarSplit.autoresizingMask = [.width, .height]
+        root.addSubview(sidebarSplit)
         groupContainer.translatesAutoresizingMaskIntoConstraints = false
-        layoutPicker.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(groupContainer)
-        content.addSubview(layoutPicker)
-        layoutPicker.setAccessibilityLabel("Editor group layout")
-        refreshLayoutPicker()
+        // DS-D12: nothing sits between the toolbar and the tab strips. The layout choice is the
+        // toolbar's Editor Layout item and View > Editor Groups.
         NSLayoutConstraint.activate([
-            layoutPicker.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -8),
-            layoutPicker.topAnchor.constraint(equalTo: content.topAnchor, constant: 3),
-            layoutPicker.heightAnchor.constraint(equalToConstant: 30),
-            layoutPicker.widthAnchor.constraint(equalToConstant: 160),
-            groupContainer.topAnchor.constraint(equalTo: content.topAnchor, constant: 36),
+            groupContainer.topAnchor.constraint(equalTo: content.topAnchor),
             groupContainer.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             groupContainer.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             groupContainer.bottomAnchor.constraint(equalTo: content.bottomAnchor)
@@ -103,15 +121,40 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         toolbar.autosavesConfiguration = EditorToolbarPreferences.nativeAutosaveAllowed
         window.toolbar = toolbar
         restoreToolbarArrangement()
+        EditorToolbarPreferences.offerLayoutItemOnce(
+            in: toolbar,
+            defaults: EditorToolbarPreferences.nativeAutosaveAllowed ? RuntimeEnvironment.legacyDefaults : nil)
         refreshAutomationToolbar()
         observations = [
             toolbar.observe(\.displayMode) { [weak self] _, _ in MainActor.assumeIsolated { self?.scheduleSave() } },
             toolbar.observe(\.isVisible) { [weak self] _, _ in MainActor.assumeIsolated { self?.scheduleSave() } }
         ]
+        // A toolbar item with no action of its own is enabled only here. Group commands are off
+        // while a sheet is attached, so the toolbar is validated again when one begins and ends;
+        // otherwise Editor Layout stayed disabled after the sheet had gone (DS-21).
+        sheetObservers = [NSWindow.willBeginSheetNotification, NSWindow.didEndSheetNotification].map { name in
+            NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.validateToolbar()
+                    // The sheet is attached, or detached, just after its notification.
+                    self.perform(#selector(self.revalidateToolbar), with: nil, afterDelay: 0)
+                }
+            }
+        }
         automationObserver = NotificationCenter.default.addObserver(
             forName: .textTankAutomationsDidChange, object: EditorServices.current?.automations, queue: .main
         ) { [weak self] _ in MainActor.assumeIsolated { self?.refreshAutomationToolbar() } }
         WindowFrames.track(window, as: "TextTank.Document")
+        for name in [
+            NSWindow.didResizeNotification, NSWindow.didChangeScreenNotification,
+            NSWindow.didEnterFullScreenNotification, NSWindow.didExitFullScreenNotification
+        ] {
+            sidebarObservers.append(
+                NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.reconcileSidebarWithRoom() }
+                })
+        }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
     func register(_ presentation: EditorWindowController, document: TextDocument) {
@@ -158,16 +201,18 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         validateToolbar()
         if focus { window?.makeFirstResponder(presentation.keyboardFocusView) }
     }
-    func focusGroup(_ slot: GroupSlot) {
+    /// `focus` is false when the caller places the keyboard itself, in the group's tab strip or
+    /// status row (Window > Move Focus): the group is focused and the keyboard is left alone.
+    func focusGroup(_ slot: GroupSlot, focus: Bool = true) {
         guard !isMutatingGroups, !tabCommands.isBusy, window?.attachedSheet == nil else { return }
         tabCommands.cancelReopen()
         endBackgroundCloseReturn()
         do { try model.focusGroup(slot, openDocuments: openIDs) } catch { return }
         if let active {
-            activate(active, preserveSelection: true)
+            activate(active, focus: focus, preserveSelection: true)
         } else {
             window?.nextResponder = NSApp
-            window?.makeFirstResponder(nil)
+            if focus { window?.makeFirstResponder(nil) }
             metadataChanged()
             validateToolbar()
         }
@@ -184,11 +229,6 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
             if let id = group.activeTab { entries[id]?.applyRestoredSplitIfMounted() }
         }
     }
-    private func refreshLayoutPicker() {
-        let menu = groupCommands.layoutMenu(picker: true)
-        layoutPicker.menu = menu
-        groupCommands.menuNeedsUpdate(menu)
-    }
     func groupLabel(_ slot: GroupSlot) -> String {
         let position: String
         switch model.layout {
@@ -200,16 +240,22 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         return "Group \(slot.rawValue)" + (position.isEmpty ? "" : ", " + position)
     }
     func canFitSessionLayout(_ layout: LayoutKind, availableContent: TabGroupExtent? = nil) -> Bool {
-        if let availableContent {
-            return TabGroupGeometry.fits(TabGroupGeometry.minimumContent(layout), available: availableContent)
-        }
-        guard let window, let screen = window.screen ?? NSScreen.main else { return layout == .single }
-        let available = window.contentRect(forFrameRect: screen.visibleFrame).size
-        return TabGroupGeometry.fits(
-            TabGroupGeometry.minimumContent(layout),
-            available: TabGroupExtent(width: available.width, height: available.height))
+        let minimum = WorkspaceSidebarGeometry.minimumContent(layout, sidebarShown: isSidebarShown)
+        // The same room the sidebar is measured against: injected, full-screen content or the screen.
+        guard let room = sidebarRoom(availableContent) else { return layout == .single }
+        return TabGroupGeometry.fits(minimum, available: room)
     }
     func captureSessionLayout() -> WorkspaceLayoutState {
+        var state = groupSessionLayout()
+        if sidebarWasUsed {
+            // Shown and waiting for room are different facts; the second has its own key.
+            state.sidebarShown = isSidebarShown
+            if sidebarAwaitsRoom { state.sidebarAwaitsRoom = true }
+            state.sidebarWidth = Double(sidebarSplit.preferredWidth)
+        }
+        return state
+    }
+    private func groupSessionLayout() -> WorkspaceLayoutState {
         WorkspaceLayoutState(
             layout: model.layout, focusedGroup: model.focusedGroup,
             groups: model.groups.map { group in
@@ -221,6 +267,168 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
                     })
             })
     }
+    // MARK: Docked Workspace Browser (DS-D11)
+
+    /// The window's content minimum for the current layout and sidebar. The window grows to it
+    /// when it is smaller and is otherwise left alone; a full-screen window is never resized.
+    private func applyContentMinimum(keepingOnScreen: Bool = false) {
+        let minimum = WorkspaceSidebarGeometry.minimumContent(model.layout, sidebarShown: isSidebarShown)
+        sidebarSplit.editorMinimumWidth = CGFloat(TabGroupGeometry.minimumContent(model.layout).width)
+        guard let window else { return }
+        window.contentMinSize = NSSize(width: minimum.width, height: minimum.height)
+        guard !window.styleMask.contains(.fullScreen) else { return }
+        let size = window.contentView?.bounds.size ?? .zero
+        if size.width < minimum.width || size.height < minimum.height {
+            window.setContentSize(
+                NSSize(width: max(size.width, minimum.width), height: max(size.height, minimum.height)))
+        }
+        if keepingOnScreen, let screen = window.screen {
+            window.setFrameOrigin(
+                NSPoint(
+                    x: max(
+                        screen.visibleFrame.minX,
+                        min(window.frame.minX, screen.visibleFrame.maxX - window.frame.width)),
+                    y: max(
+                        screen.visibleFrame.minY,
+                        min(window.frame.minY, screen.visibleFrame.maxY - window.frame.height))))
+        }
+    }
+    var sidebarHasKeyboard: Bool {
+        guard let sidebar = sidebarSplit.sidebar, let responder = window?.firstResponder as? NSView else {
+            return false
+        }
+        return responder.isDescendant(of: sidebar)
+    }
+    /// Shows or hides the docked Workspace Browser. Showing takes the keyboard only when
+    /// `focus` is true, which is when the person chose the command. Hiding gives the keyboard
+    /// back to the view that had it, if the sidebar holds it. The editors' text, selection,
+    /// scroll position, Undo history and active tabs are never touched. Returns false, with a
+    /// status message, when this screen cannot fit the sidebar beside the editor groups.
+    @discardableResult func setSidebarShown(
+        _ shown: Bool, browser: WorkspaceBrowserController? = nil, focus: Bool = false,
+        availableContent: TabGroupExtent? = nil, quiet: Bool = false
+    ) -> Bool {
+        if let browser { sidebarBrowser = browser }
+        guard shown else {
+            hideSidebar()
+            return true
+        }
+        guard let browser = sidebarBrowser ?? EditorServices.current?.workspaceBrowser else { return false }
+        sidebarBrowser = browser
+        if !isSidebarShown {
+            sidebarWasUsed = true
+            guard sidebarFits(availableContent) else {
+                // Asked for and deferred for size: remembered, readable in the View menu, and
+                // shown when there is room. A restored request says nothing: it was said when made.
+                sidebarAwaitsRoom = true
+                if !quiet {
+                    showTabMessage(
+                        "This screen cannot fit the Workspace Browser beside this editor layout. It will appear when there is room. Choose View > Workspace Browser again to cancel."
+                    )
+                }
+                return false
+            }
+            sidebarAwaitsRoom = false
+            let view = browser.sidebarView
+            sidebarSplit.setSidebar(view)
+            isSidebarShown = true
+            applyContentMinimum(keepingOnScreen: true)
+            window?.contentView?.layoutSubtreeIfNeeded()
+            browser.sidebarDidShow()
+        }
+        if focus, let window, !sidebarHasKeyboard {
+            sidebarReturnResponder = window.firstResponder === window ? nil : window.firstResponder
+            window.makeFirstResponder(browser.outline)
+        }
+        return true
+    }
+    /// The most content the window can have: its current content in full screen, where it
+    /// cannot grow (a split tile included), otherwise what its screen can show.
+    private func sidebarRoom(_ injected: TabGroupExtent? = nil) -> TabGroupExtent? {
+        if let injected { return injected }
+        if let sidebarAvailableContent { return sidebarAvailableContent() }
+        guard let window else { return nil }
+        if window.styleMask.contains(.fullScreen) {
+            let size = window.contentView?.bounds.size ?? .zero
+            return TabGroupExtent(width: size.width, height: size.height)
+        }
+        if let simulated = Self.simulatedScreenContent { return simulated() }
+        guard let screen = window.screen ?? NSScreen.main else { return nil }
+        let visible = window.contentRect(forFrameRect: screen.visibleFrame).size
+        return TabGroupExtent(width: visible.width, height: visible.height)
+    }
+    private func sidebarFits(_ injected: TabGroupExtent? = nil) -> Bool {
+        guard let room = sidebarRoom(injected) else { return true }
+        return TabGroupGeometry.fits(
+            WorkspaceSidebarGeometry.minimumContent(model.layout, sidebarShown: true), available: room)
+    }
+    /// One rule for a small display, a narrow full-screen tile and a layout with more groups:
+    /// the sidebar is never shown where the editor groups would fall below their minimum. A
+    /// shown sidebar that no longer fits is hidden with a status message and remembered; it is
+    /// shown again, without taking the keyboard, as soon as it fits. Called when the window is
+    /// resized, changes screen, enters or leaves full screen, or changes its editor layout.
+    func reconcileSidebarWithRoom() {
+        guard !isMutatingGroups else { return }
+        if isSidebarShown, !sidebarFits() {
+            hideSidebar(awaitingRoom: true)
+            showTabMessage(
+                "The Workspace Browser is hidden because this window cannot fit it beside the editor groups. It returns when there is room."
+            )
+        } else if sidebarAwaitsRoom, !isSidebarShown, sidebarFits() {
+            setSidebarShown(true)
+        }
+    }
+    /// View > Workspace Browser chosen while the sidebar waits for room: the request is withdrawn.
+    func withdrawSidebarRequest() {
+        guard sidebarAwaitsRoom, !isSidebarShown else { return }
+        sidebarAwaitsRoom = false
+        showTabMessage("The Workspace Browser will stay hidden.")
+    }
+    private func hideSidebar(awaitingRoom: Bool = false) {
+        sidebarAwaitsRoom = awaitingRoom
+        guard isSidebarShown else { return }
+        let hadKeyboard = sidebarHasKeyboard
+        let target = keyboardTargetAfterSidebar()
+        sidebarSplit.setSidebar(nil)
+        isSidebarShown = false
+        applyContentMinimum()
+        window?.contentView?.layoutSubtreeIfNeeded()
+        sidebarBrowser?.sidebarDidHide()
+        if hadKeyboard { window?.makeFirstResponder(target) }
+        sidebarReturnResponder = nil
+    }
+    /// The sidebar's list, which takes the keyboard when the sidebar is entered.
+    var sidebarFocusView: NSView? { isSidebarShown ? sidebarBrowser?.outline : nil }
+    /// Window > Move Focus is about to put the keyboard in the sidebar. Escape there then returns
+    /// to the text, not to a control an earlier command remembered.
+    func sidebarWillTakeKeyboardByArea() { sidebarReturnResponder = nil }
+    /// Escape in the sidebar: the keyboard goes back to the text and the sidebar stays.
+    func returnKeyboardFromSidebar() {
+        guard sidebarHasKeyboard else { return }
+        window?.makeFirstResponder(keyboardTargetAfterSidebar())
+        sidebarReturnResponder = nil
+    }
+    private func keyboardTargetAfterSidebar() -> NSResponder? {
+        if let view = sidebarReturnResponder as? NSView, view.window === window, !view.isHiddenOrHasHiddenAncestor,
+            sidebarSplit.sidebar.map({ !view.isDescendant(of: $0) }) != false
+        {
+            return view
+        }
+        return active?.keyboardFocusView
+    }
+    /// Applies the sidebar a saved layout describes. A layout without the keys, which is every
+    /// layout written before the sidebar existed, changes nothing: at launch that is hidden.
+    func applySidebar(from state: WorkspaceLayoutState) {
+        if let width = state.sidebarWidth {
+            sidebarWasUsed = true
+            sidebarSplit.preferredWidth = CGFloat(
+                min(WorkspaceSidebarGeometry.maximumWidth, max(WorkspaceSidebarGeometry.minimumWidth, width)))
+        }
+        guard let shown = state.sidebarShown else { return }
+        sidebarWasUsed = true
+        // A request that was waiting for room is tried again, without a message either way.
+        setSidebarShown(shown || state.sidebarAwaitsRoom == true, quiet: true)
+    }
     @discardableResult func restoreSessionLayout(
         _ state: WorkspaceLayoutState, documents mapping: [DocumentID: TextDocument]
     ) -> Bool {
@@ -229,13 +437,8 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
                 state, documentIDs: mapping.mapValues(\.runtimeID), openDocuments: openIDs),
             applyGroupChange(plan)
         else { return false }
-        let minimum = TabGroupGeometry.minimumContent(state.layout)
-        window?.contentMinSize = NSSize(width: minimum.width, height: minimum.height)
-        if let window {
-            let size = window.contentView?.bounds.size ?? .zero
-            window.setContentSize(
-                NSSize(width: max(size.width, minimum.width), height: max(size.height, minimum.height)))
-        }
+        applySidebar(from: state)
+        applyContentMinimum()
         for (saved, actual) in zip(state.groups, model.groups) {
             for (view, tab) in zip(saved.tabs, actual.tabs) {
                 entries[tab.id]?.restoreSessionTab(view)
@@ -253,14 +456,9 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     @discardableResult func setEditorLayout(_ layout: LayoutKind, availableContent: TabGroupExtent? = nil) -> Bool {
         guard !tabCommands.isBusy, !tabCommands.isReopening, window?.attachedSheet == nil else { return false }
         if layout == model.layout { return true }
-        let minimum = TabGroupGeometry.minimumContent(layout)
-        if let window, let screen = window.screen ?? NSScreen.main {
-            let available = window.contentRect(forFrameRect: screen.visibleFrame).size
-            guard
-                TabGroupGeometry.fits(
-                    minimum,
-                    available: availableContent ?? TabGroupExtent(width: available.width, height: available.height))
-            else {
+        let minimum = WorkspaceSidebarGeometry.minimumContent(layout, sidebarShown: isSidebarShown)
+        if let room = sidebarRoom(availableContent) {
+            guard TabGroupGeometry.fits(minimum, available: room) else {
                 showTabMessage(
                     "This screen cannot fit that editor layout. The current layout is unchanged. Use a larger display.")
                 return false
@@ -268,22 +466,8 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         }
         guard let plan = try? model.planLayout(layout, openDocuments: openIDs) else { return false }
         guard applyGroupChange(plan) else { return false }
-        window?.contentMinSize = NSSize(width: minimum.width, height: minimum.height)
-        if let window {
-            let size = window.contentView?.bounds.size ?? .zero
-            window.setContentSize(
-                NSSize(width: max(size.width, minimum.width), height: max(size.height, minimum.height)))
-            if let screen = window.screen {
-                window.setFrameOrigin(
-                    NSPoint(
-                        x: max(
-                            screen.visibleFrame.minX,
-                            min(window.frame.minX, screen.visibleFrame.maxX - window.frame.width)),
-                        y: max(
-                            screen.visibleFrame.minY,
-                            min(window.frame.minY, screen.visibleFrame.maxY - window.frame.height))))
-            }
-        }
+        applyContentMinimum(keepingOnScreen: true)
+        reconcileSidebarWithRoom()
         if let name = (active?.document as? TextDocument)?.displayName {
             showTabMessage(
                 String(
@@ -586,10 +770,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         if let active {
             active.showTransientStatus(message, seconds: 8, announce: true)
         } else {
-            if let status = groupSurfaces[model.focusedGroup]?.emptyStatus {
-                status.stringValue = message
-                ControlPresentation.label(message, control: status)
-            }
+            groupSurfaces[model.focusedGroup]?.showEmptyStatus(message)
             Announce.say(message, from: window)
         }
     }
@@ -657,7 +838,6 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
             window?.representedURL = nil
             window?.isDocumentEdited = false
         }
-        refreshLayoutPicker()
         groupSurfaces.values.forEach { $0.refresh() }
     }
     /// A tab changed between Source, Preview and Both, or its document gained or lost a preview.
@@ -668,13 +848,14 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         groupSurfaces.values.forEach { $0.strip.refresh(revealingActive: false) }
     }
     func visibilityChanged() { presentations.forEach { $0.visibilityChanged() } }
+    @objc private func revalidateToolbar() { validateToolbar() }
     func validateToolbar() {
         for item in window?.toolbar?.items ?? [] { item.isEnabled = validateToolbarItem(item) }
         if let window { EditorToolbarAccessibility.apply(to: window) }
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         EditorToolbarCommand.allCases.map { NSToolbarItem.Identifier($0.rawValue) } + [
-            .flexibleSpace, NSToolbarItem.Identifier("TextTank.Automations")
+            EditorLayoutToolbarItem.identifier, .flexibleSpace, NSToolbarItem.Identifier("TextTank.Automations")
         ]
     }
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -684,6 +865,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         _ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier, willBeInsertedIntoToolbar: Bool
     ) -> NSToolbarItem? {
         if let command = EditorToolbarCommand(rawValue: id.rawValue) { return command.makeItem() }
+        if id == EditorLayoutToolbarItem.identifier { return EditorLayoutToolbarItem.make(commands: groupCommands) }
         return id.rawValue == "TextTank.Automations" ? EditorServices.current?.automations?.makeToolbarItem() : nil
     }
     func validateToolbarItem(_ item: NSToolbarItem) -> Bool {
@@ -691,6 +873,8 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
             return true
         }
         if item.itemIdentifier.rawValue == "TextTank.Automations" { return true }
+        // The layout can be chosen with no document open; its menu items validate themselves.
+        if item.itemIdentifier == EditorLayoutToolbarItem.identifier { return groupCommands.commandsAvailable }
         guard let active else {
             if item.action == #selector(EditorWindowController.clone(_:)) {
                 item.menuFormRepresentation?.state = .off
@@ -753,6 +937,8 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         precondition(Thread.isMainThread)
         MainActor.assumeIsolated {
             if let automationObserver { NotificationCenter.default.removeObserver(automationObserver) }
+            sheetObservers.forEach(NotificationCenter.default.removeObserver)
+            sidebarObservers.forEach { NotificationCenter.default.removeObserver($0) }
         }
     }
 }

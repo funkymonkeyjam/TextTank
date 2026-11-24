@@ -95,7 +95,16 @@ final class TextDocumentController: NSDocumentController {
     var didRegisterDocument: (() -> Void)?
     private var nativeReviewDepth = 0
     var isReviewingOpenDocuments: Bool { nativeReviewDepth > 0 }
-
+    /// A document whose close a quit review only noted is still open in its tab although it has
+    /// left `documents`. Opening its file again, from Finder or a link, finds that document
+    /// instead of making a second one for the same file.
+    override func document(for url: URL) -> NSDocument? {
+        if let registered = super.document(for: url) { return registered }
+        let wanted = url.standardizedFileURL, disk = TextDocument.canonicalDiskURL(url)
+        return TextDocument.deferredQuitCloses.first {
+            !$0.isClosed && ($0.fileURL?.standardizedFileURL == wanted || $0.diskURL == disk)
+        }
+    }
     /// AppKit can close the documents before it asks its application delegate about quitting.
     /// Its stock review may nest a close-all callback. Capture once around the outer operation.
     override func reviewUnsavedDocuments(

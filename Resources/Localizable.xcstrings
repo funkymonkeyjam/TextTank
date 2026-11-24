@@ -2358,6 +2358,490 @@
         }
       }
     },
+    "settings.shortcuts.cancel": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancel"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.cancel.label": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancel: keep both shortcuts as they are"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.cell.noShortcut": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No shortcut"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.clear": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clear Shortcut"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.clear.label": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Leave the selected command without a shortcut"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.column.command": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Command"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.column.shortcut": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shortcut"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.column.status": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Status"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.default": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use Default"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.default.label": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use the default shortcut for the selected command"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.empty.changed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No shortcut has been changed."
+          }
+        }
+      }
+    },
+    "settings.shortcuts.empty.search": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No command matches the search."
+          }
+        }
+      }
+    },
+    "settings.shortcuts.empty.select": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Select a command to change its shortcut."
+          }
+        }
+      }
+    },
+    "settings.shortcuts.help.inQuestion": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "“%@” has %@, the key being recorded for “%@”. Replace leaves “%@” without a shortcut."
+          }
+        }
+      }
+    },
+    "settings.shortcuts.list.label": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Commands and their shortcuts"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.message.assigned": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "“%@” now uses %@."
+          }
+        }
+      }
+    },
+    "settings.shortcuts.message.cleared": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "“%@” now has no shortcut."
+          }
+        }
+      }
+    },
+    "settings.shortcuts.message.fixed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ is used by “%@”, whose shortcut cannot be changed here. Choose a different shortcut."
+          }
+        }
+      }
+    },
+    "settings.shortcuts.message.inUse": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ is already used by %@. Replace gives it to “%@” and leaves %@ without a shortcut. Cancel changes nothing."
+          }
+        }
+      }
+    },
+    "settings.shortcuts.message.resetAll": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Every shortcut is back to its default."
+          }
+        }
+      }
+    },
+    "settings.shortcuts.message.typing": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Type the shortcut for “%@”. Press Escape to keep the current one."
+          }
+        }
+      }
+    },
+    "settings.shortcuts.message.unchanged": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The shortcut was not changed."
+          }
+        }
+      }
+    },
+    "settings.shortcuts.recorder.label": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record a shortcut for %@, now %@"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.recorder.label.none": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record a shortcut for the selected command"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.recorder.noShortcut": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "no shortcut"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.recorder.none": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No Shortcut"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.recorder.record": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record Shortcut"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.recorder.typing": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Type the Shortcut"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.replace": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Replace"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.replace.label": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Replace: give the key to the selected command"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.resetAll": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reset All Shortcuts…"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.resetAll.label": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reset all shortcuts to their defaults"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.search.label": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search commands by name, menu or shortcut"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.search.placeholder": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Search commands"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.status.custom": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Custom"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.status.customNone": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Custom: none"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.status.default": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Default"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.status.fixed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fixed"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.status.givenUp": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Default, given up"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.status.ignored": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ · Saved shortcut ignored"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.status.inQuestion": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ · Has the key in question"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.status.none": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "None"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.status.sameKey": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ · Same key as “%@”"
+          }
+        }
+      }
+    },
+    "settings.shortcuts.status.system": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "System"
+          }
+        }
+      }
+    },
     "tabs.viewMode.action.both": {
       "extractionState": "manual",
       "localizations": {
@@ -2530,6 +3014,435 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@, pinned, edited, showing Preview"
+          }
+        }
+      }
+    },
+    "tabs.label.outsideChange": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@. %2$@."
+          }
+        }
+      }
+    },
+    "tabs.label.compared": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@. Selected for comparison."
+          }
+        }
+      }
+    },
+    "tabs.label.outsideChangeCompared": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@. %2$@. Selected for comparison."
+          }
+        }
+      }
+    },
+    "tabs.mark.outsideChange": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@: %2$@. Select this tab to choose what to do."
+          }
+        }
+      }
+    },
+    "tabs.mark.compared": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ is selected for comparison. Choose Compare with Selected on another tab to compare them."
+          }
+        }
+      }
+    },
+    "tabs.openTabs": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open tabs in this group"
+          }
+        }
+      }
+    },
+    "toolbar.layout": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Editor Layout"
+          }
+        }
+      }
+    },
+    "toolbar.layout.help": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose how many editor groups the window shows: one, two columns, two rows or a grid of four."
+          }
+        }
+      }
+    },
+    "areas.sidebar": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Workspace Browser."
+          }
+        }
+      }
+    },
+    "areas.tabs": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tabs."
+          }
+        }
+      }
+    },
+    "areas.tabs.group": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tabs in %@."
+          }
+        }
+      }
+    },
+    "areas.find": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Find bar."
+          }
+        }
+      }
+    },
+    "areas.find.group": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Find bar in %@."
+          }
+        }
+      }
+    },
+    "areas.text": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Text of %@."
+          }
+        }
+      }
+    },
+    "areas.text.group": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Text of %1$@ in %2$@."
+          }
+        }
+      }
+    },
+    "areas.preview": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preview of %@."
+          }
+        }
+      }
+    },
+    "areas.preview.group": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preview of %1$@ in %2$@."
+          }
+        }
+      }
+    },
+    "areas.status": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Document status."
+          }
+        }
+      }
+    },
+    "areas.status.group": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Document status in %@."
+          }
+        }
+      }
+    },
+    "areas.empty": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Empty editor group."
+          }
+        }
+      }
+    },
+    "areas.empty.group": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@, empty."
+          }
+        }
+      }
+    },
+    "emptyGroup.prompt": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open a document or create a new one."
+          }
+        }
+      }
+    },
+    "emptyGroup.new": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New"
+          }
+        }
+      }
+    },
+    "emptyGroup.open": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open…"
+          }
+        }
+      }
+    },
+    "emptyGroup.new.label": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New document in this group"
+          }
+        }
+      }
+    },
+    "emptyGroup.open.label": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open a document in this group"
+          }
+        }
+      }
+    },
+    "emptyGroup.hint.new": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Press %@ for a new document."
+          }
+        }
+      }
+    },
+    "emptyGroup.hint.new.menu": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose File > New for a new document."
+          }
+        }
+      }
+    },
+    "emptyGroup.hint.open": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Press %@ to open a document."
+          }
+        }
+      }
+    },
+    "emptyGroup.hint.open.menu": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose File > Open… to open a document."
+          }
+        }
+      }
+    },
+    "emptyGroup.hint.quickOpen": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Press %@ for Quick Open, to find a file by name."
+          }
+        }
+      }
+    },
+    "emptyGroup.hint.quickOpen.menu": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose File > Quick Open… to find a file by name."
+          }
+        }
+      }
+    },
+    "emptyGroup.hint.palette": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Press %@ for the Command Palette."
+          }
+        }
+      }
+    },
+    "emptyGroup.hint.palette.menu": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose Help > Command Palette… to run any command."
+          }
+        }
+      }
+    },
+    "emptyGroup.recent": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recent files"
+          }
+        }
+      }
+    },
+    "emptyGroup.recent.nameInFolder": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ — %2$@"
+          }
+        }
+      }
+    },
+    "emptyGroup.recent.open": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open recent file %@"
+          }
+        }
+      }
+    },
+    "areas.goToLine": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Go to Line."
+          }
+        }
+      }
+    },
+    "areas.goToLine.group": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Go to Line in %@."
           }
         }
       }

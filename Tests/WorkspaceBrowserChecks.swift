@@ -5,11 +5,430 @@ import AppKit
 import EditorBridge
 import NativeSearch
 import Darwin
+import os
 @MainActor private final class SessionCancelState { var pressed = false, timedOut = false }
 
 @main struct WorkspaceBrowserChecks {
     @MainActor static func descendants(_ view: NSView) -> [NSView] {
         [view] + view.subviews.flatMap(descendants)
+    }
+    /// Quick Open over open documents, recent files and workspace files.
+    @MainActor static func quickOpenChecks(in root: URL) throws {
+        let manager = FileManager.default
+        let folder = root.appendingPathComponent("quick-open")
+        let support = root.appendingPathComponent("quick-open-support")
+        for directory in [folder, support] {
+            try manager.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        func file(_ name: String) throws -> URL {
+            let url = folder.appendingPathComponent(name)
+            try Data(name.utf8).write(to: url)
+            return url
+        }
+        let alphaURL = try file("alpha-open.txt"), betaURL = try file("beta-recent.txt")
+        let goneURL = try file("gamma-gone.txt"), deltaURL = try file("delta-open.txt")
+        _ = try file("epsilon-workspace.txt")
+        let controller = WorkspaceBrowserController(
+            storeURL: support.appendingPathComponent("WorkspaceBrowser.json"), recordsSystemRecent: false)
+        let alpha = try controller.open(alphaURL)
+        try controller.open(betaURL).close()
+        try controller.open(goneURL).close()
+        try manager.removeItem(at: goneURL)
+        let untitled = DocumentFactory.makeUntitled()
+        let delta = try controller.open(deltaURL)
+        defer { [alpha, untitled, delta].filter(\.isOpen).forEach { $0.close() } }
+        let untitledName = try requireValue(untitled.displayName, "fixture: the untitled document has a display name")
+        try require(controller.store.state.folders.isEmpty, "fixture: this workspace has no folder")
+        let host = try requireValue(alpha.presentation?.host, "fixture: the workspace window of the open documents")
+        try require(host.active?.document === delta, "fixture: the document opened last is showing")
+
+        controller.quickOpen(nil)
+        let chooser = controller.fileChooser
+        let panel = try requireValue(chooser.panel, "fixture: Quick Open is showing")
+        @MainActor func rows(_ kind: String) -> [String] {
+            panel.displayedRows.filter { $0.accessory == kind }.map(\.title)
+        }
+        check(
+            rows("Open").contains("alpha-open.txt") && rows("Open").contains(untitledName)
+                && rows("Recent").isEmpty && !chooser.isComplete,
+            "Quick Open lists open documents at once, before any file has been looked at")
+        spinUntil("Quick Open to finish checking recent files") { chooser.isComplete }
+        let shown = panel.displayedRows
+        let kinds = shown.map(\.accessory)
+        check(
+            kinds == kinds.filter { $0 == "Open" } + kinds.filter { $0 == "Recent" } && rows("Workspace").isEmpty
+                && rows("Open").contains("alpha-open.txt") && rows("Open").contains("delta-open.txt")
+                && rows("Recent").contains("beta-recent.txt"),
+            "with no workspace folder Quick Open lists open documents, then recent files: \(shown.map(\.title))")
+        check(
+            shown.filter { $0.title == "alpha-open.txt" }.map(\.accessory) == ["Open"]
+                && shown.filter { $0.title == "beta-recent.txt" }.map(\.accessory) == ["Recent"],
+            "an open document is not listed again as the recent file it also is")
+        check(
+            !shown.contains { $0.title == "gamma-gone.txt" } && controller.store.state.recent.contains {
+                $0.lastPathComponent == "gamma-gone.txt"
+            },
+            "a recent file that no longer exists is not listed")
+        let untitledRow = shown.first { $0.title == untitledName }
+        check(
+            untitledRow?.accessory == "Open" && untitledRow?.detail == "Not saved yet"
+                && untitledRow?.accessoryLabel == "Open document",
+            "an untitled open document is listed by its display name")
+        let add = try requireValue(
+            descendants(panel.form.window.contentView!).compactMap { $0 as? NSButton }.first {
+                $0.identifier?.rawValue == WorkspaceQuickOpen.addFolderIdentifier
+            }, "Quick Open's Add Folder button")
+        let status = try requireValue(
+            descendants(panel.form.window.contentView!).compactMap { $0 as? NSTextField }.first {
+                $0.identifier?.rawValue == WorkspaceQuickOpen.statusIdentifier
+            }, "Quick Open's status line")
+        check(
+            !add.isHidden && add.isEnabled && add.title == "Add Folder…"
+                && status.stringValue.hasSuffix("Add a folder to the workspace to find its files here too."),
+            "DS-85 without a workspace folder Quick Open offers Add Folder: \(status.stringValue)")
+        let cell = try requireValue(
+            panel.table.view(atColumn: 0, row: 0, makeIfNecessary: true), "fixture: the first Quick Open row")
+        check(
+            descendants(cell).compactMap { ($0 as? NSTextField)?.stringValue }.last == "Open",
+            "a row carries a small label for its kind")
+
+        // Choosing an open document shows its tab; it never opens a second copy.
+        let openBefore = NSDocumentController.shared.documents.count, tabsBefore = host.presentations.count
+        panel.filter.stringValue = "alpha-open"
+        panel.refresh()
+        let alphaRow = try requireValue(panel.displayedRows.first, "fixture: the row for alpha-open.txt")
+        let choseAlpha = try panel.choose(alphaRow.id)
+        check(
+            alphaRow.title == "alpha-open.txt" && alphaRow.accessory == "Open" && choseAlpha,
+            "the open document is found by name and can be chosen")
+        check(
+            host.active?.document === alpha && NSDocumentController.shared.documents.count == openBefore
+                && host.presentations.count == tabsBefore,
+            "choosing an open document selects its tab and opens no second copy")
+        // The same when its tab is in the other group and that group is not the focused one.
+        if host.setEditorLayout(.twoColumns), let alphaTab = alpha.presentation?.tabID,
+            let deltaTab = delta.presentation
+        {
+            host.moveTabs([alphaTab], target: alphaTab, to: .second)
+            host.show(deltaTab, sender: nil)
+            try require(
+                host.active?.document === delta && host.model.focusedGroup == .first,
+                "fixture: the first group is focused and alpha-open.txt is in the second")
+            panel.refresh()
+            let grouped = try requireValue(panel.displayedRows.first, "fixture: the row for alpha-open.txt")
+            let choseGrouped = try panel.choose(grouped.id)
+            check(
+                choseGrouped && host.active?.document === alpha && host.model.focusedGroup == .second
+                    && NSDocumentController.shared.documents.count == openBefore
+                    && host.presentations.count == tabsBefore,
+                "an open document in another group is selected there, not opened again")
+            check(
+                controller.quickOpenDocuments().first { $0.name == "alpha-open.txt" }?.group == host.groupLabel(.second),
+                "with two groups an open document's row names its group")
+            // A file opened by another spelling of its path while its document is in the other
+            // group: the same file under a different case, and through a linked folder.
+            host.show(deltaTab, sender: nil)
+            try require(host.model.focusedGroup == .first, "fixture: the first group is focused again")
+            let shoutedAlpha = folder.appendingPathComponent("ALPHA-OPEN.TXT")
+            let linkedFolder = root.appendingPathComponent("quick-open-other-way")
+            try manager.createSymbolicLink(at: linkedFolder, withDestinationURL: folder)
+            var respelled = [alphaURL, linkedFolder.appendingPathComponent("alpha-open.txt")]
+            if manager.fileExists(atPath: shoutedAlpha.path) {
+                respelled.append(shoutedAlpha)
+            } else {
+                print("SKIP Quick Open by another case: this volume tells names apart by case")
+            }
+            for url in respelled {
+                host.show(deltaTab, sender: nil)
+                let reopened = try controller.openOfferingEncoding(url)
+                check(
+                    reopened === alpha && host.active?.document === alpha && host.model.focusedGroup == .second
+                        && NSDocumentController.shared.documents.count == openBefore
+                        && host.presentations.count == tabsBefore,
+                    "opening a file whose document is in the other group selects it there: \(url.lastPathComponent) in \(url.deletingLastPathComponent().lastPathComponent)")
+            }
+            _ = host.setEditorLayout(.single)
+        } else {
+            print("SKIP Quick Open across groups: the two-column layout does not fit this screen")
+        }
+        // A recent file opens as a document; a document closed meanwhile is reported, not reopened.
+        panel.filter.stringValue = "beta-recent"
+        panel.refresh()
+        let betaRow = try requireValue(panel.displayedRows.first, "fixture: the row for beta-recent.txt")
+        let choseBeta = try panel.choose(betaRow.id)
+        check(
+            betaRow.title == "beta-recent.txt" && betaRow.accessory == "Recent" && choseBeta
+                && NSDocumentController.shared.documents.count == openBefore + 1
+                && (host.active?.document as? TextDocument)?.fileURL?.lastPathComponent == "beta-recent.txt",
+            "choosing a recent file opens it")
+        NSDocumentController.shared.document(for: betaURL)?.close()
+        panel.filter.stringValue = "delta-open"
+        panel.refresh()
+        let deltaRow = try requireValue(
+            panel.displayedRows.first { $0.title == "delta-open.txt" }, "fixture: the row for delta-open.txt")
+        let replacement = DocumentFactory.makeUntitled()
+        delta.close()
+        rejects("a document closed while Quick Open was showing is not reopened") { _ = try panel.choose(deltaRow.id) }
+        replacement.close()
+        panel.form.close()
+        check(chooser.panel == nil && chooser.list.entries.isEmpty, "closing Quick Open releases its list")
+
+        // The pure list: one row a file, whichever names reach it, and bounded checking.
+        let link = root.appendingPathComponent("quick-open-link")
+        try manager.createSymbolicLink(at: link, withDestinationURL: folder)
+        var list = QuickOpenList()
+        list.add(open: [.init(id: "one", name: "alpha-open.txt", url: alphaURL, group: nil)], inspecting: true)
+        list.add(recent: [
+            link.appendingPathComponent("beta-recent.txt"), link.appendingPathComponent("alpha-open.txt"), goneURL,
+            betaURL, folder
+        ])
+        list.add(workspace: WorkspaceFileIndex.scan([folder]).files)
+        check(
+            list.entries.map { "\($0.kind.label) \($0.title)" } == [
+                "Open alpha-open.txt", "Recent beta-recent.txt", "Workspace delta-open.txt",
+                "Workspace epsilon-workspace.txt"
+            ] && !list.limited,
+            "one row a file by file identity, in the order open, recent, workspace: \(list.entries.map(\.title))")
+        check(
+            list.matches("epsilon").map(\.title) == ["epsilon-workspace.txt"]
+                && list.matches("-open.").map(\.title) == ["alpha-open.txt", "delta-open.txt"]
+                && list.matches("").count == 4 && list.matches("no-such-file-name").isEmpty,
+            "Quick Open matches names across the three kinds, an open document first among equals")
+        var late = QuickOpenList()
+        late.add(recent: [betaURL], deadline: 0)
+        var many = QuickOpenList()
+        many.add(recent: Array(repeating: goneURL, count: QuickOpenList.recentLimit) + [betaURL])
+        check(
+            late.entries.isEmpty && late.limited && many.entries.isEmpty && many.limited,
+            "recent files are checked up to a count and a deadline, and one not checked is left out")
+
+        // One file, three spellings: a link to an open file and the same name in another case.
+        let alias = root.appendingPathComponent("quick-open-alias.txt")
+        try manager.createSymbolicLink(at: alias, withDestinationURL: alphaURL)
+        let shouted = folder.appendingPathComponent("ALPHA-OPEN.TXT")
+        let caseBlind = manager.fileExists(atPath: shouted.path)
+        if !caseBlind { print("SKIP Quick Open rows by another case: this volume tells names apart by case") }
+        let openAlpha = QuickOpenList.OpenDocument(id: "one", name: "alpha-open.txt", url: alphaURL, group: nil)
+        var spelled = QuickOpenList()
+        spelled.add(open: [openAlpha], inspecting: true)
+        spelled.add(recent: [alias, shouted, betaURL])
+        check(
+            spelled.entries.map { "\($0.kind.label) \($0.title)" } == ["Open alpha-open.txt", "Recent beta-recent.txt"],
+            "a link to an open file and its name in another case are the open document, not more rows: \(spelled.entries.map(\.title))")
+        var linkedFirst = QuickOpenList()
+        linkedFirst.add(recent: [alias, alphaURL] + (caseBlind ? [shouted] : []))
+        check(
+            linkedFirst.entries.map(\.title) == ["quick-open-alias.txt"],
+            "a file reached by a link is listed once, under the name that came first")
+
+        // A file system that never answers. The probe below does not return for one name until
+        // these checks are over; nothing may wait for it beyond its bound.
+        let gate = DispatchSemaphore(value: 0)
+        let silentURL = folder.appendingPathComponent("never-answers.txt")
+        let silent: FileProbePool.Probe = { url in
+            if url.lastPathComponent == "never-answers.txt" {
+                gate.wait()
+                return nil
+            }
+            return QuickOpenList.inspect(url)
+        }
+        // The name that never answers is on a volume of its own, as a dead network volume is.
+        let byName: FileProbePool.VolumeNames = { urls in
+            urls.map { $0.path.contains("/dead/") || $0.lastPathComponent == "never-answers.txt" ? "dead" : "local" }
+        }
+        let small = FileProbePool(width: 2, ceiling: 2, reserve: 1, cooldown: 600, patience: 0.2, volumes: byName)
+        let betaFile = try requireValue(QuickOpenList.inspect(betaURL), "fixture: beta-recent.txt is a file")
+        var began = ProcessInfo.processInfo.systemUptime
+        let answers = QuickOpenList.outcomes(
+            recent: [silentURL, betaURL, goneURL], deadline: began + 0.5, pool: small, probe: silent)
+        check(
+            answers == [.unknown, .found(betaFile), .missing] && ProcessInfo.processInfo.systemUptime - began < 5
+                && small.busy == 1,
+            "a recent file that never answers is not known at the bound, and the others are answered: \(answers)")
+        var bounded = QuickOpenList()
+        bounded.add(recent: [silentURL, betaURL, goneURL], outcomes: answers)
+        check(
+            bounded.entries.map(\.title) == ["beta-recent.txt"] && bounded.limited,
+            "a recent file whose existence is not known is left out and the list says so")
+        _ = small.outcomes(for: [silentURL], until: ProcessInfo.processInfo.systemUptime + 0.2, probe: silent)
+        began = ProcessInfo.processInfo.systemUptime
+        let refused = small.outcomes(for: [silentURL, betaURL, silentURL], until: began + 3, probe: silent)
+        check(
+            refused == [.unknown, .found(betaFile), .unknown] && ProcessInfo.processInfo.systemUptime - began < 2
+                && small.busy == 1,
+            "a volume that let a deadline pass is not known at once and gets no more threads; other paths are answered: \(refused)")
+
+        // Five paths on a volume that has stopped answering, with local ones, over repeated uses.
+        let alive = OSAllocatedUnfairLock(initialState: false)
+        let asked = OSAllocatedUnfairLock(initialState: 0)
+        let deadGate = DispatchSemaphore(value: 0)
+        let deadURLs = (1...5).map { URL(fileURLWithPath: "/dead/recent-\($0).txt") }
+        let flaky: FileProbePool.Probe = { url in
+            guard url.path.hasPrefix("/dead/") else { return QuickOpenList.inspect(url) }
+            asked.withLock { $0 += 1 }
+            if !alive.withLock({ $0 }) { deadGate.wait() }
+            return alive.withLock { $0 } ? "dead:" + url.lastPathComponent : nil
+        }
+        let shared = FileProbePool(width: 4, ceiling: 6, cooldown: 2.5, patience: 0.2, volumes: byName)
+        let mixed = [deadURLs[0], deadURLs[1], betaURL, deadURLs[2], deadURLs[3], alphaURL, deadURLs[4]]
+        let alphaFile = try requireValue(QuickOpenList.inspect(alphaURL), "fixture: alpha-open.txt is a file")
+        let localOnly: [FileProbePool.Outcome] = [
+            .unknown, .unknown, .found(betaFile), .unknown, .unknown, .found(alphaFile), .unknown
+        ]
+        var uses: [String] = []
+        for use in 1...6 {
+            began = ProcessInfo.processInfo.systemUptime
+            let outcomes = QuickOpenList.outcomes(recent: mixed, deadline: began + (use == 1 ? 0.4 : 5), pool: shared, probe: flaky)
+            var list = QuickOpenList()
+            list.add(recent: mixed, outcomes: outcomes)
+            let took = ProcessInfo.processInfo.systemUptime - began
+            if outcomes != localOnly || list.entries.map(\.title) != ["beta-recent.txt", "alpha-open.txt"]
+                || shared.busy != 2 || took > 2 || asked.withLock({ $0 }) != 2
+            {
+                uses.append("use \(use): \(outcomes) busy \(shared.busy) asked \(asked.withLock { $0 }) in \(took) s")
+            }
+        }
+        check(
+            uses.isEmpty,
+            "with a volume that never answers, local recent files are listed on every use and two threads at most are left with it: \(uses)")
+        // After the wait the volume would be tried again, but its questions are still out: no more threads.
+        spinUntil("the volume's wait to pass") { ProcessInfo.processInfo.systemUptime - began > 2.6 }
+        _ = shared.outcomes(for: mixed, until: ProcessInfo.processInfo.systemUptime + 0.3, probe: flaky)
+        check(
+            shared.busy == 2 && asked.withLock { $0 } == 2,
+            "while its first questions are still out the volume is not asked again, whatever time has passed")
+        // The volume answers again: the try after the wait finds it, and then all its paths.
+        let everything: [FileProbePool.Outcome] = [
+            .found("dead:recent-1.txt"), .found("dead:recent-2.txt"), .found(betaFile), .found("dead:recent-3.txt"),
+            .found("dead:recent-4.txt"), .found(alphaFile), .found("dead:recent-5.txt")
+        ]
+        alive.withLock { $0 = true }
+        for _ in 0..<2 { deadGate.signal() }
+        spinUntil("the threads left with the volume to end") { shared.busy == 0 }
+        let recovered = shared.outcomes(for: mixed, until: ProcessInfo.processInfo.systemUptime + 5, probe: flaky)
+        check(
+            recovered == everything && asked.withLock { $0 } == 7,
+            "after the wait the volume is tried again and, once it answers, all its paths are: \(recovered)")
+        // It stops answering once more, then answers late: it is left alone for the whole wait.
+        spinUntil("the pool to be idle before the volume stops again") { shared.busy == 0 }
+        alive.withLock { $0 = false }
+        began = ProcessInfo.processInfo.systemUptime
+        let stoppedAgain = shared.outcomes(for: mixed, until: began + 0.3, probe: flaky)
+        alive.withLock { $0 = true }
+        for _ in 0..<2 { deadGate.signal() }
+        spinUntil("its late answers to arrive") { shared.busy == 0 }
+        let duringWait = shared.outcomes(for: mixed, until: ProcessInfo.processInfo.systemUptime + 5, probe: flaky)
+        check(
+            stoppedAgain == localOnly && duringWait == localOnly && asked.withLock { $0 } == 9
+                && ProcessInfo.processInfo.systemUptime - began < 2.5,
+            "a late answer does not end the wait: until it passes the volume is not asked at all: \(duringWait)")
+        spinUntil("the volume's second wait to pass") { ProcessInfo.processInfo.systemUptime - began > 2.9 }
+        let again = shared.outcomes(for: mixed, until: ProcessInfo.processInfo.systemUptime + 5, probe: flaky)
+        check(
+            again == everything && asked.withLock { $0 } == 14,
+            "after that wait it is asked again and answers: \(again)")
+        spinUntil("the pool to be idle") { shared.busy == 0 }
+
+        let stuck = WorkspaceQuickOpen()
+        stuck.probe = silent
+        stuck.pool = FileProbePool(width: 4, ceiling: 8, cooldown: 0, volumes: byName)
+        stuck.recentBound = 600
+        stuck.show(
+            roots: [folder], documents: [openAlpha], recent: [silentURL, betaURL], select: { _ in true },
+            open: { _, _ in true }, addFolder: {})
+        let waiting = try requireValue(stuck.panel, "fixture: Quick Open while a recent file never answers")
+        check(
+            waiting.displayedRows.map { "\($0.accessory) \($0.title)" } == ["Open alpha-open.txt"],
+            "open documents are listed at once")
+        spinUntil("workspace files to be listed while a recent file never answers") {
+            waiting.displayedRows.contains { $0.accessory == "Workspace" }
+        }
+        check(
+            !stuck.isComplete
+                && waiting.displayedRows.map { "\($0.accessory) \($0.title)" } == [
+                    "Open alpha-open.txt", "Workspace beta-recent.txt", "Workspace delta-open.txt",
+                    "Workspace epsilon-workspace.txt"
+                ],
+            "workspace files do not wait for recent files: \(waiting.displayedRows.map(\.title))")
+        waiting.form.close()
+        stuck.recentBound = 0.5
+        stuck.show(
+            roots: [folder], documents: [openAlpha], recent: [silentURL, betaURL], select: { _ in true },
+            open: { _, _ in true }, addFolder: {})
+        let boundedPanel = try requireValue(stuck.panel, "fixture: Quick Open with a bound on recent files")
+        spinUntil("Quick Open to stop waiting for the recent file at its bound") { stuck.isComplete }
+        let boundedStatus = descendants(boundedPanel.form.window.contentView!).compactMap { $0 as? NSTextField }
+            .first { $0.identifier?.rawValue == WorkspaceQuickOpen.statusIdentifier }?.stringValue ?? ""
+        check(
+            boundedPanel.displayedRows.map { "\($0.accessory) \($0.title)" } == [
+                "Open alpha-open.txt", "Recent beta-recent.txt", "Workspace delta-open.txt",
+                "Workspace epsilon-workspace.txt"
+            ] && boundedStatus.contains("Some recent files were not checked in time.")
+                && !boundedStatus.contains("Reading") && stuck.pool.busy <= 8,
+            "at the bound the panel is complete without the recent file that never answered: \(boundedStatus)")
+        boundedPanel.form.close()
+        for _ in 0..<64 { gate.signal() }
+        spinUntil("the threads left behind to end once their calls return") { small.busy == 0 && stuck.pool.busy == 0 }
+
+        // The panel with a workspace folder, and the Add Folder button of one without.
+        let direct = WorkspaceQuickOpen()
+        var added = 0, opened: [(URL?, URL)] = []
+        direct.show(
+            roots: [folder], documents: [.init(id: "one", name: "alpha-open.txt", url: alphaURL, group: nil)],
+            recent: [betaURL, alphaURL], select: { _ in true },
+            open: { root, url in
+                opened.append((root, url))
+                return true
+            }, addFolder: { added += 1 })
+        let withFolder = try requireValue(direct.panel, "fixture: Quick Open with a workspace folder")
+        spinUntil("Quick Open to read the workspace folder") { direct.isComplete }
+        check(
+            withFolder.displayedRows.map { "\($0.accessory) \($0.title)" } == [
+                "Open alpha-open.txt", "Recent beta-recent.txt", "Workspace delta-open.txt",
+                "Workspace epsilon-workspace.txt"
+            ],
+            "with a workspace folder its files follow the open documents and recent files, each file once")
+        let hiddenAdd = descendants(withFolder.form.window.contentView!).compactMap { $0 as? NSButton }.first {
+            $0.identifier?.rawValue == WorkspaceQuickOpen.addFolderIdentifier
+        }
+        check(hiddenAdd?.isHidden == true, "Add Folder is offered only while the workspace has no folder")
+        let workspaceRow = try requireValue(
+            withFolder.displayedRows.first { $0.title == "epsilon-workspace.txt" }, "fixture: a workspace row")
+        let choseWorkspace = try withFolder.choose(workspaceRow.id)
+        check(
+            choseWorkspace && opened.count == 1 && opened.first?.0 == folder
+                && opened.first?.1.lastPathComponent == "epsilon-workspace.txt",
+            "a workspace file is opened with the folder it was found in")
+        withFolder.form.close()
+        direct.show(roots: [], documents: [], recent: [], select: { _ in true }, open: { _, _ in true }) { added += 1 }
+        let empty = try requireValue(direct.panel, "fixture: Quick Open with nothing to list")
+        let emptyAdd = try requireValue(
+            descendants(empty.form.window.contentView!).compactMap { $0 as? NSButton }.first {
+                $0.identifier?.rawValue == WorkspaceQuickOpen.addFolderIdentifier
+            }, "the Add Folder button of an empty Quick Open")
+        emptyAdd.performClick(nil)
+        check(
+            added == 1 && direct.panel == nil && !empty.form.window.isVisible,
+            "Add Folder closes Quick Open and runs the workspace's Add Folder command once")
+
+        // Shift-Command-O is a default that yields, and nothing else has the key.
+        let item = controller.menuItem(.quickOpen)
+        check(
+            item is DefaultShortcutItem && item.keyEquivalent == "O" && item.keyEquivalentModifierMask == .command
+                && ControlPresentation.shortcut(of: item) == "⇧⌘O" && item.target === controller,
+            "Quick Open's shortcut is Shift-Command-O, a default that yields to one assigned in Settings")
+        check(
+            !EditorSettings.protectedShortcuts.contains("O") && !EditorCommand.defaultShortcuts.values.contains("O")
+                && !EditorCommand.allCases.contains {
+                    $0.extendedMenuShortcut.map { $0.key.lowercased() == "o" && $0.modifiers == [.command, .shift] } == true
+                },
+            "the key is not a protected or default editor shortcut, so saved shortcuts still load")
+        var settings = EditorSettings()
+        settings.setShortcut("O", for: EditorCommand.upper.rawValue)
+        (item as? DefaultShortcutItem)?.applyEditorOverrides(settings)
+        check(item.keyEquivalent.isEmpty, "a person's own Shift-Command-O shortcut is kept, and Quick Open gives up the key")
+        (item as? DefaultShortcutItem)?.applyEditorOverrides(EditorSettings())
+        check(item.keyEquivalent == "O", "fixture: the default shortcut returns")
     }
     @MainActor static func main() {
         Checks.run("WorkspaceBrowserChecks") {
@@ -163,8 +582,17 @@ import Darwin
                 explicit.editor.text == "\0hi" && explicit.format == FileFormat(encoding: .utf16LE, bom: true),
                 "accepting the offer opens the same bytes as UTF-16 LE")
             explicit.close()
+            // Later fixtures install other workspace hosts; this browser stays with the one it has.
+            let sidebarHost = WorkspaceWindowController.current
+            controller.host = { sidebarHost }
+            let restoreRoom = WorkspaceRoom.grant(sidebarHost)
+            defer { restoreRoom() }
             controller.show(nil)
-            check(controller.window != nil && controller.window?.contentView != nil, "native browser built")
+            check(
+                controller.isShown && sidebarHost.sidebarSplit.sidebar === controller.sidebarView
+                    && controller.sidebarView.window === sidebarHost.window
+                    && !NSApp.windows.contains { $0 is NSPanel && $0.title == "Workspace" },
+                "the browser is docked in the workspace window; there is no browser panel")
             // F91: the Open Documents list follows the documents without Refresh and without the status line.
             @MainActor func listed() -> Int { controller.outlineView(controller.outline, numberOfChildrenOfItem: nil) }
             func pump() { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
@@ -647,9 +1075,11 @@ import Darwin
             check(
                 cancelState.pressed && !cancelState.timedOut && cancelledInspection == nil && NSApp.modalWindow == nil,
                 "F316 actual Check Originals Cancel returns no partial result and closes its modal")
-            check(listed() > 0, "fixture: the panel lists documents before it closes")
-            controller.window?.close()
-            check(listed() == 0, "a closed panel holds no documents")
+            check(listed() > 0, "fixture: the sidebar lists documents before it is hidden")
+            controller.show(nil)
+            check(!controller.isShown && sidebarHost.sidebarSplit.sidebar == nil, "the same command hides the sidebar")
+            check(listed() == 0, "a hidden sidebar holds no documents")
+            try quickOpenChecks(in: root)
             try ExternalFileObservationChecks.run(in: root)
             try ExternalFilePolicyChecks.run(in: root)
             try ExternalFileWatchChecks.run(in: root)

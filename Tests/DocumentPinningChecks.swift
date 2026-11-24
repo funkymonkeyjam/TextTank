@@ -430,7 +430,11 @@ extension DocumentChecks {
             var reviews = 0, replies: [Bool] = []
             quitting.requestUnsavedReview = { delegate in if delegate === quitting { reviews += 1 } }
             quitting.replyToTerminate = { replies.append($0) }
+            // A file: since DS-D9 an untitled document's unsaved text is kept, not reviewed, at quit.
+            let dirtyURL = root.appendingPathComponent("unsaved-at-quit.txt")
+            try Data().write(to: dirtyURL)
             let dirty = TextDocument()
+            dirty.fileURL = dirtyURL
             NSDocumentController.shared.addDocument(dirty)
             dirty.editor.text = "unsaved at quit"
             let clean = TextDocument()
@@ -681,14 +685,23 @@ extension DocumentChecks {
                 try JSONEncoder().encode(search)
             }
             defaults.set(searchBytes, forKey: "TextTank.Search.v1")
-            let finder = SearchController(defaults: defaults)
+            // The legacy value is imported only when no private Find file exists. A Find action
+            // earlier in this process (the find bar now saves the history) may have written the
+            // shared isolated file, so this launch is given a private file of its own.
+            let finder = SearchController(
+                defaults: defaults, preferencesURL: scratch.appendingPathComponent("legacy-import-Find.json"))
             check(
                 try JSONDecoder().decode(SearchOptions.self, from: searchBytes) == search
-                    && finder.queryField.stringValue == search.query
-                    && finder.replacementField.stringValue == search.replacement && finder.mode.indexOfSelectedItem == 2
                     && finder.caseButton.state == .on && finder.wordButton.state == .on && finder.dotButton.state == .on
                     && finder.wrapButton.state == .off,
-                "golden Find options decode and restore every Find-window control")
+                "golden Find options decode and restore every Find-window option flag")
+            // V3: the text and the Regex mode an older file would have restored are offered as
+            // history; a new launch starts in Normal mode with both fields empty.
+            check(
+                finder.queryField.stringValue.isEmpty && finder.replacementField.stringValue.isEmpty
+                    && finder.mode.indexOfSelectedItem == 0 && finder.findHistory.queries == [search.query]
+                    && finder.findHistory.replacements == [search.replacement],
+                "golden Find options start a launch in Normal mode, with their text offered as history")
 
             var folderSettings = FolderSearchSettings()
             folderSettings.folder = URL(fileURLWithPath: "/Users/Shared/TextTank Fixture/project", isDirectory: true)
@@ -988,9 +1001,11 @@ extension DocumentChecks {
             let present = Set(try FileManager.default.contentsOfDirectory(atPath: folder.path))
             check(
                 present == [
-                    "Settings.json", "SearchOptions.json", "FolderSearchSettings.json", "WorkspaceBrowser.json",
+                    // Settings-v2.json is decoded value by value in SettingsShortcutValidationChecks.versionStep.
+                    "Settings.json", "Settings-v2.json", "SearchOptions.json", "FolderSearchSettings.json",
+                    "WorkspaceBrowser.json",
                     "RunLibrary.json", "Session.texttanksession", "SessionLayout.texttanksession",
-                    "RecoverySnapshot.json", "ReminderBatch.json",
+                    "RecoverySnapshot.json", "ReminderBatch.json", "LastSession.json", "LastSession-untitled.json",
                     "MacroLibrary.json", "Automations.json", "Automations-before-flags.json", "LanguageCatalog.json",
                     "LanguageOverrides.json"
                 ], "every committed persistence fixture is decoded by a check")
@@ -1030,6 +1045,49 @@ extension DocumentChecks {
                     return [row] + (item.submenu.map { snapshot($0, path: position) } ?? [])
                 }
             }
+            // DB-R3: the commands the status row's position menu used to list are reachable in
+            // the menu bar; Clear Selection and the document's indentation are in no menu here
+            // and stay in their own status fields (DesignStatusChecks checks the keyboard route).
+            let listed = walk(bar, "").filter { !$0.1.isHidden }
+            let marksBefore = document.editor.bookmarkCount
+            for command in ["bookmarkToggle", "bookmarkNext", "bookmarkPrevious"] {
+                let found = listed.first { $0.1.representedObject as? String == command }
+                check(
+                    found?.0 == "Find > Bookmarks > " + (found?.1.title ?? "") && found?.1.target == nil
+                        && found?.1.action == #selector(EditorWindowController.command(_:))
+                        && found.map { controller.validateMenuItem($0.1) } == true,
+                    "DB-R3 \(command) is reachable in the menu bar under Find > Bookmarks: \(found?.0 ?? "missing")")
+            }
+            if let toggle = listed.first(where: { $0.1.representedObject as? String == "bookmarkToggle" })?.1 {
+                controller.command(toggle)
+                check(
+                    document.editor.bookmarkCount == marksBefore + 1,
+                    "DB-R3 the menu bar's bookmark command acts on the document")
+                controller.command(toggle)
+            }
+            let selectAllItem = listed.first { $0.1.action == #selector(NSText.selectAll(_:)) }
+            check(
+                selectAllItem?.0 == "Edit > Select All" && selectAllItem?.1.keyEquivalent == "a",
+                "DB-R3 Select All is reachable in the menu bar: \(selectAllItem?.0 ?? "missing")")
+            check(
+                listed.first { $0.1.action == #selector(EditorWindowController.goToLine(_:)) }?.0 == "Find > Go to Line…"
+                    && listed.first { $0.1.action == #selector(EditorWindowController.toggleWrap(_:)) }?.0
+                        == "View > Wrap Lines"
+                    && listed.first { $0.1.representedObject as? String == "zoomIn" }?.0.hasPrefix("View > ") == true
+                    && listed.first { $0.1.action == #selector(EditorWindowController.chooseLanguage(_:)) }?.0
+                        == "View > Syntax Highlighting > Choose Language…",
+                "DB-R3 Go to Line, wrapping, text size and the language are reachable in the menu bar")
+            check(
+                !listed.contains { $0.1.representedObject as? String == "clearSelection" }
+                    && !listed.contains {
+                        ["tabs", "spaces", "width.4"].contains($0.1.representedObject as? String ?? "")
+                    }
+                    && controller.statusOptionsMenu("selection")?.items.map { $0.representedObject as? String ?? "" }
+                        == ["clearSelection"]
+                    && controller.statusOptionsMenu("indent")?.items.contains {
+                        $0.representedObject as? String == "spaces"
+                    } == true,
+                "DB-R3 Clear Selection and the document's indentation are in no menu of the bar and stay in their status fields")
             let menuSnapshot = snapshot(bar)
             var chords = Set<String>(), conflicts: [String] = []
             for (path, item) in walk(bar, "") where !item.keyEquivalent.isEmpty {
@@ -1100,17 +1158,71 @@ extension DocumentChecks {
                     "target": "responder",
                 ]
             }
-            // Added on 23 November 2026: View > Toggle Preview, Shift-Command-V, one command
+            // Added on 23 November 2026: View > Toggle Preview, Control-Command-V since the owner's
+            // decision of 24 November 2026 (it was Shift-Command-V for a day), one command
             // for the same per-tab mode. Nothing was removed for it.
             let togglePreviewAdded: [[String: String]] = [
                 [
-                    "action": "toggleDocumentPreview:", "object": "", "key": "V", "modifiers": "1048576",
+                    "action": "toggleDocumentPreview:", "object": "", "key": "v", "modifiers": "1310720",
                     "target": "responder",
                 ]
             ]
-            var accounted = identities(formerCommands + deliberatelyAdded + togglePreviewAdded)
+            // Given a key on 23 November 2026: File > Quick Open… is the same command with a default
+            // shortcut, Shift-Command-O. Its row without a key is replaced by its row with one.
+            let quickOpenWithoutKey: [[String: String]] = [
+                ["action": "quickOpen:", "object": "", "key": "", "modifiers": "1048576", "target": "explicit"]
+            ]
+            let quickOpenWithKey: [[String: String]] = [
+                ["action": "quickOpen:", "object": "", "key": "O", "modifiers": "1048576", "target": "explicit"]
+            ]
+            // Added on 23 November 2026 (DS-D10, local history): Compare > Compare with Earlier
+            // Version… and Compare > Clear Local History…. Nothing was removed for them.
+            let localHistoryAdded: [[String: String]] = [
+                [
+                    "action": "compareWithEarlierVersion:", "object": "", "key": "", "modifiers": "1048576",
+                    "target": "responder",
+                ],
+                [
+                    "action": "clearLocalHistory:", "object": "", "key": "", "modifiers": "1048576",
+                    "target": "explicit",
+                ],
+            ]
+            // Added on 23 November 2026 (DS-73): Window > Move Focus > Move Focus to Next Area and
+            // Move Focus to Previous Area, F6 and Shift-F6, each listed once more as a hidden item
+            // for its second key, Option-Command-` and Shift-Option-Command-`. Nothing was removed.
+            let moveFocusAdded: [[String: String]] = [
+                ("moveFocusToNextArea:", "\u{f709}", "0"), ("moveFocusToPreviousArea:", "\u{f709}", "131072"),
+                ("moveFocusToNextArea:", "`", "1572864"), ("moveFocusToPreviousArea:", "~", "1572864"),
+            ].map { ["action": $0.0, "object": "", "key": $0.1, "modifiers": $0.2, "target": "explicit"] }
+            // Merged on 23 November 2026 (DS-D13): View > Close Split View has no row of its own.
+            // View > Split Tab View is the one toggle that splits and closes; `closeSplit:` is
+            // still an action. This is the only command the regrouped View menu stopped listing.
+            let closeSplitMerged: [[String: String]] = [
+                ["action": "closeSplit:", "object": "", "key": "", "modifiers": "1048576", "target": "responder"]
+            ]
+            // Added with it: View > Preview > Sync Scrolling in Both (the stored setting, on the
+            // active tab's validation), View > Show > Change Bars and View > Centered Text Column.
+            let viewRegroupAdded: [[String: String]] = [
+                [
+                    "action": "toggleSyncPreviewScrolling:", "object": "", "key": "", "modifiers": "1048576",
+                    "target": "responder",
+                ],
+                ["action": "toggleChangeBars:", "object": "", "key": "", "modifiers": "1048576", "target": "explicit"],
+                [
+                    "action": "toggleCenteredColumn:", "object": "", "key": "", "modifiers": "1048576",
+                    "target": "explicit",
+                ],
+            ]
+            // Added on 23 November 2026: View > Syntax Highlighting > Choose Language…, the
+            // filterable chooser the status bar's language field also opens. Nothing was removed.
+            let chooseLanguageAdded: [[String: String]] = [
+                ["action": "chooseLanguage:", "object": "", "key": "", "modifiers": "1048576", "target": "responder"]
+            ]
+            var accounted = identities(
+                formerCommands + deliberatelyAdded + togglePreviewAdded + quickOpenWithKey + localHistoryAdded
+                    + viewRegroupAdded + chooseLanguageAdded + moveFocusAdded)
             var removedRowsInFixture = 0
-            for removed in identities(deliberatelyRemoved) {
+            for removed in identities(deliberatelyRemoved + quickOpenWithoutKey + closeSplitMerged) {
                 if let index = accounted.firstIndex(of: removed) {
                     accounted.remove(at: index)
                     removedRowsInFixture += 1
@@ -1118,8 +1230,10 @@ extension DocumentChecks {
             }
             let current = identities(menuSnapshot)
             check(
-                formerCommands.count == 338 && removedRowsInFixture == deliberatelyRemoved.count,
-                "DS-D4 the fixture lists all 338 commands of the fourteen-menu bar, the two rows of the retired recipe automation among them")
+                formerCommands.count == 338
+                    && removedRowsInFixture == deliberatelyRemoved.count + quickOpenWithoutKey.count
+                        + closeSplitMerged.count,
+                "DS-D4 the fixture lists all 338 commands of the fourteen-menu bar, the two rows of the retired recipe automation and Close Split View's row among them")
             if !check(
                 current == accounted.sorted(),
                 "DS-D4 every command of the fourteen-menu bar is listed exactly once more in the nine-menu bar, apart from the removals named")
@@ -1474,55 +1588,32 @@ extension DocumentChecks {
                     && document.editor.text == "x\nx\nx\n" && document.editor.revision == untouched,
                 "Cancel in Insert into Each Selection inserts nothing")
             check(explanation.text.isEmpty, "Cancel in Insert into Each Selection shows no explanation")
-            // F12: Go to Line through its real dialog, on the engine's own line model.
+            // F12: Go to Line through its real inline field, on the engine's own line model.
             @MainActor func goToLineDialog(_ entry: String, confirm: Bool = true) -> Bool {
-                var acted = false, timedOut = false
                 explanation.text = ""
-                let deadline = Date().addingTimeInterval(10)
-                let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
-                    MainActor.assumeIsolated {
-                        guard let window = presentedFormWindow, let content = window.contentView else { return }
-                        if Date() > deadline {
-                            timedOut = true
-                            window.performClose(nil)
-                            return
-                        }
-                        let views = descendants(content)
-                        guard
-                            let field = views.compactMap({ $0 as? NSTextField }).first(where: {
-                                $0.identifier?.rawValue == "goToLine.line"
-                            })
-                        else { return }
-                        if acted {
-                            // Invalid input remains in this same modeless form, instead of a replacement alert.
-                            explanation.text =
-                                views.compactMap { $0 as? NSTextField }.first {
-                                    $0.accessibilityLabel()?.hasPrefix("Input needs correction") == true
-                                }?.stringValue ?? ""
-                            check(
-                                field.stringValue == entry && field.accessibilityHelp() != nil,
-                                "DG Go to Line keeps and marks the rejected input")
-                            views.compactMap { $0 as? NSButton }.first { $0.title == "Cancel" }?.performClick(nil)
-                            return
-                        }
-                        guard
-                            let button = views.compactMap({ $0 as? NSButton }).first(where: {
-                                $0.title == (confirm ? "Go" : "Cancel")
-                            })
-                        else { return }
-                        acted = true
-                        window.makeFirstResponder(nil)
-                        field.stringValue = entry
-                        button.performClick(nil)
-                    }
+                // The status row's position field runs Go to Line itself.
+                controller.runStatusCommand(.position)
+                let bar = controller.goToLineBar, field = bar.field
+                guard controller.goToLineBarVisible, presentedFormWindow == nil else { return false }
+                field.stringValue = entry
+                controller.controlTextDidChange(
+                    Notification(name: NSControl.textDidChangeNotification, object: field))
+                guard confirm else {
+                    bar.cancelButton.performClick(nil)
+                    return !controller.goToLineBarVisible
                 }
-                RunLoop.main.add(timer, forMode: .modalPanel)
-                let item = NSMenuItem(title: "Go to Line…", action: nil, keyEquivalent: "")
-                item.representedObject = "goToLine"
-                controller.perform(NSSelectorFromString("statusOption:"), with: item)
-                waitForModelessForms()
-                timer.invalidate()
-                return acted && !timedOut
+                bar.goButton.performClick(nil)
+                if controller.goToLineBarVisible {
+                    // Invalid input remains in this same inline field, instead of an alert.
+                    explanation.text = bar.message.stringValue
+                    check(
+                        field.stringValue == entry && field.accessibilityHelp() == bar.message.stringValue
+                            && field.toolTip == bar.message.stringValue && bar.entryIsMarked
+                            && bar.message.accessibilityLabel()?.hasPrefix("Input needs correction") == true,
+                        "DG Go to Line keeps and marks the rejected input")
+                    bar.cancelButton.performClick(nil)
+                }
+                return !controller.goToLineBarVisible
             }
             document.editor.text = "é\r\nbb\rccc\n"
             document.editor.resetUndoHistory()
@@ -1537,7 +1628,7 @@ extension DocumentChecks {
             for entry in ["5", "0", "two", "-1"] {
                 check(
                     goToLineDialog(entry) && document.editor.selectionCaret == 11
-                        && explanation.text.contains("Enter a whole line number from 1 to 4."),
+                        && explanation.text.contains("Lines are 1–4."),
                     "Go to Line \(entry) says that line does not exist and names the valid range")
             }
             check(

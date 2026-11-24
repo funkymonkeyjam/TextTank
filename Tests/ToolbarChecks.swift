@@ -89,6 +89,15 @@ import NativeSearch
         check(
             toolbar.items.first { $0.itemIdentifier.rawValue == "TextTank.Automations" } is NSMenuToolbarItem,
             "DT-R2 Automations is a native menu toolbar item")
+        let layout = toolbar.items.first { $0.itemIdentifier == EditorLayoutToolbarItem.identifier } as? NSMenuToolbarItem
+        check(
+            layout != nil && layout?.label == "Editor Layout"
+                && layout?.menu.items.filter { $0.identifier?.rawValue.hasPrefix("groups.layout.") == true }.count == 4
+                && controller.toolbarAllowedItemIdentifiers(toolbar).contains(EditorLayoutToolbarItem.identifier),
+            "DS-D12 Editor Layout is a native menu toolbar item in the default set, listing the four layouts")
+        check(
+            toolbar.items.filter { $0 is NSMenuToolbarItem }.count == 2,
+            "DS-D6 Automations is one drop-down; Editor Layout is the only other menu item (DS-D12)")
         check(
             !toolbar.items.contains { $0.itemIdentifier.rawValue.hasPrefix("TextTank.Automation.") }
                 && !controller.toolbarAllowedItemIdentifiers(toolbar).contains {

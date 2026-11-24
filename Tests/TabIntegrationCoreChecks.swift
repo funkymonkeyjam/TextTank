@@ -2,6 +2,86 @@ import Foundation
 @testable import TextTankCore
 
 @main struct TabIntegrationCoreChecks {
+    /// DS-D9: the automatic session names kept untitled documents only in a version-2 record.
+    static func keptUntitledSessionRecords() throws {
+        func fixture(_ name: String) throws -> Data {
+            try Data(contentsOf: TestPaths.fixtures.appendingPathComponent("persistence/" + name))
+        }
+        let before = try fixture("LastSession.json")
+        let old = try LastSessionLayout.decode(before)
+        check(
+            old.version == 1 && old.untitled == nil && old.files.map(\.path) == ["/synthetic/notes.txt"]
+                && old.layout.groups[0].tabs.count == 1,
+            "V9 a last-session file written before the decision loads as it did")
+        check(try old.encoded() == before, "V9 a session with no kept untitled document is written byte for byte as before")
+        check(
+            try LastSessionLayout(files: old.files, untitled: [], layout: old.layout).encoded() == before,
+            "V9 the new initializer without untitled documents writes version 1")
+        let bytes = try fixture("LastSession-untitled.json")
+        let kept = try LastSessionLayout.decode(bytes)
+        let tabs = kept.layout.groups.flatMap(\.tabs)
+        check(
+            kept.version == 2 && kept.files.count == 1 && kept.untitled?.count == 2
+                && kept.untitled?.map(\.language) == ["swift", nil]
+                && kept.untitled?.map(\.lineEnding) == ["CRLF", "LF"],
+            "V9 golden record names two untitled documents with language and line ending")
+        check(
+            tabs.map(\.documentID) == [kept.untitled![0].id, kept.files[0].id, kept.untitled![1].id]
+                && tabs.map(\.isPinned) == [true, false, false] && tabs[0].caretByte == 7 && tabs[0].anchorByte == 3
+                && kept.layout.groups.map(\.tabs.count) == [2, 1],
+            "V9 golden record keeps untitled tabs in order, group and pin state with their selection")
+        check(try kept.encoded() == bytes, "V9 golden version-2 record round trips through the production encoder")
+        check(!String(decoding: bytes, as: UTF8.self).contains("text"), "V9 the session record holds no document text")
+        let only = try kept.untitledOnly()
+        check(
+            only.files.isEmpty && only.untitled == kept.untitled && only.version == 2
+                && only.layout.groups.map(\.tabs.count) == [1, 1],
+            "V9 a launch set to a new document still gets the kept untitled tabs, without the files")
+        check(try old.untitledOnly().version == 1, "V9 untitled-only of a files-only record is an empty version-1 record")
+        var raw = try JSONSerialization.jsonObject(with: bytes) as! [String: Any]
+        raw["version"] = 1
+        rejects("V9 untitled entries are refused in a version-1 record") {
+            _ = try LastSessionLayout.decode(JSONSerialization.data(withJSONObject: raw))
+        }
+        raw = try JSONSerialization.jsonObject(with: before) as! [String: Any]
+        raw["version"] = 2
+        rejects("V9 a version-2 record must name an untitled document") {
+            _ = try LastSessionLayout.decode(JSONSerialization.data(withJSONObject: raw))
+        }
+        raw = try JSONSerialization.jsonObject(with: bytes) as! [String: Any]
+        var entries = raw["untitled"] as! [[String: Any]]
+        entries[1]["lineEnding"] = "NEL"
+        raw["untitled"] = entries
+        rejects("V9 an unknown line ending is refused") {
+            _ = try LastSessionLayout.decode(JSONSerialization.data(withJSONObject: raw))
+        }
+        entries[1]["lineEnding"] = "LF"
+        entries[1]["id"] = (raw["files"] as! [[String: Any]])[0]["id"]
+        raw["untitled"] = entries
+        rejects("V9 one identity cannot be both a file and an untitled document") {
+            _ = try LastSessionLayout.decode(JSONSerialization.data(withJSONObject: raw))
+        }
+        rejects("V9 an untitled tab without a record is refused") {
+            _ = try LastSessionLayout.decode(
+                JSONSerialization.data(withJSONObject: {
+                    var value = try JSONSerialization.jsonObject(with: bytes) as! [String: Any]
+                    value["untitled"] = [(value["untitled"] as! [[String: Any]])[0]]
+                    return value
+                }()))
+        }
+        let settings = try EditorSettings.decode(fixture("Settings.json"))
+        check(
+            settings.keepUntitledOnQuit == nil && settings.keepsUntitledOnQuit,
+            "V9 a settings file without the key keeps unsaved untitled documents when quitting")
+        var off = settings
+        off.keepUntitledOnQuit = false
+        let reread = try EditorSettings.decode(JSONEncoder().encode(off))
+        check(!reread.keepsUntitledOnQuit, "V9 the stored key turns the behaviour off")
+        check(
+            SizePolicy.standard.keptUntitledTotal == 512 * 1024 * 1024 && SizePolicy.standard.keptUntitledCount == 256
+                && SizePolicy.standard.automaticRecovery == 256 * 1024 * 1024,
+            "V9 the documented bounds for kept untitled text")
+    }
     static func main() {
         Checks.run("TabIntegrationCoreChecks") {
             let doc = DocumentID(), reopened = DocumentID()
@@ -29,6 +109,7 @@ import Foundation
             check(target.resolve(in: [doc]) == doc, "T4 nonfinal view close retains target")
             _ = try workspace.remove(workspace.groups[1].tabs[0].id, reviewed: true, openDocuments: [doc])
             check(target.resolve(in: []) == nil, "T4 final view close invalidates target")
+            try keptUntitledSessionRecords()
             let legacyBytes = try Data(
                 contentsOf: TestPaths.fixtures.appendingPathComponent("persistence/Session.texttanksession"))
             let old = try WorkspaceSession.decode(legacyBytes)

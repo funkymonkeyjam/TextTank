@@ -26,6 +26,9 @@ struct PreviewPage: Sendable, Equatable {
     var image: Data?
     /// What the source asks for that the preview does not do.
     var report: PreviewContentReport
+    /// For rendered Markdown: the source lines of each top-level block, which is each child of
+    /// the page's body. Nil for HTML and SVG, which are not followed (docs/preview-model.md).
+    var scrollMap: PreviewScrollMap?
 }
 
 /// What a preview pane shows after one render.
@@ -145,7 +148,8 @@ enum PreviewRenderer {
     private static func pagePath() -> String { "/" + UUID().uuidString.lowercased() + "/" }
 
     private static func markdown(_ request: PreviewRequest) -> PreviewContent? {
-        switch MarkdownRenderer.render(request.source) {
+        let (rendering, scrollMap) = MarkdownRenderer.renderWithScrollMap(request.source)
+        switch rendering {
         case .cancelled: return nil
         case .limited(let limit): return .message(limit.message)
         case .rendered(let fragment):
@@ -158,7 +162,8 @@ enum PreviewRenderer {
             case .prepared(let prepared): report = prepared.report
             }
             let page = StaticHTMLPolicy.wrapFragment(fragment, title: request.title, stylesheet: request.stylesheet)
-            return .page(PreviewPage(pagePath: pagePath(), html: Data(page.utf8), report: report))
+            return .page(
+                PreviewPage(pagePath: pagePath(), html: Data(page.utf8), report: report, scrollMap: scrollMap))
         }
     }
 

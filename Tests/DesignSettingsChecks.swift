@@ -20,7 +20,10 @@ import NativeSearch
             return
         }
         let ids: Set<String> = [
-            "settings.shortcuts.apply", "settings.close", "settings.reset", "settings.font.choose", "automation.create",
+            "settings.close", "settings.reset", "settings.font.choose", "settings.shortcuts.recorder",
+            "settings.shortcuts.default", "settings.shortcuts.clear", "settings.shortcuts.resetAll",
+            "settings.shortcuts.replace", "settings.shortcuts.cancel", "settings.reveal", "settings.clearLocalHistory",
+            "automation.create",
             "automation.edit",
             "automation.rules", "automation.duplicate", "automation.delete", "automation.favorite", "automation.json"
         ]
@@ -132,7 +135,10 @@ import NativeSearch
         form.window.setContentSize(form.window.contentMinSize)
         form.window.contentView!.layoutSubtreeIfNeeded()
         let content = form.window.contentView!
-        let controls = descendants(content).compactMap { $0 as? NSControl }.filter { !$0.isHidden }
+        // Only the chosen pane is shown; a control of another pane cannot be clipped.
+        let controls = descendants(content).compactMap { $0 as? NSControl }.filter {
+            !$0.isHiddenOrHasHiddenAncestor
+        }
         let clipped = controls.filter { control in
             let rect = control.convert(control.bounds, to: content)
             return rect.minX < -1 || rect.minY < -1 || rect.maxX > content.bounds.maxX + 1
@@ -227,6 +233,854 @@ import NativeSearch
         check(panel.isVisible, "the same shared Fonts panel can be reopened")
         live.close()
         check(!panel.isVisible, "closing Settings retires its reopened Fonts panel")
+    }
+    /// Chooses a pane the way a click on its toolbar item does.
+    static func choosePane(_ pane: String, in window: NSWindow) throws {
+        let item = try requireValue(
+            window.toolbar?.items.first { $0.itemIdentifier.rawValue == "settings.pane." + pane },
+            "DG fixture: Settings toolbar item \(pane)")
+        _ = NSApp.sendAction(try requireValue(item.action, "DG fixture: pane action"), to: item.target, from: item)
+        window.contentView?.layoutSubtreeIfNeeded()
+    }
+    /// The settings the window shows now, by the identifier of each one's first control.
+    static func shownSettings(_ window: NSWindow) -> [String] {
+        descendants(window.contentView!).compactMap { view in
+            guard let id = view.identifier?.rawValue, id.hasSuffix(".row"), !view.isHiddenOrHasHiddenAncestor
+            else { return nil }
+            return String(id.dropLast(4))
+        }
+    }
+    static func control<T: NSView>(_ id: String, _ window: NSWindow, as type: T.Type = T.self) throws -> T {
+        try requireValue(
+            descendants(window.contentView!).compactMap { $0 as? T }.first { $0.identifier?.rawValue == id },
+            "DG fixture: Settings control \(id)")
+    }
+    static func search(_ text: String, in window: NSWindow) throws {
+        let filter: NSSearchField = try control("settings.filter", window)
+        filter.stringValue = text
+        _ = NSApp.sendAction(try requireValue(filter.action, "DG fixture: search action"), to: filter.target, from: filter)
+        window.contentView?.layoutSubtreeIfNeeded()
+    }
+    /// V6: panes, the search field, Changed from default, Use Default and Reveal in Finder.
+    static func settingsPaneChecks(root: URL) throws {
+        let url = root.appendingPathComponent("settings-panes.json")
+        let controller = SettingsController(url: url)
+        let existing = Set(FormPanel.visible.map(ObjectIdentifier.init))
+        defer { for form in FormPanel.visible where !existing.contains(ObjectIdentifier(form)) { form.close() } }
+        controller.showSettings(nil)
+        let form = try requireValue(FormPanel.visible.last, "V6 fixture: Settings")
+        let window = form.window
+        let toolbar = try requireValue(window.toolbar, "V6 fixture: Settings toolbar")
+        check(
+            toolbar.items.map(\.label) == ["Editing", "Appearance", "Files", "Previews", "Shortcuts"]
+                && window.toolbarStyle == .preference && toolbar.selectedItemIdentifier?.rawValue == "settings.pane.editing"
+                && toolbar.items.allSatisfy { $0.image != nil },
+            "V6 Settings switches five panes from a preference-style toolbar and opens on Editing")
+        // Every setting of the flat window, and the stored toggles that had no control, by pane.
+        let expected: [(String, [String])] = [
+            ("editing", ["settings.width", "settings.tabs", "settings.autoIndent", "settings.autoPair", "settings.wrap"]),
+            (
+                "appearance",
+                [
+                    "settings.appearance", "settings.font.choose", "settings.font.size", "settings.font.zoom",
+                    "settings.indentGuides", "settings.currentLineHighlight", "settings.braceHighlight",
+                    "settings.lineNumbers", "settings.showWhitespace", "settings.showLineEndings",
+                    "settings.changeBars", "settings.centeredColumn", "settings.centeredColumn.width"
+                ]
+            ),
+            (
+                "files",
+                [
+                    "settings.atLaunch", "settings.externalChanges", "settings.keepUntitledOnQuit",
+                    "settings.keepLocalHistory", "settings.clearLocalHistory", "settings.reveal"
+                ]
+            ),
+            ("previews", ["settings.preview.openIn", "settings.syncPreviewScrolling"]),
+            ("shortcuts", ["settings.shortcuts"])
+        ]
+        var heights: [String: CGFloat] = [:]
+        for (pane, settings) in expected {
+            try choosePane(pane, in: window)
+            let content = try requireValue(window.contentView, "V6 fixture: content")
+            heights[pane] = content.bounds.height
+            check(
+                shownSettings(window) == settings && toolbar.selectedItemIdentifier?.rawValue == "settings.pane." + pane,
+                "V6 the \(pane) pane lists exactly its settings: \(shownSettings(window))")
+            check(
+                abs(content.bounds.height - content.fittingSize.height) <= 1
+                    && abs(content.bounds.width - 620) <= 1,
+                "V6 the \(pane) pane is as tall as its content: \(content.bounds.size) fits \(content.fittingSize)")
+        }
+        check(
+            Set(heights.values.map { Int($0) }).count >= 3,
+            "V6 panes with different content have different heights: \(heights)")
+        for id in [
+            "settings.width", "settings.tabs", "settings.wrap", "settings.appearance", "settings.atLaunch",
+            "settings.externalChanges", "settings.preview.format", "settings.preview.openIn", "settings.font.choose",
+            "settings.font.size", "settings.font.zoom", "settings.reset", "settings.close"
+        ] {
+            let found = descendants(window.contentView!).first { $0.identifier?.rawValue == id }
+            check(
+                found != nil && !(found?.accessibilityLabel() ?? "").isEmpty,
+                "V6 the control \(id) of the flat window is still there, with its accessibility label")
+        }
+        let unnamed = descendants(window.contentView!).compactMap { $0 as? NSControl }.filter {
+            // A label's text is its own name; every control a person operates needs one.
+            ($0.identifier?.rawValue ?? "").hasPrefix("settings.") && ($0 as? NSTextField)?.isEditable != false
+                && ($0.accessibilityLabel() ?? "").isEmpty
+        }
+        check(unnamed.isEmpty, "V6 DS-70 every Settings control has an accessibility label: \(unnamed.map { $0.identifier!.rawValue })")
+
+        // Short number fields with steppers, saved when stepped.
+        try choosePane("editing", in: window)
+        let width = try field("settings.width", window)
+        let stepper: NSStepper = try control("settings.width.stepper", window)
+        check(width.frame.width <= 60, "V6 a one- or two-digit number has a short field, not one \(width.frame.width) points wide")
+        stepper.integerValue = 5
+        _ = NSApp.sendAction(try requireValue(stepper.action, "V6 fixture: stepper action"), to: stepper.target, from: stepper)
+        check(
+            controller.value.tabWidth == 5 && width.stringValue == "5" && SettingsStore(url: url).value.tabWidth == 5
+                && stepper.minValue == 1 && stepper.maxValue == 32,
+            "V6 the tab width stepper saves at once, within 1 to 32")
+
+        // The search field.
+        try search("wrap", in: window)
+        check(
+            shownSettings(window) == ["settings.wrap"] && toolbar.selectedItemIdentifier == nil,
+            "V6 typing “wrap” shows only the matching setting: \(shownSettings(window))")
+        let content = try requireValue(window.contentView, "V6 fixture: content")
+        check(
+            abs(content.bounds.height - content.fittingSize.height) <= 1,
+            "V6 the window is as tall as the search results")
+        try search("THEME", in: window)
+        check(shownSettings(window) == ["settings.appearance"], "V6 a synonym finds a setting in another pane, in any case")
+        try search("startup", in: window)
+        check(shownSettings(window) == ["settings.atLaunch"], "V6 “startup” finds At launch")
+        try search("file ask", in: window)
+        check(
+            shownSettings(window) == ["settings.externalChanges"],
+            "V6 every word typed must match, in the label or a synonym: \(shownSettings(window))")
+        try search("indent", in: window)
+        check(
+            shownSettings(window) == ["settings.width", "settings.tabs", "settings.autoIndent", "settings.indentGuides"],
+            "V6 one word lists matching settings across panes, in pane order: \(shownSettings(window))")
+        NativeFixtureEnvironment.announcements = []
+        try search("zzzz", in: window)
+        let empty = try field("settings.filter.empty", window)
+        check(
+            shownSettings(window).isEmpty && !empty.isHidden && empty.stringValue.contains("zzzz")
+                && NativeFixtureEnvironment.announcements.contains(empty.stringValue),
+            "V6 DS-36 a search that finds nothing says so in words and is announced")
+        try search("", in: window)
+        check(
+            shownSettings(window) == expected[0].1 && empty.isHidden
+                && toolbar.selectedItemIdentifier?.rawValue == "settings.pane.editing",
+            "V6 clearing the search returns to the pane that was chosen")
+        let find = try requireValue(
+            NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, characters: "f", charactersIgnoringModifiers: "f",
+                isARepeat: false, keyCode: 3), "V6 fixture: Command-F")
+        let filter: NSSearchField = try control("settings.filter", window)
+        check(
+            window.performKeyEquivalent(with: find) && window.firstResponder === filter.currentEditor(),
+            "V6 DS-73 Command-F moves to the search field from the keyboard")
+        window.makeFirstResponder(nil)
+        try search("wrap", in: window)
+        try choosePane("files", in: window)
+        check(
+            filter.stringValue.isEmpty && shownSettings(window) == expected[2].1,
+            "V6 choosing a pane leaves the search and shows that pane")
+
+        // Changed from default.
+        let changed: NSButton = try control("settings.filter.changed", window)
+        var custom = EditorSettings()
+        custom.tabWidth = 9
+        custom.wrap = true
+        custom.appearance = "dark"
+        custom.autoPair = true
+        custom.currentLineHighlight = true  // stored, but the default value: not a change
+        try controller.save(custom)
+        changed.performClick(nil)
+        check(
+            shownSettings(window) == ["settings.width", "settings.autoPair", "settings.wrap", "settings.appearance"],
+            "V6 Changed from default lists exactly the settings that differ: \(shownSettings(window))")
+        let defaults = descendants(window.contentView!).compactMap { $0 as? NSButton }.filter {
+            ($0.identifier?.rawValue ?? "").hasSuffix(".default") && !$0.isHiddenOrHasHiddenAncestor
+        }
+        check(
+            defaults.map { $0.identifier!.rawValue } == [
+                "settings.width.default", "settings.autoPair.default", "settings.wrap.default",
+                "settings.appearance.default"
+            ] && defaults.allSatisfy { $0.title == "Use Default" && $0.accessibilityLabel()?.hasPrefix("Use the default for ") == true },
+            "V6 each changed setting has its own named way back to its default")
+        let wrapDefault: NSButton = try control("settings.wrap.default", window)
+        wrapDefault.performClick(nil)
+        check(
+            !controller.value.wrap && controller.value.tabWidth == 9 && !SettingsStore(url: url).value.wrap
+                && shownSettings(window) == ["settings.width", "settings.autoPair", "settings.appearance"],
+            "V6 Use Default returns one setting to its default, saves at once and leaves the others")
+        try control("settings.width.default", window, as: NSButton.self).performClick(nil)
+        check(
+            controller.value.tabWidth == 4 && width.stringValue == "4",
+            "V6 Use Default on a number field shows and saves the default")
+        try control("settings.autoPair.default", window, as: NSButton.self).performClick(nil)
+        try control("settings.appearance.default", window, as: NSButton.self).performClick(nil)
+        var cleared = EditorSettings()
+        cleared.currentLineHighlight = true
+        check(
+            controller.value == cleared && shownSettings(window).isEmpty && !empty.isHidden
+                && empty.stringValue.contains("default"),
+            "V6 with nothing changed the list is empty and says why: \(empty.stringValue)")
+        try search("wrap", in: window)
+        check(shownSettings(window).isEmpty, "V6 the search narrows Changed from default; it does not widen it")
+        try search("", in: window)
+        changed.performClick(nil)
+        check(shownSettings(window) == expected[2].1, "V6 turning the filter off returns to the chosen pane")
+
+        // The rows the other slices' stored keys got through the extension point: each is found
+        // by the search, saves when clicked, and is listed by Changed from default while it differs.
+        let added: [(id: String, word: String, read: (EditorSettings) -> Bool, standard: Bool)] = [
+            ("settings.lineNumbers", "gutter", { $0.lineNumbersEnabled }, true),
+            ("settings.showWhitespace", "whitespace", { $0.showWhitespaceEnabled }, false),
+            ("settings.showLineEndings", "crlf", { $0.showLineEndingsEnabled }, false),
+            ("settings.changeBars", "change bars", { $0.changeBarsEnabled }, false),
+            ("settings.centeredColumn", "center text", { $0.centeredColumnEnabled }, false),
+            ("settings.syncPreviewScrolling", "sync scrolling", { $0.syncsPreviewScrolling }, true),
+            ("settings.keepUntitledOnQuit", "untitled quitting", { $0.keepsUntitledOnQuit }, true),
+            ("settings.keepLocalHistory", "earlier versions saving", { $0.keepsLocalHistory }, true)
+        ]
+        for row in added {
+            try search(row.word, in: window)
+            check(shownSettings(window) == [row.id], "V6 “\(row.word)” finds \(row.id): \(shownSettings(window))")
+            let box: NSButton = try control(row.id, window)
+            check(
+                (box.state == .on) == row.standard && !(box.accessibilityLabel() ?? "").isEmpty,
+                "V6 \(row.id) shows its default and is labelled")
+            box.performClick(nil)
+            try search("", in: window)
+            changed.performClick(nil)
+            check(
+                row.read(controller.value) != row.standard && row.read(SettingsStore(url: url).value) != row.standard
+                    && shownSettings(window) == [row.id],
+                "V6 \(row.id) saves when clicked and is then the one changed setting: \(shownSettings(window))")
+            try control(row.id + ".default", window, as: NSButton.self).performClick(nil)
+            check(
+                row.read(controller.value) == row.standard && shownSettings(window).isEmpty,
+                "V6 Use Default returns \(row.id) to its default")
+            changed.performClick(nil)
+        }
+        try search("local history", in: window)
+        let clearHistory: NSButton = try control("settings.clearLocalHistory", window)
+        check(
+            shownSettings(window) == ["settings.keepLocalHistory", "settings.clearLocalHistory"]
+                && clearHistory.title == "Clear Local History…" && clearHistory.action != nil,
+            "V6 Clear Local History… is a row of the Files pane, found with the setting it belongs to")
+        try search("", in: window)
+
+        // Stored view toggles: one helper lists each of them (the row extension point).
+        try choosePane("editing", in: window)
+        let autoIndent: NSButton = try control("settings.autoIndent", window)
+        check(autoIndent.state == .on, "V6 fixture: Auto-indent starts on")
+        autoIndent.performClick(nil)
+        check(
+            !controller.value.autoIndentEnabled && SettingsStore(url: url).value.autoIndent == false,
+            "V6 a checkbox for a stored toggle saves when clicked")
+        controller.toggleAutoIndent(nil)
+        check(
+            controller.value.autoIndentEnabled && autoIndent.state == .on,
+            "V6 the checkbox follows the same setting changed from its menu command")
+
+        // Reveal Settings File in Finder never reaches Finder from a check.
+        let reveal = StoreRecovery.reveal
+        defer { StoreRecovery.reveal = reveal }
+        var revealed: [URL] = []
+        StoreRecovery.reveal = { revealed.append($0) }
+        try choosePane("files", in: window)
+        let revealButton: NSButton = try control("settings.reveal", window)
+        check(
+            revealButton.title == "Reveal Settings File in Finder" && !(revealButton.accessibilityLabel() ?? "").isEmpty,
+            "V6 the Files pane has Reveal Settings File in Finder")
+        revealButton.performClick(nil)
+        check(revealed == [url], "V6 it shows the settings file itself")
+        form.close()
+        let fresh = SettingsController(url: root.appendingPathComponent("settings-panes-absent.json"))
+        fresh.showSettings(nil)
+        let freshForm = try requireValue(FormPanel.visible.last, "V6 fixture: Settings before any save")
+        revealed = []
+        try control("settings.reveal", freshForm.window, as: NSButton.self).performClick(nil)
+        check(
+            revealed.map(\.path) == [root.path] && !FileManager.default.fileExists(atPath: fresh.url.path),
+            "V6 before any setting is saved it shows the folder, and creates no file")
+        freshForm.close()
+    }
+    /// Drives the Shortcuts pane through its own controls: the list, the search field and the recorder.
+    @MainActor struct ShortcutPaneDriver {
+        let window: NSWindow, table: NSTableView, recorder: ShortcutRecorder
+        let message: NSTextField, note: NSTextField, search: NSSearchField
+        init(_ window: NSWindow) throws {
+            self.window = window
+            table = try DesignSettingsChecks.control("settings.shortcuts.list", window)
+            recorder = try DesignSettingsChecks.control("settings.shortcuts.recorder", window)
+            message = try DesignSettingsChecks.field("settings.shortcuts.message", window)
+            note = try DesignSettingsChecks.field("settings.shortcuts.note", window)
+            search = try DesignSettingsChecks.control("settings.shortcuts.search", window)
+        }
+        func text(_ row: Int, _ column: Int) -> String {
+            (table.view(atColumn: column, row: row, makeIfNecessary: true) as? NSTextField)?.stringValue ?? ""
+        }
+        func listed() -> [String] { (0..<table.numberOfRows).map { text($0, 0) } }
+        func row(_ title: String) throws -> Int {
+            try requireValue((0..<table.numberOfRows).first { text($0, 0) == title }, "V8 fixture: the command \(title)")
+        }
+        func select(_ title: String) throws {
+            table.selectRowIndexes([try row(title)], byExtendingSelection: false)
+        }
+        func find(_ words: String) throws {
+            search.stringValue = words
+            _ = NSApp.sendAction(try requireValue(search.action, "V8 fixture: search"), to: search.target, from: search)
+        }
+        func key(_ characters: String, _ flags: NSEvent.ModifierFlags, code: UInt16 = 0) throws -> NSEvent {
+            try requireValue(
+                NSEvent.keyEvent(
+                    with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
+                    windowNumber: window.windowNumber, context: nil, characters: characters,
+                    charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code), "V8 fixture: key press")
+        }
+        /// Clicks the recorder and presses a key, as a person does.
+        func press(_ characters: String, _ flags: NSEvent.ModifierFlags, code: UInt16 = 0) throws {
+            recorder.performClick(nil)
+            try require(recorder.isRecording && window.firstResponder === recorder, "V8 fixture: the recorder is recording")
+            window.sendEvent(try key(characters, flags, code: code))
+        }
+        func button(_ id: String) throws -> NSButton { try DesignSettingsChecks.control("settings.shortcuts." + id, window) }
+        /// The command of the selected row, or nil.
+        var selectedTitle: String? { table.selectedRow >= 0 ? text(table.selectedRow, 0) : nil }
+    }
+    /// V8, in the real menu bar: the list of every command, the recorder, a key in use, a
+    /// reserved key, Replace, Use Default, Reset All Shortcuts and the live menu.
+    static func shortcutPaneChecks(composition: AppDelegate) throws {
+        let settings = composition.settings
+        let bar = try requireValue(NSApp.mainMenu, "V8 fixture: the menu bar")
+        settings.showSettings(nil)
+        let form = try requireValue(
+            FormPanel.visible.last { $0.window.identifier?.rawValue == "TextTank.Settings" }, "V8 fixture: Settings")
+        defer {
+            form.close()
+            // Whatever a failed check left behind, the application's menu bar gets its defaults back.
+            _ = try? settings.save(EditorSettings())
+        }
+        let window = form.window
+        try choosePane("shortcuts", in: window)
+        let pane = try ShortcutPaneDriver(window)
+        let table = pane.table, recorder = pane.recorder, message = pane.message, note = pane.note
+        func text(_ row: Int, _ column: Int) -> String { pane.text(row, column) }
+        func listed() -> [String] { pane.listed() }
+        func row(_ title: String) throws -> Int { try pane.row(title) }
+        func select(_ title: String) throws { try pane.select(title) }
+        func find(_ words: String) throws { try pane.find(words) }
+        func key(_ characters: String, _ flags: NSEvent.ModifierFlags, code: UInt16 = 0) throws -> NSEvent {
+            try pane.key(characters, flags, code: code)
+        }
+        func press(_ characters: String, _ flags: NSEvent.ModifierFlags, code: UInt16 = 0) throws {
+            try pane.press(characters, flags, code: code)
+        }
+        func button(_ id: String) throws -> NSButton { try pane.button(id) }
+        func item(_ action: String) throws -> NSMenuItem {
+            func search(_ menu: NSMenu) -> NSMenuItem? {
+                for item in menu.items {
+                    if !item.isHidden, item.action.map(NSStringFromSelector) == action { return item }
+                    if let found = item.submenu.flatMap(search) { return found }
+                }
+                return nil
+            }
+            return try requireValue(search(bar), "V8 fixture: the menu item for \(action)")
+        }
+        check(
+            table.accessibilityLabel() == "Commands and their shortcuts"
+                && ["default", "clear", "resetAll", "replace", "cancel"].allSatisfy {
+                    !((try? button($0))?.accessibilityLabel() ?? "").isEmpty
+                },
+            "V8 DS-70 the list and every button of the pane have accessibility labels")
+
+        // The recorder as assistive technology finds it in the window: a button named for the
+        // selected command, whose value is that command's key, following the selection.
+        for (title, value) in [("File › New", "Command-N"), ("File › Save Copy…", "no shortcut")] {
+            try select(title)
+            window.contentView?.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            let purpose = "Record a shortcut for \(title), now \(value)"
+            check(
+                nativeTree(window).contains {
+                    exposes($0, purpose: purpose, role: "AXButton")
+                        && modernAttribute($0, "accessibilityValue") as? String == value
+                } && recorder.accessibilityHelp() == nil,
+                "V8 DS-70 the window's accessibility tree has the recorder as a button named “\(purpose)” with that value")
+        }
+        table.deselectAll(nil)
+        // The list takes the height the window gives the pane.
+        let scroll: NSScrollView = try control("settings.shortcuts.scroll", window)
+        let content = try requireValue(window.contentView, "V8 fixture: content")
+        content.layoutSubtreeIfNeeded()
+        let listHeight = scroll.frame.height, paneHeight = content.bounds.height, recorderHeight = recorder.frame.height
+        check(
+            abs(listHeight - 240) <= 1 && window.contentMinSize.height == paneHeight
+                && window.contentMaxSize.height >= paneHeight + 1000,
+            "V8 the Shortcuts pane opens with its list at the least height and can be made taller: \(listHeight)")
+        // AppKit never lets a window be taller than its screen's visible area, so how much taller
+        // the window becomes is read back from the window, not assumed. On a small display
+        // (a hosted runner's is about 768 points high) it is less than what was asked.
+        // TEXTTANK_CHECK_WINDOW_GROWTH asks for another amount, to meet that limit on any display.
+        let asked = ProcessInfo.processInfo.environment["TEXTTANK_CHECK_WINDOW_GROWTH"].flatMap(Double.init) ?? 160
+        let opened = window.frame
+        let limit = (window.screen ?? NSScreen.main)?.visibleFrame.height ?? .greatestFiniteMagnitude
+        /// Asks for a window `extra` points taller and returns how much taller than `opened` it now is.
+        func grow(by extra: CGFloat) -> CGFloat {
+            var taller = window.frame
+            taller.size.height += extra
+            taller.origin.y -= extra
+            window.setFrame(taller, display: true)
+            content.layoutSubtreeIfNeeded()
+            return window.frame.height - opened.height
+        }
+        /// Every control of the pane is inside the window and the recorder's row is below the list.
+        func intact() -> Bool {
+            let controls = descendants(content).compactMap { $0 as? NSControl }.filter {
+                !$0.isHiddenOrHasHiddenAncestor && !$0.isDescendant(of: scroll)
+            }
+            let list = scroll.convert(scroll.bounds, to: content)
+            return recorder.frame.height == recorderHeight
+                && recorder.convert(recorder.bounds, to: content).maxY <= list.minY + 1
+                && controls.allSatisfy { content.bounds.insetBy(dx: -1, dy: -1).contains($0.convert($0.bounds, to: content)) }
+        }
+        // With scroll bars always shown (a mouse, a hosted runner) the vertical one takes width
+        // from the list. The columns must still fit: no sideways scrolling, no clipped Status.
+        print("V8_SCROLLERS", scroll.scrollerStyle == .legacy ? "always shown" : "overlay", scroll.contentSize, table.frame.size)
+        check(
+            !scroll.hasHorizontalScroller && table.frame.width <= scroll.contentSize.width + 0.5
+                && table.tableColumns.allSatisfy { $0.width >= 90 },
+            "V8 the list's columns fit beside its scroll bar: \(table.frame.width) in \(scroll.contentSize.width)")
+        let accepted = grow(by: asked)
+        print("V8_WINDOW_GROWTH asked", asked, "accepted", accepted, "screen", limit)
+        check(
+            accepted > 0 && (accepted == asked || abs(window.frame.height - limit) <= 1),
+            "V8 the window takes the extra height asked for, or all its screen has: \(accepted) of \(asked)")
+        check(
+            abs(scroll.frame.height - (listHeight + accepted)) <= 1 && intact()
+                && abs(content.bounds.height - (paneHeight + accepted)) <= 1,
+            "V8 a taller window gives all of the extra height to the list: \(scroll.frame.height)")
+        try find("save")
+        try find("")
+        content.layoutSubtreeIfNeeded()
+        check(
+            abs(scroll.frame.height - (listHeight + accepted)) <= 1 && window.frame.height == opened.height + accepted,
+            "V8 the list keeps the height the person gave it while the pane is in use")
+        // A window that cannot grow: asked for more than any screen has, it stops at the screen,
+        // and the list has exactly what the window was allowed. Asked again, nothing changes.
+        let most = grow(by: 20_000)
+        check(
+            most >= accepted && abs(window.frame.height - limit) <= 1
+                && abs(scroll.frame.height - (listHeight + most)) <= 1 && intact(),
+            "V8 at the height of its screen the list has all the height the window was allowed: \(scroll.frame.height) of \(limit)")
+        let again = grow(by: 160)
+        try find("save")
+        try find("")
+        content.layoutSubtreeIfNeeded()
+        check(
+            again == most && abs(scroll.frame.height - (listHeight + most)) <= 1 && intact(),
+            "V8 a window that cannot grow keeps its list and its controls as they are")
+        // A display too short for the pane: AppKit makes the window shorter than its content
+        // asks. The list gives up the height and nothing below it leaves the window.
+        // The screen's limit is not bound by the window's least size, which is lifted here to stand in for it.
+        window.contentMinSize.height = 0
+        var shorter = window.frame
+        shorter.origin.y += shorter.height - (opened.height - 100)
+        shorter.size.height = opened.height - 100
+        window.setFrame(shorter, display: true)
+        content.layoutSubtreeIfNeeded()
+        check(
+            abs(scroll.frame.height - (listHeight - 100)) <= 1 && intact()
+                && abs(content.bounds.height - (paneHeight - 100)) <= 1,
+            "V8 in a window shorter than the pane the list gives up the height and every control stays inside: \(scroll.frame.height)")
+        try choosePane("editing", in: window)
+        check(
+            window.contentMaxSize == window.contentMinSize && content.bounds.height < paneHeight,
+            "V8 another pane is exactly its content again")
+        try choosePane("shortcuts", in: window)
+        content.layoutSubtreeIfNeeded()
+        check(
+            abs(scroll.frame.height - listHeight) <= 1 && abs(content.bounds.height - paneHeight) <= 1
+                && window.contentMinSize.height == paneHeight && intact(),
+            "V8 shown again, the pane has its own height and its list the height it opens with")
+
+        // (a) Every command, with its key and whether that is the default.
+        let palette = composition.commandDiscovery.commands(in: bar)
+        let titles = Set(listed())
+        let missing = palette.map(\.path).filter { !titles.contains($0) }
+        check(
+            missing.isEmpty && titles.contains("Help › Command Palette…") && titles.count == listed().count,
+            "V8 the list has every command the Command Palette has, once each (missing: \(missing.prefix(5)))")
+        let save = try row("File › Save"), quit = try row("TextTank › Quit TextTank")
+        check(
+            try text(save, 1) == "⌘S" && text(save, 2) == "Default" && text(try row("File › Save Copy…"), 1).isEmpty
+                && text(try row("File › Save Copy…"), 2) == "None"
+                && text(try row("Edit › Lines › Move Line Up"), 1) == "⌃⌘↑",
+            "V8 each command shows its current key and that it is the default")
+        try select("TextTank › Quit TextTank")
+        check(
+            text(quit, 1) == "⌘Q" && text(quit, 2) == "System" && !recorder.isEnabled && !note.isHidden
+                && note.stringValue.contains("quits TextTank"),
+            "V8 DS-25 a system shortcut is listed, cannot be recorded over, and says why")
+        // The function key's own name is pinned in SettingsShortcutValidationChecks.storedForms.
+        let recordKey = MenuShortcut.recordMacro.displayText
+        try select("Tools › Macros › Start Recording")
+        check(
+            text(try row("Tools › Macros › Start Recording"), 1) == recordKey && !recorder.isEnabled
+                && note.stringValue.contains(recordKey + " starts and stops recording"),
+            "V8 a macro key is shown read-only with the reason")
+        let automation = try requireValue(
+            listed().first { $0.hasPrefix("Tools › Automations › ") && !$0.hasSuffix("…") },
+            "V8 fixture: a saved automation in the list")
+        try select(automation)
+        check(
+            text(try row(automation), 2) == "Fixed" && !recorder.isEnabled
+                && note.stringValue.contains("Tools › Automations › Manage Automations…"),
+            "V8 an automation's own shortcut is shown read-only with where to change it")
+        // Commands the other slices added are ordinary rows: each can be given a key.
+        for (title, key, status) in [
+            ("File › Quick Open…", "⇧⌘O", "Default"), ("View › Preview › Toggle Preview", "⌃⌘V", "Default"),
+            ("Compare › Compare with Earlier Version…", "", "None"), ("Compare › Clear Local History…", "", "None"),
+            ("View › Show › Whitespace", "", "None"), ("View › Show › Line Endings", "", "None"),
+            ("View › Show › Line Numbers", "", "None")
+        ] {
+            try select(title)
+            check(
+                try text(try row(title), 1) == key && text(try row(title), 2) == status && recorder.isEnabled,
+                "V8 \(title) is in the list and can be given a shortcut")
+        }
+        try find("copy save")
+        check(
+            listed() == ["File › Save Copy…"], "V8 the list is searched by the words of a command: \(listed())")
+        try find("⌘S")
+        check(listed().contains("File › Save") && listed().allSatisfy { !$0.isEmpty }, "V8 and by a key as it is shown")
+        try find("command-control-v")
+        check(listed().isEmpty, "V8 fixture: modifiers are said in the menu bar's order")
+        try find("control-command-v")
+        check(listed() == ["View › Preview › Toggle Preview"], "V8 and by a key in words: \(listed())")
+        try find("")
+
+        // (b) The recorder: a bare key and a reserved key are refused with the reason.
+        let original = settings.value
+        try select("Edit › Lines › Duplicate Line")
+        check(
+            try !listed().contains { $0.contains("duplicateLine") } && recorder.title == "⌘D"
+                && text(try row("Edit › Lines › Duplicate Line"), 1) == "⌘D"
+                && !FileManager.default.fileExists(atPath: settings.url.path),
+            "G396 Settings shows readable command names and the selected current shortcut, and reading saves nothing")
+        try select("File › New")
+        check(
+            recorder.isEnabled && recorder.title == "⌘N"
+                && recorder.accessibilityLabel() == "Record a shortcut for File › New, now Command-N",
+            "V8 DS-70 the recorder shows the selected command's key and names what it records")
+        NativeFixtureEnvironment.announcements = []
+        try press("k", [])
+        check(
+            settings.value == original && !recorder.isRecording && message.stringValue.contains("K would type text")
+                && NativeFixtureEnvironment.announcements.contains(message.stringValue),
+            "V8 a bare key that would type text is refused, in words that are announced: \(message.stringValue)")
+        try press("q", .command, code: 12)
+        check(
+            settings.value == original && message.stringValue.contains("Command-Q quits TextTank.")
+                && message.stringValue.contains("cannot be given to another command"),
+            "V8 DS-25 a reserved system shortcut is refused with its reason: \(message.stringValue)")
+        try press("\u{f70c}", .function, code: 101)
+        check(
+            settings.value == original
+                && message.stringValue.contains(recordKey + " is used by “Tools › Macros › Start Recording”"),
+            "V8 a key of a command that cannot change is refused, naming the command: \(message.stringValue)")
+        recorder.performClick(nil)
+        window.sendEvent(try key("\u{1b}", [], code: 53))
+        check(
+            !recorder.isRecording && settings.value == original && window.isVisible,
+            "V8 Escape ends recording, changes nothing and leaves Settings open")
+
+        // Control-Option-K for a File command, live in the menu bar.
+        let new = try item("newDocument:")
+        try press("k", [.control, .option], code: 40)
+        check(
+            try settings.value.shortcuts == ["newDocument:": "ctrl+opt+k"] && settings.value.version == 2
+                && SettingsStore(url: settings.url).value.shortcuts == settings.value.shortcuts
+                && text(try row("File › New"), 1) == "⌃⌥K" && text(try row("File › New"), 2) == "Custom"
+                && message.stringValue == "“File › New” now uses Control-Option-K.",
+            "V8 recording Control-Option-K for File › New saves it at once: \(settings.value.shortcuts) \(message.stringValue)")
+        check(
+            new.keyEquivalent == "k" && new.keyEquivalentModifierMask == [.control, .option],
+            "V8 the menu item has the key at once")
+        let documents = NSDocumentController.shared.documents.count
+        check(
+            bar.performKeyEquivalent(with: try key("k", [.control, .option], code: 40))
+                && NSDocumentController.shared.documents.count == documents + 1,
+            "V8 Control-Option-K runs File › New from the menu's key equivalent")
+        check(
+            !bar.performKeyEquivalent(with: try key("n", .command, code: 45))
+                && NSDocumentController.shared.documents.count == documents + 1,
+            "V8 and its former key no longer does")
+        NSDocumentController.shared.documents.forEach { $0.close() }
+        let entry = try requireValue(
+            composition.commandDiscovery.commands(in: bar).first { $0.path == "File › New" },
+            "V8 fixture: File › New in the Command Palette")
+        check(
+            entry.row.accessory == "⌃⌥K" && entry.row.accessory == MenuShortcut(new)?.displayText
+                && entry.row.accessoryLabel == "Shortcut Control-Option-K"
+                && palette.first { $0.path == "File › Save" }?.row.accessory == "⌘S",
+            "V8 DS-20 the Command Palette shows the same key in the same form")
+
+        // (c) A key in use names the clash and offers Replace or Cancel.
+        let open = try item("openDocument:")
+        try select("File › Open…")
+        try press("k", [.control, .option], code: 40)
+        let replace = try button("replace"), cancel = try button("cancel")
+        check(
+            settings.value.shortcuts == ["newDocument:": "ctrl+opt+k"] && !replace.isHidden && !cancel.isHidden
+                && replace.hasDestructiveAction && replace.keyEquivalent.isEmpty
+                && message.stringValue.hasPrefix("Control-Option-K is already used by “File › New”.")
+                && open.keyEquivalent == "o",
+            "V8 recording a key in use names the command that has it and changes nothing yet: \(message.stringValue)")
+        cancel.performClick(nil)
+        check(
+            settings.value.shortcuts == ["newDocument:": "ctrl+opt+k"] && replace.isHidden && cancel.isHidden
+                && message.stringValue == "The shortcut was not changed.",
+            "V8 Cancel keeps both shortcuts as they were")
+        try press("k", [.control, .option], code: 40)
+        try button("replace").performClick(nil)
+        check(
+            try settings.value.shortcuts == ["openDocument:": "ctrl+opt+k", "newDocument:": ""] && replace.isHidden
+                && open.keyEquivalent == "k" && open.keyEquivalentModifierMask == [.control, .option]
+                && new.keyEquivalent.isEmpty && text(try row("File › New"), 2) == "Custom: none"
+                && text(try row("File › Open…"), 1) == "⌃⌥K",
+            "V8 Replace gives the key to the command and leaves the other without one: \(settings.value.shortcuts)")
+
+        // A yielding default gives way without a question, and shows that it did.
+        let toggle = try item("toggleDocumentPreview:")
+        try select("Edit › Convert Case › Uppercase")
+        try press("v", [.control, .command], code: 9)
+        check(
+            try settings.value.shortcuts["upper"] == "ctrl+cmd+v" && replace.isHidden && toggle.keyEquivalent.isEmpty
+                && text(try row("View › Preview › Toggle Preview"), 1).isEmpty
+                && text(try row("View › Preview › Toggle Preview"), 2) == "Default, given up",
+            "V8 a yielding default gives way to the assignment and the list says so")
+
+        // Quick Open's Shift-Command-O is a yielding default too.
+        let quickOpen = try item("quickOpen:")
+        try select("Edit › Convert Case › Lowercase")
+        try press("O", [.command, .shift], code: 31)
+        check(
+            try settings.value.shortcuts["lower"] == "O" && replace.isHidden && quickOpen.keyEquivalent.isEmpty
+                && text(try row("File › Quick Open…"), 2) == "Default, given up",
+            "V8 Quick Open gives Shift-Command-O to an assignment without a question")
+        try button("default").performClick(nil)
+        check(
+            settings.value.shortcuts["lower"] == nil && quickOpen.keyEquivalent == "O"
+                && quickOpen.keyEquivalentModifierMask == .command,
+            "V8 and has it again when the assignment goes")
+        // A view toggle added by another slice takes a key and runs from it.
+        try select("View › Show › Whitespace")
+        try press("w", [.control, .option], code: 13)
+        let whitespace = settings.value.showWhitespaceEnabled
+        check(
+            try settings.value.shortcuts["showWhitespace"] == "ctrl+opt+w"
+                && text(try row("View › Show › Whitespace"), 1) == "⌃⌥W",
+            "V8 View › Show › Whitespace takes Control-Option-W")
+        try button("default").performClick(nil)
+        check(settings.value.shortcuts["showWhitespace"] == nil && settings.value.showWhitespaceEnabled == whitespace,
+            "V8 fixture: the toggle's shortcut is removed and its setting was not touched")
+
+        // Changed from default narrows the list to the commands that were changed.
+        let changed: NSButton = try control("settings.filter.changed", window)
+        changed.performClick(nil)
+        check(
+            shownSettings(window) == ["settings.shortcuts"]
+                && listed() == ["File › New", "File › Open…", "Edit › Convert Case › Uppercase"],
+            "V8 Changed from default lists exactly the commands whose shortcut was changed: \(listed())")
+        changed.performClick(nil)
+        try choosePane("shortcuts", in: window)
+
+        // (d) Reset one, then Reset all.
+        try select("Edit › Lines › Delete Line")
+        try press("k", .command, code: 40)
+        try select("Edit › Lines › Duplicate Line")
+        try press("j", .command, code: 38)
+        check(
+            try settings.value.shortcuts["deleteLine"] == "k" && settings.value.shortcuts["duplicateLine"] == "j"
+                && settings.value.shortcuts["upper"] == "ctrl+cmd+v" && text(try row("Edit › Lines › Delete Line"), 1) == "⌘K",
+            "G396 the real Settings list keeps several assignments, each saved as it is made")
+        try button("default").performClick(nil)
+        try select("Edit › Lines › Delete Line")
+        try button("default").performClick(nil)
+        check(
+            try settings.value.shortcuts["deleteLine"] == nil && settings.value.shortcuts["duplicateLine"] == nil
+                && text(try row("Edit › Lines › Duplicate Line"), 1) == "⌘D"
+                && text(try row("Edit › Lines › Delete Line"), 1) == "⌃⇧K"
+                && SettingsStore(url: settings.url).value.shortcuts == settings.value.shortcuts,
+            "G396 Use Default restores each command's default without adding default or empty overrides")
+        try select("Edit › Convert Case › Uppercase")
+        try button("default").performClick(nil)
+        check(
+            try settings.value.shortcuts["upper"] == nil && toggle.keyEquivalent == "v"
+                && toggle.keyEquivalentModifierMask == [.control, .command] && text(try row("View › Preview › Toggle Preview"), 2) == "Default",
+            "V8 Use Default removes one assignment and the yielding default has its key again")
+        try select("File › New")
+        try button("default").performClick(nil)
+        check(
+            try settings.value.shortcuts == ["openDocument:": "ctrl+opt+k"] && new.keyEquivalent == "n"
+                && new.keyEquivalentModifierMask == .command && !(try button("default")).isEnabled,
+            "V8 Use Default returns a command that had no key to its default")
+        try select("File › Open…")
+        try button("clear").performClick(nil)
+        check(
+            settings.value.shortcuts == ["openDocument:": ""] && open.keyEquivalent.isEmpty,
+            "V8 Clear Shortcut leaves a command without a key")
+        try select("File › Save Copy…")
+        try press("o", .command, code: 31)
+        check(
+            settings.value.shortcuts == ["openDocument:": "", "saveCopy:": "o"],
+            "V8 a default that was taken away is free for another command")
+        try select("File › Open…")
+        try button("default").performClick(nil)
+        check(
+            !replace.isHidden && message.stringValue.hasPrefix("Command-O is already used by “File › Save Copy…”."),
+            "V8 returning a command to a default that is now in use asks the same question: \(message.stringValue)")
+        cancel.performClick(nil)
+        let resetAll = try button("resetAll")
+        check(resetAll.isEnabled && resetAll.title.hasSuffix("…"), "V8 Reset All Shortcuts… asks first (DS-41)")
+        resetAll.performClick(nil)
+        let sheet = try requireValue(window.attachedSheet, "V8 fixture: the Reset All Shortcuts sheet")
+        check(NSApp.modalWindow == nil, "V8 the question blocks only Settings")
+        let confirm = try requireValue(
+            descendants(sheet.contentView!).compactMap { $0 as? NSButton }.first { $0.title == "Reset Shortcuts" },
+            "V8 fixture: Reset Shortcuts")
+        check(confirm.hasDestructiveAction, "V8 DS-41 the deliberate button is marked destructive")
+        confirm.performClick(nil)
+        _ = spinUntil("V8 the Reset All Shortcuts sheet finished") { sheet.sheetParent == nil && !sheet.isVisible }
+        check(
+            try settings.value.shortcuts.isEmpty && settings.value.version == 1 && window.isVisible
+                && open.keyEquivalent == "o" && open.keyEquivalentModifierMask == .command && new.keyEquivalent == "n"
+                && String(decoding: try Data(contentsOf: settings.url), as: UTF8.self).contains("\"version\":1")
+                && !resetAll.isEnabled,
+            "V8 Reset All Shortcuts restores every default, in the menu bar and in a version-1 file")
+
+        // A menu its owner rebuilds (Run Commands) gets new items; the saved shortcut returns to them.
+        try select("Tools › Run Commands › Manage Commands…")
+        try press("m", [.control, .option], code: 46)
+        let manage = try item("manage:")
+        check(
+            manage.keyEquivalent == "m" && manage.keyEquivalentModifierMask == [.control, .option],
+            "V8 fixture: a Run Commands item has an assigned key")
+        try composition.runner.persist([.uppercaseSample])
+        let rebuilt = try item("manage:")
+        check(rebuilt !== manage, "V8 fixture: saving a Run command rebuilds its menu")
+        _ = spinUntil("V8 the rebuilt Run Commands item has its shortcut again") {
+            rebuilt.keyEquivalent == "m" && rebuilt.keyEquivalentModifierMask == [.control, .option]
+        }
+        try choosePane("shortcuts", in: window)
+        let saved = "Tools › Run Commands › " + ConfiguredRun.uppercaseSample.menuTitle
+        try select(saved)
+        try press("u", [.control, .option], code: 32)
+        func runItem() -> NSMenuItem? {
+            func search(_ menu: NSMenu) -> NSMenuItem? {
+                for item in menu.items {
+                    if item.target is RunController, item.title == ConfiguredRun.uppercaseSample.menuTitle { return item }
+                    if let found = item.submenu.flatMap(search) { return found }
+                }
+                return nil
+            }
+            return search(bar)
+        }
+        check(
+            try settings.value.shortcuts.keys.contains { $0.hasPrefix("RunController.run:/") }
+                && text(try row(saved), 1) == "⌃⌥U" && runItem().flatMap { MenuShortcut($0) }?.displayText == "⌃⌥U",
+            "V8 a saved Run command takes a shortcut of its own, on its menu item")
+        try composition.runner.persist([])
+        _ = spinUntil("V8 the Run Commands menu was rebuilt without the command") { !listed().isEmpty }
+        try choosePane("shortcuts", in: window)
+        check(
+            try settings.ignoredShortcutBindings.isEmpty && settings.value.shortcuts.count == 2
+                && !listed().contains(saved) && text(try row("Tools › Run Commands › Manage Commands…"), 1) == "⌃⌥M",
+            "V8 deleting that Run command leaves its shortcut dormant: nothing is reported and nothing else changes")
+        try select("Tools › Run Commands › Manage Commands…")
+        try press("u", [.control, .option], code: 32)
+        check(
+            settings.value.shortcuts.count == 1 && settings.value.shortcuts.values.first == "ctrl+opt+u",
+            "V8 the dormant key is free, and taking it drops the dormant entry")
+        try button("default").performClick(nil)
+        check(settings.value.shortcuts.isEmpty, "V8 fixture: defaults again")
+
+        // Two commands the menu bar itself puts on one key are both marked.
+        let previous = NSApp.mainMenu
+        defer { NSApp.mainMenu = previous }
+        let small = NSMenu()
+        let fixture = NSMenu(title: "Fixture")
+        small.addItem(title: "Fixture", action: nil).submenu = fixture
+        fixture.addItem(title: "First", action: #selector(NSText.selectAll(_:)), keyEquivalent: "j", representedObject: "one")
+        fixture.addItem(title: "Second", action: #selector(NSText.selectAll(_:)), keyEquivalent: "j", representedObject: "two")
+        NSApp.mainMenu = small
+        settings.showSettings(nil)
+        try choosePane("files", in: window)
+        try choosePane("shortcuts", in: window)
+        check(
+            try text(try row("Fixture › First"), 2) == "Default · Same key as “Fixture › Second”"
+                && text(try row("Fixture › Second"), 2) == "Default · Same key as “Fixture › First”",
+            "V8 commands on the same key are marked in words: \(text(try row("Fixture › First"), 2))")
+    }
+    /// The Files pane's Clear Local History… button sends the Compare menu's command. The
+    /// confirmation is the injected one the command's own checks use, so nothing is presented.
+    static func clearLocalHistoryRowChecks(root: URL, composition: AppDelegate) throws {
+        let priorStore = LocalHistory.store, priorConfirm = LocalHistory.confirmClear
+        defer {
+            LocalHistory.store = priorStore
+            LocalHistory.confirmClear = priorConfirm
+        }
+        let home = root.appendingPathComponent("history-row/LocalHistory", isDirectory: true)
+        let store = LocalHistoryStore(directory: home)
+        LocalHistory.store = store
+        for text in ["first", "second", "third"] { store.record(path: "/fixture/notes.txt", bytes: Data(text.utf8)) }
+        store.waitUntilIdle()
+        let before = store.usage()
+        try require(before.versions == 3, "V10 fixture: three earlier versions are kept")
+        var prompts: [LocalHistory.ClearPrompt] = [], answer = LocalHistory.ClearChoice.cancel
+        LocalHistory.confirmClear = { prompt, _, reply in
+            prompts.append(prompt)
+            reply(answer)
+        }
+        // The command asks in a sheet on the workspace window, so there must be one.
+        let document = DocumentFactory.makeUntitled()
+        defer { document.close() }
+        composition.settings.showSettings(nil)
+        let form = try requireValue(
+            FormPanel.visible.last { $0.window.identifier?.rawValue == "TextTank.Settings" }, "V10 fixture: Settings")
+        defer { form.close() }
+        try choosePane("files", in: form.window)
+        let row: NSButton = try control("settings.clearLocalHistory", form.window)
+        row.performClick(nil)
+        // The command counts the kept versions off the main thread before it asks.
+        _ = spinUntil("V10 the Settings row's confirmation is asked") { prompts.count == 1 }
+        check(
+            prompts.count == 1 && prompts.first?.buttons.first?.choice == .cancel
+                && prompts.first?.buttons.last?.choice == .everything
+                && form.window.isVisible && form.window.attachedSheet == nil,
+            "V10 the Settings row sends Clear Local History…, which asks with the command's own confirmation")
+        store.waitUntilIdle()
+        check(
+            try store.usage() == before && store.versions(forPath: "/fixture/notes.txt").count == 3,
+            "V10 Cancel from the Settings row deletes nothing")
+        answer = .everything
+        row.performClick(nil)
+        _ = spinUntil("V10 the Settings row's confirmation is asked again") { prompts.count == 2 }
+        _ = spinUntil("V10 the confirmed clear finished") { store.usage().versions == 0 }
+        store.waitUntilIdle()
+        check(
+            prompts.count == 2 && store.usage().versions == 0,
+            "V10 and the same row, confirmed, clears the history as the menu command does")
     }
     static func maintenanceSheetChecks(root: URL) throws {
         let url = root.appendingPathComponent("maintenance-settings.json")
@@ -629,23 +1483,37 @@ extension DesignSettingsChecks {
                 menu.items.first { $0.action == NSSelectorFromString(selector) }, "DG AX native menu route \(selector)")
             _ = NSApp.sendAction(item.action!, to: item.target, from: item)
         }
+        // The panes and the Shortcuts pane are driven here, in this process, and not in
+        // document-checks: every window shown from a check executable keeps an AppKit animation
+        // worker, and that long process has few left (see docs/BUILDING.md).
+        try settingsPaneChecks(root: isolated.url)
         let settings = SettingsController(url: isolated.url.appendingPathComponent("Settings.json"))
         settings.showSettings(nil)
+        // Each pane is checked while it is the one shown; a hidden pane is not in the tree.
         let settingsForm = try checkInputs(
             "TextTank.Settings",
             [
-                ("Tab width", "AXTextField"), ("Appearance", "AXPopUpButton"),
-                ("Command shortcut to assign", "AXPopUpButton"), ("Shortcut key", "AXTextField"),
-                ("Indent with tabs", "AXCheckBox"), ("Wrap lines", "AXCheckBox")
+                ("Tab width", "AXTextField"), ("Indent with tabs", "AXCheckBox"), ("Wrap lines", "AXCheckBox"),
+                ("Auto-indent on Return", "AXCheckBox"), ("Search settings by name", "AXTextField"),
+                ("Show only settings changed from their defaults", "AXCheckBox")
             ], focus: true)
-        let shortcut = try field("settings.shortcut.key", settingsForm.window)
-        let commands = try requireValue(
-            descendants(settingsForm.window.contentView!).compactMap { $0 as? NSPopUpButton }.first {
-                $0.identifier?.rawValue == "settings.shortcut.command"
-            }, "DG AX shortcut choices")
-        commands.selectItem(at: min(1, commands.numberOfItems - 1))
-        _ = NSApp.sendAction(commands.action!, to: commands.target, from: commands)
-        inputName(shortcut, "Shortcut key", role: "AXTextField", in: settingsForm, focus: true)
+        try choosePane("appearance", in: settingsForm.window)
+        _ = try checkInputs(
+            "TextTank.Settings",
+            [("Appearance", "AXPopUpButton"), ("Font size (points)", "AXTextField"), ("Default zoom", "AXTextField")],
+            focus: true)
+        try choosePane("files", in: settingsForm.window)
+        _ = try checkInputs(
+            "TextTank.Settings", [("At launch", "AXPopUpButton"), ("External file changes", "AXPopUpButton")],
+            focus: true)
+        try choosePane("previews", in: settingsForm.window)
+        _ = try checkInputs(
+            "TextTank.Settings", [("Preview format", "AXPopUpButton"), ("Open Markdown documents in", "AXPopUpButton")],
+            focus: true)
+        try choosePane("shortcuts", in: settingsForm.window)
+        _ = try checkInputs(
+            "TextTank.Settings",
+            [("Search commands by name, menu or shortcut", "AXTextField"), ("Commands and their shortcuts", "AXTable")])
         settingsForm.close()
 
         let document = DocumentFactory.makeUntitled()
@@ -655,7 +1523,21 @@ extension DesignSettingsChecks {
         document.editor.text = "one\ntwo"
         document.editor.setSavePoint()
         controller.goToLine(nil)
-        try checkInputs("TextTank.GoToLine", [("Line number in Go to Line", "AXTextField")], focus: true).close()
+        // The same oracle as the form fields above: the native element the field exposes (its
+        // cell), and the real window's accessibility tree, each naming a text field.
+        let lineField = controller.goToLineBar.field
+        let lineWindow = try requireValue(lineField.window, "DG AX Go to Line is in the workspace window")
+        lineWindow.contentView?.layoutSubtreeIfNeeded()
+        check(
+            controller.goToLineBarVisible && lineField.currentEditor() != nil
+                && NSAccessibility.unignoredChildrenForOnlyChild(from: lineField).contains {
+                    exposes($0, purpose: "Line number in Go to Line", role: "AXTextField")
+                }
+                && nativeTree(lineWindow).contains {
+                    exposes($0, purpose: "Line number in Go to Line", role: "AXTextField")
+                },
+            "DG AX Go to Line is one named inline text field that takes the keyboard")
+        controller.cancelGoToLine(nil)
         composition.showDocumentTabs(nil)
         try checkInputs(
             "TextTank.OpenDocuments", [("Filter open documents by name or path", "AXTextField")], focus: true
@@ -743,6 +1625,12 @@ extension DesignSettingsChecks {
             editorProvider: { editor }, languageProvider: { "plain" }, setLanguage: { _ in })
         language.configure()
         try checkInputs("language.json", [("Language profiles JSON", "AXTextArea")]).close()
+        // The Shortcuts pane and the Files row are driven last, after every other window of this
+        // process has been checked, so they find no window of another check open.
+        document.close()
+        try shortcutPaneChecks(composition: composition)
+        try SettingsShortcutValidationChecks.paneScenarios(root: isolated.url)
+        try clearLocalHistoryRowChecks(root: isolated.url, composition: composition)
     }
 }
 

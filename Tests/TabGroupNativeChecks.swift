@@ -152,6 +152,8 @@ import Darwin
         surface.frame = NSRect(x: 0, y: 0, width: 320, height: 200)
         surface.layoutSubtreeIfNeeded()
         b.showFind(nil)
+        // With the Replace row shown: the tallest the bar gets.
+        b.setReplaceRow(shown: true)
         surface.layoutSubtreeIfNeeded()
         b.presentationRoot.layoutSubtreeIfNeeded()
         let inlineFind = try requireValue(b.findBar, "T3 mounted Find bar")
@@ -431,9 +433,14 @@ import Darwin
         check(
             try heading(.first).isHidden && only.strip.frame.maxY == only.bounds.height,
             "a single group shows no heading and its tab strip takes the row (DS-10)")
+        let layoutToolbar = try requireValue(host.window?.toolbar, "fixture: workspace toolbar")
+        let layoutItem = try requireValue(
+            host.toolbar(
+                layoutToolbar, itemForItemIdentifier: EditorLayoutToolbarItem.identifier,
+                willBeInsertedIntoToolbar: false) as? NSMenuToolbarItem, "DS-D12 Editor Layout toolbar item")
         check(
-            host.layoutPicker.menu?.items.first?.isEnabled == true,
-            "the layout picker's title item stays enabled, so the control does not look unavailable")
+            host.validateToolbarItem(layoutItem) && layoutItem.menu.items.first?.isEnabled == true,
+            "DS-D12 the toolbar's Editor Layout item stays enabled, so the control does not look unavailable")
         reset()
         // A non-final saved close records that exact view. Missing disk cannot affect live reopen.
         let liveDoc = try saved("history-live", "é\nabcdef\n"), h1 = id(liveDoc)
@@ -703,10 +710,19 @@ import Darwin
         check(
             action?.handler?() == true && host.tabSelection.selected(in: host.model, group: .second) == [second, third]
                 && host.model.groups[0] == firstGroup, "T3 native AX selection stays group-local")
+        let picker = try requireValue(
+            host.toolbar(
+                try requireValue(host.window?.toolbar, "fixture: workspace toolbar"),
+                itemForItemIdentifier: EditorLayoutToolbarItem.identifier, willBeInsertedIntoToolbar: false)
+                as? NSMenuToolbarItem, "T3 Editor Layout toolbar item")
         check(
-            host.layoutPicker.superview !== strip && host.layoutPicker.accessibilityLabel() == "Editor group layout",
-            "T3 trailing picker is outside scrolling strip and labelled")
-        let choices = host.layoutPicker.menu!.items.filter {
+            picker.view == nil && picker.label == "Editor Layout" && !(picker.toolTip ?? "").isEmpty
+                && descendants(strip).compactMap { $0 as? NSPopUpButton }.allSatisfy {
+                    $0.identifier?.rawValue == "tabs.openTabs"
+                        && !$0.itemArray.contains { $0.identifier?.rawValue.hasPrefix("groups.layout.") == true }
+                },
+            "T3 the layout choice is a labelled toolbar item, outside the scrolling strips (DS-D12)")
+        let choices = picker.menu.items.filter {
             $0.identifier?.rawValue.hasPrefix("groups.layout.") == true
         }
         check(
@@ -824,6 +840,7 @@ import Darwin
         last.restoreClosedTabView(anchor: 2, caret: 6, firstVisibleLine: 0)
         pa.showFind(nil)
         pd.showFind(nil)
+        pd.setReplaceRow(shown: true)
         let ranges = last.selectionRanges
         host.activate(pa)
         check(
@@ -842,7 +859,7 @@ import Darwin
                 && last.selectionRanges == ranges,
             "R1 V3-02 Replace focus updates exact group without stealing Clone selection")
         host.activate(pa)
-        pd.caseBox.performClick(nil)
+        pd.findOptions.toggle(.matchCase)
         check(
             host.model.focusedGroup == .fourth && app.currentDocument === other && pd.activeEditor === last
                 && last.selectionRanges == ranges,
@@ -853,13 +870,13 @@ import Darwin
         check(responderBelongsTo(last), "R2 V3-04 Match Case moves native typing focus to its saved Clone")
         window.makeFirstResponder(pd.findField)
         let findResponder = window.firstResponder
-        pd.caseBox.performClick(nil)
+        pd.findOptions.toggle(.matchCase)
         check(
             window.firstResponder === findResponder && pd.findField.currentEditor() === findResponder,
             "R2 V3-04 Match Case preserves its own Find field editor")
         window.makeFirstResponder(pd.replaceField)
         let replaceResponder = window.firstResponder
-        pd.caseBox.performClick(nil)
+        pd.findOptions.toggle(.matchCase)
         check(
             window.firstResponder === replaceResponder && pd.replaceField.currentEditor() === replaceResponder,
             "R2 V3-04 Match Case preserves its own Replace field editor")
@@ -867,13 +884,13 @@ import Darwin
             pd.presentationRoot.subviews.compactMap { $0 as? StatusBadgeRow }.first,
             "R2 actual target status row")
         host.activate(pa)
-        _ = status.menuProvider?(.wrap)
+        _ = status.menuProvider?(.encoding)
         check(
             host.active === pd && responderBelongsTo(last) && last.selectionRanges == ranges,
             "R2 V3-04 status popup changes global and native typing target without changing Clone selection")
         window.makeFirstResponder(pd.findField)
         let statusResponder = window.firstResponder
-        _ = status.menuProvider?(.wrap)
+        _ = status.menuProvider?(.encoding)
         check(
             window.firstResponder === statusResponder && pd.findField.currentEditor() === statusResponder,
             "R2 V3-04 status popup preserves its own field editor")
@@ -977,6 +994,7 @@ import Darwin
                     "R3 genuine native primary/Clone focus routes visible group \(slots[index].rawValue)")
             }
             presentation.showFind(nil)
+            presentation.setReplaceRow(shown: true)
             host.activate(other)
             check(
                 window.makeFirstResponder(presentation.findField)
@@ -994,7 +1012,7 @@ import Darwin
                 "R3 actual status row")
             let savedEditor = presentation.activeEditor
             host.activate(other)
-            _ = status.menuProvider?(.wrap)
+            _ = status.menuProvider?(.encoding)
             check(
                 host.active === presentation
                     && (window.firstResponder as? NSView)?.isDescendant(of: savedEditor) == true,

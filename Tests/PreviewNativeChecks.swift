@@ -289,6 +289,31 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         _ = editor.replaceSelection(new)
     }
 
+    /// Replaces text without moving the caret or scrolling, as an edit from another view of the
+    /// document does.
+    private static func replaceInPlace(_ old: String, with new: String, in editor: TTEditor) throws {
+        let text = editor.text
+        let range = try requireValue(text.range(of: old), "fixture: text to replace in place '\(old)'")
+        let start = text.utf8.distance(from: text.utf8.startIndex, to: range.lowerBound)
+        let edit = TTTextEdit(range: TTByteRange(location: start, length: old.utf8.count), text: new)
+        check(
+            editor.applyEdits([edit], expectedRevision: editor.revision, expectedLength: editor.byteLength),
+            "fixture: edit in place")
+    }
+
+    private static func number(_ web: WKWebView?, _ source: String) -> Double? {
+        (script(web, source) as? NSNumber)?.doubleValue
+    }
+
+    /// Where the top-level block whose whole text is `text` is, from the top of the window.
+    private static func blockTop(_ web: WKWebView, _ text: String) -> Double? {
+        number(
+            web,
+            "(function () { var list = document.body.children; for (var i = 0; i < list.length; i++) {"
+                + " if (list[i].textContent === '\(text)') { return list[i].getBoundingClientRect().top; } } return null; })()"
+        )
+    }
+
     /// With TEXTTANK_PREVIEW_SNAPSHOTS=1, writes pictures of a tab for a person to look at. They
     /// are not compared with anything.
     private static func picture(_ tab: EditorWindowController, _ name: String) {
@@ -378,8 +403,29 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         }
         Checks.section("jumps into a Preview tab") { try jumpsRevealSource(root: root, app: app, host: host) }
         Checks.section("settings routes for the preview") { try previewSettingsRoutes(root: root, app: app, host: host) }
-        Checks.section("Shift-Command-V from the preview") { try toggleKeyFromPreview(root: root, host: host) }
+        Checks.section("Control-Command-V from the preview") { try toggleKeyFromPreview(root: root, host: host) }
+        Checks.section("scroll sync: Markdown") {
+            try scrollSyncMarkdown(root: root, app: app, host: host, listener: listener)
+        }
+        Checks.section("scroll sync: a page with scripts") { try scrollSyncScripts(root: root, listener: listener) }
+        Checks.section("scroll sync: table and tree") { try scrollSyncRows(root: root) }
+        Checks.section("scroll sync: opened in Both by Settings") { try scrollSyncOpenIn(root: root, app: app) }
         Checks.section("fail closed") { try failClosed(root: root) }
+        Checks.section("docked Workspace Browser") { try WorkspaceSidebarChecks.run(root: root, app: app, host: host) }
+        Checks.section("tab strip: state, mouse and the list of open tabs") {
+            try TabStripChecks.run(root: root, app: app, host: host)
+        }
+        Checks.section("compact find bar and inline Go to Line") {
+            try FindBarNativeChecks.run(root: root, app: app, host: host)
+        }
+        Checks.section("View menu, change bars and centered column") {
+            try ViewMenuChecks.run(root: root, app: app, host: host)
+        }
+        Checks.section("Editor Layout toolbar item") { try WindowLayoutChecks.layoutControl(app: app, host: host) }
+        Checks.section("Move Focus between window areas") {
+            try WindowLayoutChecks.focusAreas(root: root, app: app, host: host)
+        }
+        Checks.section("empty-group hint") { try WindowLayoutChecks.emptyGroupHint(root: root, app: app, host: host) }
         settle(0.5)
         check(
             listener.connections == allowedConnections,
@@ -544,9 +590,13 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
 
     // MARK: Eligibility and commands
 
-    private static func viewModeItems() throws -> [NSMenuItem] {
+    /// View > Preview, the submenu that holds the mode commands since DS-D13.
+    static func previewMenu() throws -> NSMenu {
         let view = try requireValue(NSApp.mainMenu?.items.first { $0.title == "View" }?.submenu, "View menu")
-        return view.items.filter { $0.action == #selector(EditorWindowController.setDocumentViewMode(_:)) }
+        return try requireValue(view.items.first?.submenu, "View > Preview")
+    }
+    private static func viewModeItems() throws -> [NSMenuItem] {
+        try previewMenu().items.filter { $0.action == #selector(EditorWindowController.setDocumentViewMode(_:)) }
     }
 
     private static func eligibility(root: URL, app: AppDelegate, host: WorkspaceWindowController) throws {
@@ -555,12 +605,14 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
             items.map(\.title) == ["Source", "Preview", "Both"]
                 && items.map { $0.representedObject as? String } == ["source", "preview", "both"]
                 && items.allSatisfy { $0.target == nil && $0.keyEquivalent.isEmpty },
-            "View has Source, Preview and Both as first-responder commands with no shortcut")
+            "View > Preview has Source, Preview and Both as first-responder commands with no shortcut")
         let view = try requireValue(NSApp.mainMenu?.items.first { $0.title == "View" }?.submenu, "View menu")
+        let preview = try previewMenu()
         check(
-            Array(view.items.prefix(4)).map(\.title) == ["Source", "Preview", "Both", "Toggle Preview"]
-                && view.items[4].isSeparatorItem,
-            "the three commands, Toggle Preview and a separator open the View menu")
+            view.items.first?.title == "Preview" && view.items[1].isSeparatorItem
+                && preview.items.map(\.title) == ["Source", "Preview", "Both", "Toggle Preview", "", "Sync Scrolling in Both"]
+                && preview.items[4].isSeparatorItem,
+            "DS-D13 the Preview submenu opens the View menu with the three commands, Toggle Preview, a separator and Sync Scrolling in Both")
 
         let document = DocumentFactory.makeUntitled()
         document.editor.text = "# Title\n\nplain so far\n"
@@ -733,8 +785,8 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         check(!tab.findBarVisible, "Preview closes the find bar, which acts on the hidden source")
         tab.goToLine(nil)
         check(tab.viewMode == .both, "Go to Line shows the source beside the preview first")
-        presentedFormWindow?.close()
         tab.setViewMode(.preview)
+        check(!tab.goToLineBarVisible, "Preview closes Go to Line, which acts on the hidden source")
         app.searchController.showSearch(nil)
         check(tab.viewMode == .both, "Find and Replace shows the source beside the preview first")
         app.searchController.window?.orderOut(nil)
@@ -778,7 +830,10 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         let web = try requireValue(coordinator.pane.webPresenter?.webView, "web view")
         _ = script(web, "window.scrollTo(0, 900); window.scrollY")
         let appliedBefore = coordinator.appliedCount
-        try replace("Alpha heading", with: "Beta heading", in: tab.primaryEditor)
+        // The heading is edited without moving the caret to it, as a second view of the document
+        // or a search would. An edit typed at the heading takes the source there, and in Both the
+        // preview now follows the source; that is checked after Undo, below.
+        try replaceInPlace("Alpha heading", with: "Beta heading", in: tab.primaryEditor)
         check(pageText(tab).contains("Alpha heading"), "the last rendering stays in place until the new one is ready")
         waitCurrent(tab, "Markdown after edit")
         check(
@@ -799,6 +854,47 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         check(
             pageText(tab).contains("Alpha heading") && !pageText(tab).contains("Beta heading"),
             "Undo returns the rendered heading")
+        wait("the preview follows the caret to the top") { (script(web, "window.scrollY") as? Double ?? 900) < 1 }
+        check(
+            tab.primaryEditor.firstVisibleDocumentLine == 0 && (script(web, "window.scrollY") as? Double ?? 900) < 1,
+            "Undo put the caret on the heading, the source scrolled there, and in Both the preview followed it")
+
+        // The scenario this check always had: the preview is scrolled away and the heading is
+        // then edited the ordinary way, with the caret. With sync on the preview goes to the
+        // edited block with the source; with sync off it keeps its place, as it did before.
+        let settings = try requireValue(EditorServices.current?.settings, "settings")
+        func pageY() -> Double { script(web, "window.scrollY") as? Double ?? -1 }
+        check(settings.value.syncsPreviewScrolling, "fixture: sync is on")
+        _ = script(web, "window.scrollTo(0, 900); window.scrollY")
+        wait("fixture: the source followed the preview down") { tab.primaryEditor.firstVisibleDocumentLine > 10 }
+        try replace("Alpha heading", with: "Gamma heading", in: tab.primaryEditor)
+        waitCurrent(tab, "Markdown after a caret edit, sync on")
+        wait("the preview follows the edit") { pageText(tab).contains("Gamma heading") && pageY() < 1 }
+        check(
+            pageText(tab).contains("Gamma heading") && pageY() < 1 && tab.primaryEditor.firstVisibleDocumentLine == 0
+                && (blockTop(web, "Gamma heading") ?? -1) >= 0,
+            "sync on: an edit typed at the heading takes the source there and the preview shows the edited heading (page at \(pageY()))"
+        )
+        var switched = settings.value
+        switched.syncPreviewScrolling = false
+        try settings.save(switched)
+        _ = script(web, "window.scrollTo(0, 900); window.scrollY")
+        settle(0.3)
+        check(
+            tab.primaryEditor.firstVisibleDocumentLine == 0 && abs(pageY() - 900) < 2,
+            "fixture: with sync off the source stays at the heading while the preview is scrolled away")
+        let appliedOff = coordinator.appliedCount
+        try replace("Gamma heading", with: "Delta heading", in: tab.primaryEditor)
+        waitCurrent(tab, "Markdown after a caret edit, sync off")
+        wait("scroll position restored, sync off") { pageText(tab).contains("Delta heading") && pageY() > 800 }
+        settle(0.3)
+        check(
+            pageText(tab).contains("Delta heading") && coordinator.appliedCount == appliedOff + 1
+                && abs(pageY() - 900) < 2,
+            "sync off: the same edit leaves the preview where it was across the new rendering, as before (page at \(pageY()))"
+        )
+        switched.syncPreviewScrolling = nil
+        try settings.save(switched)
         settle(0.3)
         check(listener.connections == 1, "Markdown with a remote image made no network connection")
         document.close()
@@ -1605,6 +1701,27 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         markdownTab.restoreSessionTab(older)
         check(markdownTab.viewMode == .source, "a record from before the field existed restores Source")
 
+        // V4: a tab's own zoom is captured and restored with it; a tab at the default records none.
+        check(try record(plain).zoom == nil, "a tab at the default zoom is captured without a zoom")
+        plainTab.primaryEditor.zoomLevel = 5
+        let zoomedRecord = try record(plain)
+        check(
+            try zoomedRecord.zoom == 5 && record(markdown).zoom == nil,
+            "a zoomed tab is captured with its zoom and the other tab without one")
+        plainTab.primaryEditor.resetZoomLevel()
+        check(try record(plain).zoom == nil, "after Actual Size the tab is captured without a zoom again")
+        plainTab.restoreSessionTab(zoomedRecord)
+        check(
+            plainTab.primaryEditor.zoomLevel == 5 && !plainTab.primaryEditor.followsDefaultZoom
+                && markdownTab.primaryEditor.zoomLevel == 0,
+            "restoring the record restores that tab's zoom and no other tab's")
+        var unzoomed = zoomedRecord
+        unzoomed.zoom = nil
+        plainTab.restoreSessionTab(unzoomed)
+        check(
+            plainTab.primaryEditor.zoomLevel == 0 && plainTab.primaryEditor.followsDefaultZoom,
+            "a record without a zoom restores the Settings default zoom")
+
         // Restoring a whole layout gives the keyboard to the pane the session recorded, here
         // the clone pane, although the keyboard is in the tab's first pane when the restore runs
         // (as it is after documents are reopened).
@@ -1970,44 +2087,81 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
     private static func togglePreview(root: URL, app: AppDelegate, host: WorkspaceWindowController) throws {
         let bar = try requireValue(NSApp.mainMenu, "menu bar")
         let view = try requireValue(bar.items.first { $0.title == "View" }?.submenu, "View menu")
+        let preview = try previewMenu()
         let toggle = try requireValue(
-            view.items.first { $0.action == #selector(EditorWindowController.toggleDocumentPreview(_:)) },
-            "View > Toggle Preview")
+            preview.items.first { $0.action == #selector(EditorWindowController.toggleDocumentPreview(_:)) },
+            "View > Preview > Toggle Preview")
         check(
-            view.items.firstIndex { $0 === toggle } == 3 && view.items[2].title == "Both" && view.items[4].isSeparatorItem
-                && toggle.title == "Toggle Preview" && toggle.target == nil,
+            preview.items.firstIndex { $0 === toggle } == 3 && preview.items[2].title == "Both"
+                && preview.items[4].isSeparatorItem && toggle.title == "Toggle Preview" && toggle.target == nil,
             "Toggle Preview is directly under Source, Preview and Both, and goes to the first responder")
+        // Owner decision, 24 November 2026: Control-Command-V. Shift-Command-V, the first default,
+        // can be held system-wide by another application and then never reaches TextTank.
+        let toggleKey = MenuShortcut("v", [.control, .command]), formerKey = MenuShortcut("V")
         check(
-            toggle.keyEquivalent == "V" && toggle.keyEquivalentModifierMask == .command && toggle is DefaultShortcutItem,
-            "its shortcut is Shift-Command-V, a default that yields to a shortcut assigned in Settings")
-        var chords: [String] = []
-        func walk(_ menu: NSMenu, _ path: String) {
-            for item in menu.items {
-                let here = path + " > " + item.title
-                var key = item.keyEquivalent, flags = item.keyEquivalentModifierMask.intersection([.command, .shift, .option, .control])
-                if key.count == 1, key != key.lowercased() {
-                    key = key.lowercased()
-                    flags.insert(.shift)
+            toggle.keyEquivalent == "v" && toggle.keyEquivalentModifierMask == [.control, .command]
+                && toggle is DefaultShortcutItem && DocumentViewCommands.toggleShortcut == toggleKey,
+            "its shortcut is V with Control and Command, a default that yields to a shortcut assigned in Settings")
+        func holders(_ shortcut: MenuShortcut) -> [String] {
+            var found: [String] = []
+            func walk(_ menu: NSMenu, _ path: String) {
+                for item in menu.items {
+                    let here = path + " > " + item.title
+                    if MenuShortcut(item)?.identity == shortcut.identity { found.append(here) }
+                    if let child = item.submenu { walk(child, here) }
                 }
-                if key == "v", flags == [.command, .shift] { chords.append(here) }
-                if let child = item.submenu { walk(child, here) }
             }
+            walk(bar, "")
+            return found
         }
-        walk(bar, "")
-        check(chords == [" > View > Toggle Preview"], "no other menu item uses Shift-Command-V: \(chords)")
         check(
-            !EditorSettings.protectedShortcuts.contains("V") && !EditorCommand.defaultShortcuts.values.contains("V")
-                && !SettingsController.reservedShortcuts(in: bar).contains("V"),
-            "the key is not a protected, default or reserved editor shortcut, so saved shortcuts still load")
-        var custom = app.settings.value
+            holders(toggleKey) == [" > View > Preview > Toggle Preview"],
+            "no other menu item uses Control-Command-V: \(holders(toggleKey))")
+        check(holders(formerKey).isEmpty, "Shift-Command-V is no longer bound to anything by default: \(holders(formerKey))")
+        let context = app.settings.shortcutContext
+        let catalogDefaults =
+            EditorCommand.allCases.compactMap { $0.extendedMenuShortcut }
+            + EditorCommand.defaultShortcuts.values.compactMap(MenuShortcut.init(storedText:))
+        check(
+            ShortcutPolicy.refusal(for: toggleKey) == nil && context.fixed[toggleKey.identity] == nil
+                && context.fixed[formerKey.identity] == nil
+                && !catalogDefaults.contains { $0.identity == toggleKey.identity }
+                && context.commands.filter { $0.value.standard?.identity == toggleKey.identity }.map(\.key)
+                    == ["toggleDocumentPreview:"]
+                && context.commands["toggleDocumentPreview:"]?.yields == true
+                && !context.commands.values.contains { $0.standard?.identity == formerKey.identity },
+            "Control-Command-V is not a system, fixed or editor-command key and is the default of this command alone; nothing has Shift-Command-V by default")
+        // The person's own assignments win, for the new key and for the old one.
+        let clean = app.settings.value
+        var custom = clean
+        custom.assignShortcut(toggleKey, to: EditorCommand.upper.rawValue, in: context)
+        try app.settings.save(custom)
+        check(
+            toggle.keyEquivalent.isEmpty && app.settings.ignoredShortcutBindings.isEmpty
+                && holders(toggleKey) == [" > Edit > Convert Case > Uppercase"],
+            "a person's own Control-Command-V shortcut is kept, and Toggle Preview gives up the key: \(holders(toggleKey))")
+        try app.settings.save(clean)
+        check(toggle.keyEquivalent == "v" && holders(toggleKey).count == 1, "fixture: the default shortcut returns")
+        custom = clean
         custom.setShortcut("V", for: EditorCommand.upper.rawValue)
         try app.settings.save(custom)
         check(
-            toggle.keyEquivalent.isEmpty && app.settings.ignoredShortcutBindings.isEmpty,
-            "a person's own Shift-Command-V shortcut is kept, and Toggle Preview gives up the key")
-        custom.setShortcut("", for: EditorCommand.upper.rawValue)
-        try app.settings.save(custom)
-        check(toggle.keyEquivalent == "V", "fixture: the default shortcut returns")
+            holders(formerKey) == [" > Edit > Convert Case > Uppercase"] && toggle.keyEquivalent == "v"
+                && toggle.keyEquivalentModifierMask == [.control, .command] && app.settings.ignoredShortcutBindings.isEmpty,
+            "a settings file that gives Shift-Command-V to another command still does, and Toggle Preview keeps its new key")
+        // A file written while Shift-Command-V was the default may hold it for Toggle Preview itself.
+        let kept = try EditorSettings.load(
+            Data(#"{"version":2,"tabWidth":4,"useTabs":true,"wrap":false,"appearance":"system","shortcuts":{"toggleDocumentPreview:":"V"}}"#.utf8),
+            context: context)
+        try app.settings.save(kept.settings)
+        check(
+            kept.issues.isEmpty && holders(formerKey) == [" > View > Preview > Toggle Preview"] && holders(toggleKey).isEmpty,
+            "a person who assigned Shift-Command-V to Toggle Preview keeps it there: \(holders(formerKey))")
+        try app.settings.save(clean)
+        check(
+            toggle.keyEquivalent == "v" && toggle.keyEquivalentModifierMask == [.control, .command]
+                && holders(formerKey).isEmpty,
+            "fixture: the defaults again")
         check(
             view.items.filter { !$0.isSeparatorItem && !$0.isHidden }.count <= 20,
             "DS-23 View lists no more than twenty items (\(view.items.filter { !$0.isSeparatorItem && !$0.isHidden }.count))")
@@ -2626,9 +2780,9 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         let window = try requireValue(host.window, "workspace window")
         let key = try requireValue(
             NSEvent.keyEvent(
-                with: .keyDown, location: .zero, modifierFlags: [.command, .shift], timestamp: 0,
-                windowNumber: window.windowNumber, context: nil, characters: "V", charactersIgnoringModifiers: "V",
-                isARepeat: false, keyCode: 9), "fixture: Shift-Command-V")
+                with: .keyDown, location: .zero, modifierFlags: [.command, .control], timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, characters: "\u{16}", charactersIgnoringModifiers: "v",
+                isARepeat: false, keyCode: 9), "fixture: Control-Command-V")
         let toggle = #selector(EditorWindowController.toggleDocumentPreview(_:))
         /// Whether the action, sent to the first responder, reaches this tab: the walk AppKit makes.
         func reaches(_ tab: EditorWindowController) -> Bool {
@@ -2648,9 +2802,9 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
             window.makeFirstResponder(focus)
             check(keyboard(in: focus, of: host), "fixture: the keyboard is in the preview of \(name)")
             let swallowed = window.performKeyEquivalent(with: key)
-            print("NOTE \(name): the preview's views \(swallowed ? "answered" : "did not answer") Shift-Command-V themselves")
+            print("NOTE \(name): the preview's views \(swallowed ? "answered" : "did not answer") Control-Command-V themselves")
             if !(focus is WKWebView), descendants(of: focus, as: WKWebView.self).isEmpty {
-                check(!swallowed, "no view of the \(name) preview takes Shift-Command-V for itself, so it reaches the menu")
+                check(!swallowed, "no view of the \(name) preview takes Control-Command-V for itself, so it reaches the menu")
             }
             check(
                 reaches(tab) && tab.validateMenuItem(NSMenuItem(title: "", action: toggle, keyEquivalent: "")),
@@ -2664,7 +2818,7 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         check(tab.findBarVisible && !keyboard(in: tab.primaryEditor, of: host), "fixture: the keyboard is in the find field")
         check(
             !window.performKeyEquivalent(with: key),
-            "the find field does not take Shift-Command-V for itself")
+            "the find field does not take Control-Command-V for itself")
         check(reaches(tab) && host.active === tab, "and the menu's action reaches the active tab from the find field")
         tab.hideFind(nil)
         document.close()
@@ -3070,6 +3224,547 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         wide.pane.layoutSubtreeIfNeeded()
         let relaid = wide.pane.messageLabel.convert(wide.pane.messageLabel.bounds, to: wide.pane)
         check(relaid.width >= minimum - 21, "a pane made narrow lays the row out again: \(relaid)")
+    }
+
+    // MARK: Scroll sync in Both
+
+    private static func scrollSyncMarkdown(
+        root: URL, app: AppDelegate, host: WorkspaceWindowController, listener: LoopbackListener
+    ) throws {
+        let folder = root.appendingPathComponent("sync")
+        var lines = [
+            "# Long document", "", "![remote](\(listener.base)/sync.png)", "",
+            "<script>document.documentElement.setAttribute('data-ran', 'markdown')</script>", "",
+            "<img src=\"x\" onerror=\"document.title = 'Onerror ran'\">", ""
+        ]
+        var headingLine: [Int: Int] = [:]
+        for section in 1...120 {
+            headingLine[section] = lines.count
+            lines += ["## Section \(section)", ""]
+            lines += [String(repeating: "Paragraph \(section) has words. ", count: 4 + (section % 5) * 12), ""]
+            lines += ["- first item of \(section)", "- second item", "- third item", ""]
+            lines += ["```", "code of section \(section)", "second code line", "third code line", "```", ""]
+        }
+        func heading(_ section: Int) throws -> Int { try requireValue(headingLine[section], "fixture: heading line") }
+        let (document, tab) = try open(write(lines.joined(separator: "\n") + "\n", "long.md", in: folder))
+        check(app.settings.value.syncsPreviewScrolling, "Sync scrolling in Both is on until it is switched off")
+        check(tab.setViewMode(.both), "fixture: the long Markdown document shows Both")
+        waitCurrent(tab, "long Markdown")
+        let coordinator = try requireValue(tab.previewCoordinator, "coordinator")
+        let sync = coordinator.scrollSync
+        let presenter = try requireValue(coordinator.pane.webPresenter, "web presenter")
+        let web = try requireValue(presenter.webView, "web view")
+        let editor = tab.primaryEditor
+        let map = try requireValue(presenter.scrollMap, "the rendered Markdown page has a scroll map")
+        check(
+            number(web, "document.body.children.length") == Double(map.count) && map.count == 4 + 120 * 4,
+            "the map has one entry for each top-level block of the page: \(map.count)")
+        check(
+            sync.isWatching && presenter.followGeneration != 0,
+            "in Both, with sync on, the source and the page are followed")
+        let height = try requireValue(number(web, "window.innerHeight"), "window height")
+        func isVisible(_ text: String) -> Bool {
+            guard let top = blockTop(web, text) else { return false }
+            return top >= -1 && top < height
+        }
+        let keyboardBefore = host.window?.firstResponder
+        let stateBefore = [editor.selectionAnchor, editor.selectionCaret, Int(editor.revision)]
+
+        // Source to preview.
+        let line60 = try heading(60)
+        check(!isVisible("Section 60"), "fixture: the heading of section 60 starts out of view")
+        editor.scrollTo(documentLine: line60, subline: 0)
+        check(editor.firstVisibleDocumentLine == line60, "fixture: the source shows the heading's line at its top")
+        wait("the preview follows the source") { isVisible("Section 60") }
+        check(
+            isVisible("Section 60"),
+            "scrolling the source to a heading's line brings that heading into the preview's visible area (top \(blockTop(web, "Section 60") ?? -1) of \(height))"
+        )
+        check(
+            (blockTop(web, "Section 60") ?? 99) < 2,
+            "at the top of it: \(blockTop(web, "Section 60") ?? -1)")
+        var counts = sync.checkRecord
+        settle(0.3)
+        check(
+            editor.firstVisibleDocumentLine == line60 && sync.checkRecord == counts && counts.sourceScrolls == 0,
+            "the preview's own scroll is not answered: the source stays on the line and nothing more scrolls")
+
+        // Preview to source.
+        let line90 = try heading(90)
+        let block90 = try requireValue(map.position(forLine: line90)?.block, "block of heading 90")
+        func scrollPage(toBlock block: Int, fraction: Double = 0, nudge: Double = 1) {
+            _ = script(
+                web,
+                "(function () { var box = document.body.children[\(block)].getBoundingClientRect();"
+                    + " window.scrollTo(0, box.top + window.scrollY + box.height * \(fraction) + \(nudge)); })()")
+        }
+        scrollPage(toBlock: block90)
+        wait("the source follows the preview") { editor.firstVisibleDocumentLine == line90 }
+        check(
+            editor.firstVisibleDocumentLine == line90,
+            "scrolling the preview to a heading scrolls the source to that heading's line: \(editor.firstVisibleDocumentLine) for \(line90)"
+        )
+        counts = sync.checkRecord
+        let pageY = number(web, "window.scrollY")
+        settle(0.3)
+        check(
+            number(web, "window.scrollY") == pageY && sync.checkRecord == counts && counts.previewScrolls == 1,
+            "the source's own scroll is not answered: the page stays where the person put it")
+        let codeLine = try heading(30) + 8
+        let code = try requireValue(map.position(forLine: codeLine), "block of the code in section 30")
+        check(
+            map.blocks[code.block].firstLine == codeLine && map.blocks[code.block].lineCount == 5
+                && code.fraction == 0,
+            "fixture: the fenced code of section 30 is one block of five lines")
+        scrollPage(toBlock: code.block, fraction: 0.6, nudge: 0)
+        wait("the source follows into a block") { (codeLine..<codeLine + 5).contains(editor.firstVisibleDocumentLine) }
+        check(
+            (codeLine + 1..<codeLine + 5).contains(editor.firstVisibleDocumentLine),
+            "scrolling the preview into a block lands the source inside that block's lines, past its first: \(editor.firstVisibleDocumentLine) in \(codeLine)..<\(codeLine + 5)"
+        )
+        check(
+            [editor.selectionAnchor, editor.selectionCaret, Int(editor.revision)] == stateBefore && !editor.modified
+                && !document.isDocumentEdited && host.window?.firstResponder === keyboardBefore
+                && document.fileURL?.lastPathComponent == "long.md",
+            "sync moved neither the selection nor the caret nor the keyboard, and changed neither the text nor the file")
+
+        // Reports are checked: only three numbers that name this page and a place in its map count.
+        let generation = presenter.followGeneration
+        let lineBefore = editor.firstVisibleDocumentLine
+        let handler = "window.webkit.messageHandlers.textTankPreviewSync.postMessage"
+        let refused = [
+            "[\(generation), 1e9, 0]", "[\(generation), -1, 0]", "[\(generation), 0.5, 0]", "[\(generation), 0, 1.5]",
+            "[\(generation), 0, -0.1]", "[\(generation), 0]", "[\(generation), 0, 0, 0]", "[\(generation + 1), 0, 0]",
+            "[0, 0, 0]", "[true, 0, 0]", "['\(generation)', 0, 0]", "'top'", "{ block: 0, fraction: 0 }",
+            "[\(generation), null, 0]"
+        ]
+        let rejectedBefore = presenter.checkRecord.rejectedScrollReports
+        let acceptedBefore = presenter.checkRecord.acceptedScrollReports
+        for body in refused { _ = script(web, "\(handler)(\(body)); 0") }
+        wait("refused reports counted") {
+            presenter.checkRecord.rejectedScrollReports == rejectedBefore + refused.count
+        }
+        check(
+            presenter.checkRecord.rejectedScrollReports == rejectedBefore + refused.count
+                && presenter.checkRecord.acceptedScrollReports == acceptedBefore
+                && editor.firstVisibleDocumentLine == lineBefore,
+            "a report that is not exactly this page's number, a block of its map and a fraction from 0 to 1 is dropped (\(presenter.checkRecord.rejectedScrollReports - rejectedBefore) of \(refused.count)) and scrolls nothing"
+        )
+        _ = script(web, "\(handler)([\(generation), \(block90), 0]); 0")
+        wait("a well-formed report scrolls the source") { editor.firstVisibleDocumentLine == line90 }
+        check(
+            editor.firstVisibleDocumentLine == line90
+                && presenter.checkRecord.acceptedScrollReports == acceptedBefore + 1,
+            "control: the same call with a place the map has is accepted")
+
+        // Nothing of the page ran, and nothing was fetched, with sync on.
+        let world = Box<String?>(nil), worldDone = Box(false)
+        web.evaluateJavaScript(
+            "typeof globalThis.textTankPreviewSync + ' ' + typeof (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.textTankPreviewSync)",
+            in: nil, in: .page
+        ) { result in
+            if case .success(let value) = result { world.value = value as? String }
+            worldDone.value = true
+        }
+        wait("the page's own world answered or refused") { worldDone.value }
+        print("NOTE the page's own script world sees: \(world.value ?? "nothing; no script runs there")")
+        check(
+            world.value == "undefined undefined",
+            "the page's own script world answers, and has neither the sync object nor its message handler: \(world.value ?? "no answer")"
+        )
+        check(
+            PreviewWebPresenter.scriptWorld === WKContentWorld.defaultClient
+                && PreviewWebPresenter.scriptWorld !== WKContentWorld.page
+                && web.configuration.userContentController.userScripts.count == 2
+                && web.configuration.userContentController.userScripts.allSatisfy(\.isForMainFrameOnly),
+            "both scripts and both handlers are registered by one function, in the application's own world")
+        // Negative control: the same registration made in the page's world of a throwaway web
+        // view, also with page JavaScript off, is seen by the same probe.
+        let probe =
+            "typeof globalThis.textTankPreviewSync + ' ' + typeof (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.textTankPreviewSync)"
+        final class Ignoring: NSObject, WKScriptMessageHandler {
+            func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {}
+        }
+        let exposedConfiguration = WKWebViewConfiguration()
+        exposedConfiguration.websiteDataStore = .nonPersistent()
+        exposedConfiguration.defaultWebpagePreferences.allowsContentJavaScript = false
+        PreviewWebPresenter.installScripts(
+            on: exposedConfiguration.userContentController, linkReceiver: Ignoring(), scrollReceiver: Ignoring(),
+            world: .page)
+        let exposed = WKWebView(frame: NSRect(x: 0, y: 0, width: 50, height: 50), configuration: exposedConfiguration)
+        exposed.loadHTMLString("<p>control</p>", baseURL: nil)
+        wait("control page loaded") { !exposed.isLoading }
+        let exposedWorld = Box<String?>(nil), exposedDone = Box(false)
+        exposed.evaluateJavaScript(probe, in: nil, in: .page) { result in
+            if case .success(let value) = result { exposedWorld.value = value as? String }
+            exposedDone.value = true
+        }
+        wait("control world answered") { exposedDone.value }
+        print("NOTE with the registration in the page's world the probe sees: \(exposedWorld.value ?? "no answer")")
+        check(
+            exposedWorld.value?.hasSuffix(" object") == true,
+            "control: registered in the page's world instead, the handler is there for the page and the probe says so: \(exposedWorld.value ?? "no answer")"
+        )
+        check(
+            script(web, "typeof globalThis.textTankPreviewSync.show") as? String == "function",
+            "control: the application's own world has it")
+        check(
+            web.configuration.defaultWebpagePreferences.allowsContentJavaScript == false && web.title == "long.md"
+                && script(web, "document.documentElement.getAttribute('data-ran')") is NSNull
+                && pageText(tab).contains("<script>document.documentElement"),
+            "with sync on, page JavaScript is still off and the script and handler typed in the Markdown are text: title \(web.title ?? "nil")"
+        )
+        check(
+            coordinator.pane.message == "1 external resource was blocked.",
+            "the remote image is still blocked: \(coordinator.pane.message ?? "nil")")
+
+        // An edit above what is being read.
+        scrollPage(toBlock: code.block, fraction: 0.5, nudge: 0)
+        wait("fixture: back in section 30") { (codeLine..<codeLine + 5).contains(editor.firstVisibleDocumentLine) }
+        settle(0.2)
+        let sourceTopBefore = editor.firstVisibleDocumentLine
+        let topBefore = try requireValue(blockTop(web, "Section 31"), "the heading after the place being read")
+        let offsetBefore = number(web, "window.scrollY") ?? 0
+        counts = sync.checkRecord
+        try replaceInPlace(
+            "## Section 2\n", with: "Inserted paragraph one.\n\nInserted paragraph two.\n\n## Section 2\n", in: editor)
+        check(
+            editor.firstVisibleDocumentLine == sourceTopBefore + 4,
+            "fixture: the source kept showing the same text, now four lines further down: \(editor.firstVisibleDocumentLine)")
+        waitCurrent(tab, "after an edit above")
+        wait("the reader's place is restored") { abs((blockTop(web, "Section 31") ?? 1e9) - topBefore) < 2 }
+        let offsetAfter = number(web, "window.scrollY") ?? 0
+        check(
+            pageText(tab).contains("Inserted paragraph two.") && abs((blockTop(web, "Section 31") ?? 1e9) - topBefore) < 2,
+            "an edit above the visible area does not move what the reader is looking at: the next heading was at \(topBefore) and is at \(blockTop(web, "Section 31") ?? -1)"
+        )
+        check(
+            offsetAfter > offsetBefore + 20,
+            "by block, not by offset: the page is \(offsetAfter - offsetBefore) points further down than before the two paragraphs were added"
+        )
+        check(
+            presenter.scrollMap?.count == map.count + 2 && presenter.followGeneration != generation
+                && presenter.followGeneration != 0,
+            "the new page has its own map and its own number, so a report from the page before it is dropped")
+        settle(0.3)
+        check(
+            sync.checkRecord.sourceScrolls == counts.sourceScrolls && sync.checkRecord.previewScrolls == counts.previewScrolls,
+            "restoring the place scrolled nothing through sync")
+        // Typing where the caret is, in view: neither side moves.
+        let sourceTop = editor.firstVisibleDocumentLine
+        let typedTop = try requireValue(blockTop(web, "Section 31"), "heading before typing")
+        try replace("code of section 31", with: "code of section 31, typed", in: editor)
+        waitCurrent(tab, "after typing in view")
+        wait("the typed text is shown") { pageText(tab).contains("code of section 31, typed") }
+        settle(0.2)
+        check(
+            abs((blockTop(web, "Section 31") ?? 1e9) - typedTop) < 2 && editor.firstVisibleDocumentLine == sourceTop,
+            "typing in view does not make the preview jump: \(typedTop) then \(blockTop(web, "Section 31") ?? -1); source at \(editor.firstVisibleDocumentLine) for \(sourceTop)"
+        )
+        check(tab.primaryEditor.executeCommand(undo), "fixture: Undo the typing")
+        waitCurrent(tab, "after Undo of typing")
+
+        // Preview alone: nothing is followed.
+        func reports() -> Int {
+            presenter.checkRecord.acceptedScrollReports + presenter.checkRecord.rejectedScrollReports
+        }
+        check(tab.setViewMode(.preview), "fixture: Preview alone")
+        check(
+            !sync.isWatching && presenter.followGeneration == 0,
+            "in Preview alone no observer is held and the page reports nothing")
+        counts = sync.checkRecord
+        var reported = reports()
+        _ = script(web, "window.scrollBy(0, 400); 0")
+        editor.scrollTo(documentLine: 5, subline: 0)
+        settle(0.4)
+        check(
+            sync.checkRecord == counts && reports() == reported && editor.firstVisibleDocumentLine == 5,
+            "scrolling either side in Preview alone does no sync work")
+        check(tab.setViewMode(.both), "fixture: Both again")
+        check(sync.isWatching && presenter.followGeneration != 0, "Both follows again")
+
+        // A hidden tab.
+        let (other, otherTab) = try open("other.md", "# Other\n", in: folder)
+        check(host.active === otherTab && !tab.isPresented, "fixture: the long document is hidden behind another tab")
+        check(
+            !sync.isWatching && presenter.followGeneration == 0,
+            "a hidden tab holds no observer and its page reports nothing")
+        counts = sync.checkRecord
+        reported = reports()
+        editor.scrollTo(documentLine: 40, subline: 0)
+        _ = script(web, "window.scrollBy(0, 300); 0")
+        settle(0.4)
+        check(sync.checkRecord == counts && reports() == reported, "scrolling a hidden tab does no sync work")
+        host.activate(tab)
+        wait("shown again") { sync.isWatching }
+        other.close()
+        _ = otherTab
+        editor.scrollTo(documentLine: try heading(60), subline: 0)
+        wait("the preview follows again") { isVisible("Section 60") }
+        check(isVisible("Section 60"), "shown again, the preview follows the source")
+
+        // The switch.
+        var value = app.settings.value
+        value.syncPreviewScrolling = false
+        try app.settings.save(value)
+        counts = sync.checkRecord
+        let line100 = try heading(100)
+        editor.scrollTo(documentLine: line100, subline: 0)
+        _ = script(web, "window.scrollTo(0, 0); 0")
+        settle(0.4)
+        check(
+            sync.checkRecord == counts && editor.firstVisibleDocumentLine == line100
+                && number(web, "window.scrollY") == 0,
+            "with Sync scrolling in Both switched off, neither side follows the other")
+        value.syncPreviewScrolling = nil
+        try app.settings.save(value)
+        editor.scrollTo(documentLine: try heading(70), subline: 0)
+        wait("switched on again") { isVisible("Section 70") }
+        check(isVisible("Section 70"), "switched on again, it follows at the next scroll with nothing else to do")
+
+        // Source: everything is released.
+        check(tab.setViewMode(.source), "fixture: Source")
+        counts = sync.checkRecord
+        check(tab.previewCoordinator == nil && !sync.isWatching, "in Source the preview and its sync are gone")
+        editor.scrollTo(documentLine: 10, subline: 0)
+        settle(0.2)
+        check(sync.checkRecord == counts, "scrolling the source in Source does no sync work")
+        settle(0.3)
+        check(listener.connections == 1, "scroll sync made no network connection")
+        document.close()
+    }
+
+    /// An HTML page is not followed, and with sync on in Both nothing of the page runs: not a
+    /// script, not a scroll listener it registers, not an inline handler.
+    private static func scrollSyncScripts(root: URL, listener: LoopbackListener) throws {
+        let base = listener.base
+        let paragraphs = (1...300).map {
+            "<p onmouseover=\"document.title = 'Mouseover ran'\">Paragraph \($0)</p>"
+        }.joined(separator: "\n")
+        let html = """
+            <!DOCTYPE html>
+            <html>
+            <head>
+            <title>Sync fixture</title>
+            <script>
+            document.documentElement.setAttribute("data-ran", "inline");
+            window.addEventListener("scroll", function () { document.title = "Scroll listener ran"; });
+            new Image().src = "\(base)/script-beacon.png";
+            </script>
+            <script src="\(base)/remote-sync.js"></script>
+            </head>
+            <body onscroll="document.title = 'Onscroll ran'" onload="document.title = 'Onload ran'">
+            <img src="\(base)/sync-html.png" onerror="document.title = 'Onerror ran'">
+            \(paragraphs)
+            </body>
+            </html>
+
+            """
+        let (document, tab) = try open("scripts.html", html, in: root.appendingPathComponent("sync-html"))
+        check(tab.setViewMode(.both), "fixture: the HTML document shows Both")
+        waitCurrent(tab, "HTML in Both")
+        let coordinator = try requireValue(tab.previewCoordinator, "coordinator")
+        let presenter = try requireValue(coordinator.pane.webPresenter, "web presenter")
+        let web = try requireValue(presenter.webView, "web view")
+        check(
+            EditorServices.current?.settings?.value.syncsPreviewScrolling == true && tab.viewMode == .both,
+            "fixture: sync is on and the tab shows Both")
+        check(
+            presenter.scrollMap == nil && presenter.followGeneration == 0 && !coordinator.scrollSync.isWatching,
+            "an HTML page has no map and is not followed")
+        tab.primaryEditor.scrollTo(documentLine: 150, subline: 0)
+        _ = script(web, "window.scrollTo(0, 2000); 0")
+        _ = script(web, "window.dispatchEvent(new Event('scroll')); document.body.dispatchEvent(new Event('scroll')); 0")
+        settle(0.5)
+        check(
+            web.title == "Sync fixture" && script(web, "document.documentElement.getAttribute('data-ran')") is NSNull,
+            "scrolling ran no script, scroll listener or inline handler of the page: title \(web.title ?? "nil")")
+        check(
+            tab.primaryEditor.firstVisibleDocumentLine == 150 && number(web, "window.scrollY") == 2000
+                && presenter.checkRecord.acceptedScrollReports == 0 && presenter.checkRecord.rejectedScrollReports == 0
+                && presenter.checkRecord.scrollCommands == 0,
+            "neither side of an HTML document moved the other, and the page reported nothing")
+        check(
+            web.configuration.defaultWebpagePreferences.allowsContentJavaScript == false
+                && PreviewSchemeHandler.responseHeaders(mimeType: "text/html", length: 0)["Content-Security-Policy"]
+                    == StaticHTMLPolicy.contentSecurityPolicy()
+                && StaticHTMLPolicy.contentSecurityPolicy().contains("script-src 'none'"),
+            "page JavaScript is off and the response header still carries the same policy")
+        check(listener.connections == 1, "the page with scripts made no network connection with sync on")
+        check(
+            !PreviewWebPresenter.syncScript.contains("smooth") && PreviewWebPresenter.syncScript.contains("'instant'")
+                && !PreviewWebPresenter.syncScript.contains("fetch") && !PreviewWebPresenter.syncScript.contains("XMLHttp")
+                && !PreviewWebPresenter.syncScript.contains("innerHTML"),
+            "the sync script scrolls at once, never animated, and neither loads nor writes anything")
+        document.close()
+    }
+
+    /// Delimited text (a row for the line it starts on, also from a line inside a quoted value)
+    /// and JSON (the row of the value that starts on or before the line).
+    private static func scrollSyncRows(root: URL) throws {
+        let folder = root.appendingPathComponent("sync-rows")
+        func top(_ table: NSTableView) -> Int {
+            guard let clip = table.enclosingScrollView?.contentView else { return -1 }
+            return table.row(at: NSPoint(x: 1, y: clip.bounds.minY + clip.contentInsets.top + 1))
+        }
+        func scroll(_ table: NSTableView, toRow row: Int) throws {
+            let scrollView = try requireValue(table.enclosingScrollView, "scroll view")
+            let clip = scrollView.contentView
+            clip.scroll(to: NSPoint(x: clip.bounds.minX, y: table.rect(ofRow: row).minY - clip.contentInsets.top))
+            scrollView.reflectScrolledClipView(clip)
+        }
+
+        // Row 10, 20, ... hold a value with a line break inside its quotation marks.
+        let csv = (1...400).map { row in
+            row % 10 == 0 ? "\"first \(row)\nsecond line\",b\(row),c\(row)" : "a\(row),b\(row),c\(row)"
+        }.joined(separator: "\n") + "\n"
+        let (csvDocument, csvTab) = try open("rows.csv", csv, in: folder)
+        check(csvTab.setViewMode(.both), "fixture: the CSV document shows Both")
+        waitCurrent(csvTab, "CSV in Both")
+        let csvSync = try requireValue(csvTab.previewCoordinator?.scrollSync, "sync")
+        let tablePresenter = try requireValue(csvTab.previewCoordinator?.pane.tablePresenter, "table presenter")
+        let table = try requireValue(tablePresenter.table, "table")
+        let tableView = tablePresenter.tableView
+        check(
+            table.rowCount == 400 && table.rowLines[10] == 12 && table.rowLines[399] == 400 + 39,
+            "fixture: 400 rows over 440 lines; a quoted line break makes a row two lines: \(table.rowLines[10])")
+        check(csvSync.isWatching, "a CSV document in Both is followed")
+        let csvEditor = csvTab.primaryEditor
+        csvEditor.scrollTo(documentLine: table.rowLines[300] - 1, subline: 0)
+        wait("the table follows the source") { top(tableView) == 300 }
+        check(top(tableView) == 300, "scrolling the source to a row's line puts that row at the top: \(top(tableView))")
+        // Row 209 (the 210th) starts on a line and continues on the next; the next line is still that row.
+        check(table.rowLines[210] - table.rowLines[209] == 2, "fixture: row 209 is two lines")
+        csvEditor.scrollTo(documentLine: table.rowLines[209], subline: 0)
+        wait("the table follows into a quoted value") { top(tableView) == 209 }
+        check(
+            top(tableView) == 209,
+            "a line inside a quoted value belongs to the row that value is in: \(top(tableView))")
+        var counts = csvSync.checkRecord
+        settle(0.3)
+        check(
+            csvEditor.firstVisibleDocumentLine == table.rowLines[209] && csvSync.checkRecord == counts,
+            "the table's own scroll is not answered")
+        try scroll(tableView, toRow: 120)
+        wait("the source follows the table") { csvEditor.firstVisibleDocumentLine == table.rowLines[120] - 1 }
+        check(
+            csvEditor.firstVisibleDocumentLine == table.rowLines[120] - 1,
+            "scrolling the table to a row scrolls the source to the line it starts on: \(csvEditor.firstVisibleDocumentLine) for \(table.rowLines[120] - 1)"
+        )
+        counts = csvSync.checkRecord
+        settle(0.3)
+        check(top(tableView) == 120 && csvSync.checkRecord == counts, "the source's own scroll is not answered")
+        check(csvTab.setViewMode(.preview), "fixture: Preview alone")
+        check(!csvSync.isWatching, "a table in Preview alone is not followed")
+        try scroll(tableView, toRow: 30)
+        settle(0.3)
+        check(
+            csvSync.checkRecord == counts && csvEditor.firstVisibleDocumentLine == table.rowLines[120] - 1,
+            "and scrolling it does no sync work")
+        csvDocument.close()
+
+        // 300 objects of four lines each; the object with id N starts on zero-based line 4N - 3.
+        let objects = (1...300).map { "  {\n    \"id\": \($0),\n    \"tags\": [\"a\", \"b\"]\n  }" }
+        let json = "[\n" + objects.joined(separator: ",\n") + "\n]\n"
+        let (jsonDocument, jsonTab) = try open("rows.json", json, in: folder)
+        check(jsonTab.setViewMode(.both), "fixture: the JSON document shows Both")
+        waitCurrent(jsonTab, "JSON in Both")
+        let jsonSync = try requireValue(jsonTab.previewCoordinator?.scrollSync, "sync")
+        let outlinePresenter = try requireValue(jsonTab.previewCoordinator?.pane.outlinePresenter, "outline presenter")
+        let outline = outlinePresenter.outlineView
+        check(outline.numberOfRows == 301 && jsonSync.isWatching, "fixture: Document and 300 closed rows, followed")
+        let jsonEditor = jsonTab.primaryEditor
+        // The "tags" line of the object with id 200: its row is closed, so the object's row leads.
+        jsonEditor.scrollTo(documentLine: 4 * 200 - 3 + 2, subline: 0)
+        wait("the tree follows the source") { top(outline) == 200 }
+        check(
+            top(outline) == 200 && outlinePresenter.sourceLine(ofRow: 200) == 4 * 200 - 3,
+            "scrolling the source into a value puts the row of the value that holds it at the top: \(top(outline))")
+        try scroll(outline, toRow: 120)
+        wait("the source follows the tree") { jsonEditor.firstVisibleDocumentLine == 4 * 120 - 3 }
+        check(
+            jsonEditor.firstVisibleDocumentLine == 4 * 120 - 3,
+            "scrolling the tree to a row scrolls the source to the line its value starts on: \(jsonEditor.firstVisibleDocumentLine)"
+        )
+        counts = jsonSync.checkRecord
+        settle(0.3)
+        check(top(outline) == 120 && jsonSync.checkRecord == counts, "neither scroll is answered")
+
+        // A new parse keeps the tree's offset in points. Three values added on the first line
+        // move no source line, so nothing scrolls the source, but every row moves down three.
+        func shownAtTop() -> Int { outlinePresenter.sourceLine(ofRow: top(outline)) ?? -1 }
+        let lineAtTop = shownAtTop()
+        try replaceInPlace("[\n", with: "[ 0, 0, 0,\n", in: jsonEditor)
+        waitCurrent(jsonTab, "JSON after values were added above")
+        wait("the tree shows the same value at its top") { top(outline) == 123 }
+        check(
+            outline.numberOfRows == 304 && top(outline) == 123 && shownAtTop() == lineAtTop
+                && lineAtTop == 4 * 120 - 3 && jsonEditor.firstVisibleDocumentLine == 4 * 120 - 3,
+            "with sync on, rows added above without moving a line do not slide the tree: row \(top(outline)) of \(outline.numberOfRows), value from line \(shownAtTop()) as before (\(lineAtTop))"
+        )
+        jsonDocument.close()
+
+        // The same for the table when rows are added above: the lines move, the source keeps
+        // showing the same text, and the table keeps showing the same row.
+        let (againDocument, againTab) = try open("again.csv", csv, in: folder)
+        check(againTab.setViewMode(.both), "fixture: a CSV document shows Both")
+        waitCurrent(againTab, "CSV again")
+        let againPresenter = try requireValue(againTab.previewCoordinator?.pane.tablePresenter, "table presenter")
+        let againView = againPresenter.tableView
+        againTab.primaryEditor.scrollTo(documentLine: table.rowLines[150] - 1, subline: 0)
+        wait("fixture: the table follows") { top(againView) == 150 }
+        let cellBefore = againPresenter.displayText(row: top(againView), column: 1)
+        try replaceInPlace("a1,b1,c1\n", with: "a1,b1,c1\nnew1,x,y\nnew2,x,y\n", in: againTab.primaryEditor)
+        waitCurrent(againTab, "CSV after rows were added above")
+        wait("the table shows the same row at its top") { top(againView) == 152 }
+        check(
+            cellBefore == "b151" && top(againView) == 152
+                && againPresenter.displayText(row: top(againView), column: 1) == cellBefore,
+            "with sync on, rows added above do not slide the table: row \(top(againView)) shows \(againPresenter.displayText(row: top(againView), column: 1))"
+        )
+        againDocument.close()
+    }
+
+    /// A document that Settings opens in Both is followed exactly as one switched by hand: the
+    /// rule goes through `setViewMode`, which makes the same coordinator.
+    private static func scrollSyncOpenIn(root: URL, app: AppDelegate) throws {
+        let folder = root.appendingPathComponent("sync-open-in")
+        let text = (1...200).map { "## Heading \($0)\n\nParagraph \($0).\n" }.joined(separator: "\n")
+        let url = try write(text, "opened.md", in: folder)
+        var value = app.settings.value
+        value.setPreviewOpenMode(.both, for: .markdown)
+        try app.settings.save(value)
+        defer {
+            var restored = app.settings.value
+            restored.setPreviewOpenMode(.source, for: .markdown)
+            _ = try? app.settings.save(restored)
+        }
+        let document = try DocumentFactory.openCaptured(
+            WorkspaceStore.captureRegularFile(url, maximumBytes: Int.max), from: url)
+        let tab = try requireValue(document.presentation, "fixture: tab for opened.md")
+        check(tab.viewMode == .both, "fixture: Settings opened the Markdown document in Both")
+        waitCurrent(tab, "opened in Both")
+        let coordinator = try requireValue(tab.previewCoordinator, "coordinator")
+        let presenter = try requireValue(coordinator.pane.webPresenter, "web presenter")
+        let web = try requireValue(presenter.webView, "web view")
+        wait("armed") { coordinator.scrollSync.isWatching && presenter.followGeneration != 0 }
+        check(
+            coordinator.scrollSync.isWatching && presenter.followGeneration != 0 && presenter.scrollMap?.count == 400,
+            "a tab opened in Both by Settings holds the observers and its page is armed, with no mode chosen by hand")
+        let height = number(web, "window.innerHeight") ?? 0
+        tab.primaryEditor.scrollTo(documentLine: 4 * 119, subline: 0)
+        wait("the preview follows the source") { (blockTop(web, "Heading 120") ?? -9) >= -1 }
+        check(
+            (blockTop(web, "Heading 120").map { $0 >= -1 && $0 < height }) == true,
+            "and scrolling its source brings the matching heading into the preview")
+        _ = script(
+            web,
+            "window.scrollTo(0, document.body.children[100].getBoundingClientRect().top + window.scrollY + 1); 0")
+        wait("the source follows the preview") { tab.primaryEditor.firstVisibleDocumentLine == 4 * 50 }
+        check(
+            tab.primaryEditor.firstVisibleDocumentLine == 4 * 50,
+            "and scrolling its preview scrolls the source: \(tab.primaryEditor.firstVisibleDocumentLine)")
+        document.close()
     }
 
     // MARK: Fail closed

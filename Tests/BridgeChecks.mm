@@ -4,6 +4,7 @@
 #import "../Sources/Search/TTSearchEngine.h"
 #import "ScintillaView.h"
 #import <objc/runtime.h>
+#include <array>
 #import "Checks.h"
 #import "EditorWordSelectionChecks.h"
 #import "BidiSelectionChecks.inc"
@@ -1015,6 +1016,18 @@ int main(int argc, char **argv) {
                   "Fold Current at a body line contracts the nearest real header only");
             check(fold.selectionCaret == caret && [peer message:SCI_GETLINEVISIBLE wParam:3],
                   "Fold Current preserves the caret byte position and the other view");
+            {
+                // A preview of a line hidden in a fold shows the fold's own line and unfolds nothing.
+                const NSInteger held = fold.selectionCaret;
+                check([fold previewLine:4 column:1] == 3 && !visible(3) && visible(2) && fold.statusInfo.line == 3
+                          && ![fold lineIsVisible:4] && [fold lineIsVisible:3] && [peer message:SCI_GETLINEVISIBLE wParam:3],
+                      "A Go to Line preview of a folded line leaves the fold closed and shows its header");
+                check([fold previewLine:4 column:3] == 3 && fold.selectionCaret == [engine message:SCI_POSITIONFROMLINE wParam:2]
+                          && [fold previewLine:0 column:1] == 0 && [fold previewLine:9999 column:1] == 0 && !visible(3),
+                      "A column is not applied to the header standing in for a folded line, and a line that does not exist changes nothing");
+                [fold setSelectionAnchor:held caret:held];
+                check(!visible(3) && fold.revision == revision, "Putting the caret back leaves the fold closed and the text unchanged");
+            }
             check([fold goToLine:4] && visible(3), "Explicit Go To Line reveals the target after folding");
             [fold goToLine:1];
             [fold executeCommand:@"foldLevel2"];
@@ -1339,6 +1352,298 @@ int main(int argc, char **argv) {
         ed.text=@"one\n";
         [ed setSyntaxFont:STYLE_LINENUMBER name:@"Menlo" size:40];
         check(needed(sv,"99")>48 && margin(sv)>=needed(sv,"99"), "Line-number margin follows a larger line-number font");
+        });
+        ttchecks::section("stored view choices and horizontal range", [&] {
+        // V4: the three View choices are plain per-view properties that Editor Settings sets on every view.
+        TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        ScintillaView *sv=(ScintillaView *)ed.subviews.firstObject;
+        check(ed.lineNumbersVisible && !ed.whitespaceVisible && !ed.lineEndingsVisible, "V4 a new view shows line numbers and hides whitespace and line-ending marks");
+        ed.lineNumbersVisible=NO; ed.whitespaceVisible=YES; ed.lineEndingsVisible=YES;
+        check([sv message:SCI_GETMARGINWIDTHN wParam:0]==0 && [sv message:SCI_GETVIEWWS]==SCWS_VISIBLEALWAYS && [sv message:SCI_GETVIEWEOL]==1,
+              "V4 the view-choice properties set the gutter, whitespace marks and line-ending marks");
+        check(![ed commandIsChecked:@"toggleLineNumbers"] && [ed commandIsChecked:@"showWhitespace"] && [ed commandIsChecked:@"toggleEOL"],
+              "V4 the catalog toggles report the same state the properties set");
+        ed.lineNumbersVisible=NO; ed.whitespaceVisible=YES; ed.lineEndingsVisible=YES;
+        check(!ed.lineNumbersVisible && ed.whitespaceVisible && ed.lineEndingsVisible, "V4 setting a view choice to its current value changes nothing");
+        [ed executeCommand:@"toggleLineNumbers"]; [ed executeCommand:@"showWhitespace"]; [ed executeCommand:@"toggleEOL"];
+        check(ed.lineNumbersVisible && [sv message:SCI_GETMARGINWIDTHN wParam:0]>=48 && !ed.whitespaceVisible && !ed.lineEndingsVisible,
+              "V4 the catalog toggles flip the properties, and showing the gutter sizes it");
+        check(ed.followsDefaultZoom, "V4 a new view follows the default zoom");
+        [ed applyDefaultZoomLevel:2];
+        check(ed.followsDefaultZoom && ed.zoomLevel==2, "V4 a default zoom change keeps a following view following");
+        ed.zoomLevel=5;
+        check(!ed.followsDefaultZoom, "V4 a view zoomed away from the default no longer follows it");
+        [ed resetZoomLevel];
+        check(ed.followsDefaultZoom && ed.zoomLevel==2, "V4 Actual Size returns the view to following the default");
+        [ed applyDefaultZoomLevel:0];
+        // The horizontal range is what the laid-out lines need, not Scintilla's fixed 2000 px.
+        NSWindow *host=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,600,400) styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:YES];
+        host.contentView=ed; [host.contentView layoutSubtreeIfNeeded];
+        auto paint=[&] { NSBitmapImageRep *rep=[ed bitmapImageRepForCachingDisplayInRect:ed.bounds]; [ed cacheDisplayInRect:ed.bounds toBitmapImageRep:rep]; };
+        auto range=[&] { NSScrollView *scroll=sv.scrollView; return scroll.documentView.frame.size.width - scroll.contentView.bounds.size.width; };
+        paint();
+        check([sv message:SCI_GETSCROLLWIDTHTRACKING]==1 && range()<=0, "an empty document has no horizontal scroll range");
+        ed.text=@"short\nlines\n"; paint();
+        check(range()<=0, "a document narrower than its view has no horizontal scroll range");
+        ed.horizontalScrollOffset=300; paint();
+        check(ed.horizontalScrollOffset==0, "a document with nothing to scroll sideways refuses a horizontal offset");
+        NSString *wide=[@"" stringByPaddingToLength:4000 withString:@"0123456789" startingAtIndex:0];
+        ed.text=[NSString stringWithFormat:@"short\n%@\nshort\n", wide]; paint();
+        const sptr_t lineEnd=[sv message:SCI_GETLINEENDPOSITION wParam:1];
+        const sptr_t lineWidth=[sv message:SCI_POINTXFROMPOSITION wParam:0 lParam:lineEnd]-[sv message:SCI_POINTXFROMPOSITION wParam:0 lParam:[sv message:SCI_POSITIONFROMLINE wParam:1]];
+        check(lineWidth>2000 && [sv message:SCI_GETSCROLLWIDTH]>=lineWidth, "the horizontal range grows to a painted line wider than 2000 px");
+        ed.horizontalScrollOffset=lineWidth; paint();
+        const CGFloat textWidth=sv.scrollView.contentView.bounds.size.width;
+        const sptr_t endX=[sv message:SCI_POINTXFROMPOSITION wParam:0 lParam:lineEnd];
+        check(ed.horizontalScrollOffset>2000 && endX>0 && endX<=textWidth+[sv message:SCI_GETMARGINWIDTHN wParam:0]+[sv message:SCI_GETMARGINWIDTHN wParam:1]+[sv message:SCI_GETMARGINWIDTHN wParam:2],
+              "a long line scrolls fully to its end with wrap off");
+        // A restored offset can arrive before the first paint of a view.
+        TTEditor *fresh=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        fresh.text=ed.text;
+        fresh.horizontalScrollOffset=2500;
+        check(fresh.horizontalScrollOffset==2500, "a horizontal offset set before the first paint is kept when the lines on screen reach it");
+        fresh.wrap=YES; fresh.horizontalScrollOffset=2500;
+        check(fresh.horizontalScrollOffset==0, "a wrapped view has no horizontal offset");
+        });
+        ttchecks::section("change bars", [&] {
+        // DS-D13: Scintilla's change history behind View > Show > Change Bars. The engine has no
+        // query for a line's mark, so the gutter is drawn and its pixels are read: "-" no bar,
+        // "U" the wide unsaved bar, "S" the narrow saved bar at the left, "R" the hollow middle bar
+        // of a line undone to its original text after a save.
+        TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        ScintillaView *sv=(ScintillaView *)ed.subviews.firstObject;
+        NSRulerView *ruler=sv.scrollView.verticalRulerView;
+        check(!ed.changeBarsVisible && !ed.changeTrackingActive && [sv message:SCI_GETCHANGEHISTORY]==SC_CHANGE_HISTORY_DISABLED && [sv message:SCI_GETMARGINWIDTHN wParam:3]==0
+              && [ruler.accessibilityLabel isEqualToString:@"Line numbers and bookmarks"], "Change bars are off in a new view: no margin, no record, the gutter named as before");
+        [ed loadDocumentText:@"one\ntwo\nthree\nfour\n"]; [ed setSavePoint];
+        ed.changeBarsVisible=YES;
+        check(ed.changeBarsVisible && ed.changeTrackingActive && [sv message:SCI_GETCHANGEHISTORY]==(SC_CHANGE_HISTORY_ENABLED|SC_CHANGE_HISTORY_MARKERS) && [sv message:SCI_GETMARGINWIDTHN wParam:3]==8,
+              "Turning change bars on in an unedited document starts the record and shows an 8 px margin");
+        check([ruler.accessibilityLabel isEqualToString:@"Line numbers, bookmarks and change bars"] && [ruler.accessibilityHelp containsString:@"not saved"] && [ruler.accessibilityHelp containsString:@"narrow bar"],
+              "DS-70 the gutter's accessibility description says it shows change bars and what each shape means");
+        auto rgb=[](NSInteger bgr){ return std::array<double,3>{(double)(bgr&0xFF)/255.0,(double)((bgr>>8)&0xFF)/255.0,(double)((bgr>>16)&0xFF)/255.0}; };
+        auto marks=[&](TTEditor *view, int lines) -> std::string {
+            ScintillaView *engine=(ScintillaView *)view.subviews.firstObject;
+            NSRulerView *gutter=engine.scrollView.verticalRulerView;
+            // A margin that has just appeared is laid out by the first drawing pass.
+            [view layoutSubtreeIfNeeded];
+            [gutter cacheDisplayInRect:gutter.bounds toBitmapImageRep:[gutter bitmapImageRepForCachingDisplayInRect:gutter.bounds]];
+            NSBitmapImageRep *rep=[gutter bitmapImageRepForCachingDisplayInRect:gutter.bounds];
+            [gutter cacheDisplayInRect:gutter.bounds toBitmapImageRep:rep];
+            const double scale=(double)rep.pixelsWide/MAX(1.0,gutter.bounds.size.width);
+            double left=0; for(int margin=0;margin<3;++margin) left+=[engine message:SCI_GETMARGINWIDTHN wParam:margin];
+            const double height=[engine message:SCI_TEXTHEIGHT wParam:0];
+            const auto unsaved=rgb(view.unsavedChangeColour), saved=rgb(view.savedChangeColour);
+            auto kind=[&](double x,double y) -> char {
+                NSColor *c=[[rep colorAtX:(NSInteger)(x*scale) y:(NSInteger)(y*scale)] colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+                auto distance=[&](const std::array<double,3> &to){ return fabs(c.redComponent-to[0])+fabs(c.greenComponent-to[1])+fabs(c.blueComponent-to[2]); };
+                if(c && distance(unsaved)<0.12) return 'u';
+                if(c && distance(saved)<0.12) return 's';
+                return '.';
+            };
+            std::string result;
+            for(int line=0;line<lines;++line){
+                const double y=(line+0.5)*height;
+                const std::string cells={kind(left+1.5,y),kind(left+3.5,y),kind(left+6.5,y)};
+                result+= cells=="uuu" ? 'U' : cells=="ss." ? 'S' : cells==".u." ? 'R' : cells=="..." ? '-' : '?';
+            }
+            return result;
+        };
+        check(marks(ed,4)=="----", "An unedited document has no change bars");
+        [ed setSelectionAnchor:4 caret:4]; [ed replaceSelection:@"X"];
+        check(marks(ed,4)=="-U--", "Editing a line marks it with the wide unsaved bar");
+        [ed executeCommand:@"undo"];
+        check(marks(ed,4)=="----" && [ed.text isEqualToString:@"one\ntwo\nthree\nfour\n"], "Undo back to the saved text clears the mark");
+        [ed executeCommand:@"redo"]; [ed setSavePoint];
+        check(marks(ed,4)=="-S--", "Saving turns the mark into the narrow saved bar: a different shape and position, not only a different colour");
+        [ed setSelectionAnchor:ed.byteLength-1 caret:ed.byteLength-1]; [ed replaceSelection:@"Y"];
+        check(marks(ed,4)=="-S-U", "A later edit is unsaved beside the saved one");
+        [ed executeCommand:@"undo"];
+        check(marks(ed,4)=="-S--", "Undo back to the save point leaves only the saved bar");
+        [ed executeCommand:@"undo"];
+        check(marks(ed,4)=="-R--" && ed.modified, "Undo past the save marks the line as back to its original text and not saved");
+        [ed executeCommand:@"redo"];
+        check(marks(ed,4)=="-S--" && !ed.modified, "Redo to the save point shows it saved again");
+        auto contrast=[&](NSInteger bgr,NSInteger against){
+            auto luminance=[&](NSInteger value){ double sum=0; const auto c=rgb(value); const double weight[3]={0.2126,0.7152,0.0722};
+                for(int i=0;i<3;++i) sum+=weight[i]*(c[i]<=0.03928 ? c[i]/12.92 : pow((c[i]+0.055)/1.055,2.4)); return sum; };
+            const double a=luminance(bgr), b=luminance(against); return (MAX(a,b)+0.05)/(MIN(a,b)+0.05);
+        };
+        ed.appearance=[NSAppearance appearanceNamed:NSAppearanceNameAqua];
+        const NSInteger lightBack=[sv message:SCI_STYLEGETBACK wParam:STYLE_DEFAULT], lightUnsaved=ed.unsavedChangeColour, lightSaved=ed.savedChangeColour;
+        ed.appearance=[NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+        const NSInteger darkBack=[sv message:SCI_STYLEGETBACK wParam:STYLE_DEFAULT];
+        check(darkBack!=lightBack && ed.unsavedChangeColour!=lightUnsaved && ed.savedChangeColour!=lightSaved, "The bar colours follow the appearance with the rest of the palette");
+        check(contrast(lightUnsaved,lightBack)>=3 && contrast(lightSaved,lightBack)>=3 && contrast(ed.unsavedChangeColour,darkBack)>=3 && contrast(ed.savedChangeColour,darkBack)>=3,
+              "DS-61 each bar colour is at least 3:1 against the text background, in light and in dark");
+        check(marks(ed,4)=="-S--", "The bars are drawn in the dark colours after the appearance changes");
+        ed.appearance=[NSAppearance appearanceNamed:NSAppearanceNameAqua];
+        TTEditor *clone=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        ScintillaView *other=(ScintillaView *)clone.subviews.firstObject;
+        [clone shareDocumentWith:ed]; [clone adoptViewStateFrom:ed];
+        check(clone.changeBarsVisible && clone.changeTrackingActive && [other message:SCI_GETMARGINWIDTHN wParam:3]==8 && marks(clone,4)=="-S--", "A second view of the document shows the same bars");
+        [clone setSelectionAnchor:0 caret:0]; [clone replaceSelection:@"Z"];
+        check(marks(ed,4)=="US--" && marks(clone,4)=="US--", "An edit made in one view is marked in both");
+        ed.changeBarsVisible=NO; clone.changeBarsVisible=NO;
+        check([sv message:SCI_GETMARGINWIDTHN wParam:3]==0 && ed.changeTrackingActive && [sv message:SCI_GETCHANGEHISTORY]==SC_CHANGE_HISTORY_ENABLED
+              && [ruler.accessibilityLabel isEqualToString:@"Line numbers and bookmarks"], "Hiding change bars removes the margin and keeps the record");
+        [ed setSelectionAnchor:ed.byteLength caret:ed.byteLength]; [ed replaceSelection:@"tail\n"];
+        ed.changeBarsVisible=YES;
+        check(marks(ed,5)=="US--U", "Shown again, the bars include what changed while they were hidden");
+        const NSUInteger revision=ed.revision; NSString *text=ed.text;
+        [ed stopChangeTracking];
+        check(!ed.changeBarsVisible && !ed.changeTrackingActive && [sv message:SCI_GETCHANGEHISTORY]==SC_CHANGE_HISTORY_DISABLED && [sv message:SCI_GETMARGINWIDTHN wParam:3]==0
+              && [sv message:SCI_CANUNDO] && ed.revision==revision && [ed.text isEqualToString:text], "Stopping the record, as large-file mode does, removes the margin and leaves text and Undo alone");
+        TTEditor *late=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        ScintillaView *lateEngine=(ScintillaView *)late.subviews.firstObject;
+        [late loadDocumentText:@"a\nb\n"]; [late setSelectionAnchor:0 caret:0]; [late replaceSelection:@"z"];
+        late.changeBarsVisible=YES;
+        check(late.changeBarsVisible && !late.changeTrackingActive && [lateEngine message:SCI_GETMARGINWIDTHN wParam:3]==8 && marks(late,2)=="--" && [lateEngine message:SCI_CANUNDO],
+              "Turned on in a document that already has edits: the margin shows, with no bars, and Undo history is kept");
+        [late executeCommand:@"undo"];
+        check([late.text isEqualToString:@"a\nb\n"], "That document's Undo still works");
+        check([late loadDocumentText:@"a\nb\nc\n"] && late.changeTrackingActive && marks(late,3)=="---", "Loading the document again starts its record from the loaded text");
+        [late setSelectionAnchor:2 caret:2]; [late replaceSelection:@"q"];
+        check(marks(late,3)=="-U-", "and its edits are marked from then on");
+        check([late loadDocumentText:@"a\nb\nc\n"] && marks(late,3)=="---" && late.changeTrackingActive, "A reload clears the bars: they count from the text that was loaded");
+        TTEditor *pane=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,600,400)];
+        ScintillaView *paneEngine=(ScintillaView *)pane.subviews.firstObject;
+        [pane loadDocumentText:@"left\n"]; pane.changeBarsVisible=YES; pane.comparisonPresentation=YES;
+        check(!pane.changeTrackingActive && [paneEngine message:SCI_GETCHANGEHISTORY]==SC_CHANGE_HISTORY_DISABLED && [paneEngine message:SCI_GETMARGINWIDTHN wParam:3]==0, "A comparison pane never shows change bars or records changes");
+        });
+        ttchecks::section("centered text column", [&] {
+        // DS-D13: View > Centered Text Column is two blank margins the bridge keeps equal.
+        TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,1200,400)];
+        ScintillaView *sv=(ScintillaView *)ed.subviews.firstObject;
+        NSString *longLine=[@"" stringByPaddingToLength:200 withString:@"x" startingAtIndex:0];
+        NSString *text=[NSString stringWithFormat:@"%@\nshort\n%@\n",longLine,longLine];
+        [ed loadDocumentText:text]; [ed setSavePoint];
+        auto paint=[&](TTEditor *view){ NSBitmapImageRep *rep=[view bitmapImageRepForCachingDisplayInRect:view.bounds]; [view cacheDisplayInRect:view.bounds toBitmapImageRep:rep]; };
+        paint(ed);
+        const NSInteger plainLeft=ed.textMarginLeft, plainRight=ed.textMarginRight;
+        const NSUInteger revision=ed.revision;
+        check(ed.centeredColumnCharacters==0 && plainLeft==[sv message:SCI_GETMARGINLEFT] && plainRight==[sv message:SCI_GETMARGINRIGHT] && plainLeft<8 && plainRight<8,
+              "A new view has the ordinary layout: the engine's own small margins");
+        auto centred=[&](TTEditor *view,NSInteger characters){
+            const NSInteger left=view.textMarginLeft,right=view.textMarginRight;
+            const NSInteger spare=view.textAreaWidth-[view textWidthOfColumns:characters];
+            // With Wrap Lines off the column has its left margin only, and a long line runs to the pane's edge.
+            return left>plainLeft && left==spare/2 && right==(view.wrap ? spare-left : plainRight);
+        };
+        ed.centeredColumnCharacters=90;
+        check(ed.textAreaWidth>[ed textWidthOfColumns:90] && centred(ed,90), "A 90-character column starts where equal margins would put it");
+        check(!ed.wrap && ed.textMarginRight==plainRight, "With Wrap Lines off there is no right margin: a long line is not painted through a blank band");
+        paint(ed);
+        const sptr_t height=[sv message:SCI_TEXTHEIGHT wParam:0];
+        const sptr_t shortStart=[sv message:SCI_POSITIONFROMLINE wParam:1], shortEnd=[sv message:SCI_GETLINEENDPOSITION wParam:1];
+// Engine points count from the view's left edge, so the gutter comes first.
+        sptr_t gutter=0; for(int margin=0;margin<4;++margin) gutter+=[sv message:SCI_GETMARGINWIDTHN wParam:margin];
+        const sptr_t twoLetters=[sv message:SCI_TEXTWIDTH wParam:STYLE_DEFAULT lParam:(sptr_t)"sh"], row=height+height/2;
+        check([sv message:SCI_POSITIONFROMPOINTCLOSE wParam:(uptr_t)(gutter+ed.textMarginLeft+twoLetters+1) lParam:row]==shortStart+2
+              && [sv message:SCI_POSITIONFROMPOINTCLOSE wParam:(uptr_t)(gutter+ed.textMarginLeft-4) lParam:row]==-1, "The text starts at the left margin, and the gutter stays at the view's edge");
+        check([sv message:SCI_POSITIONFROMPOINT wParam:(uptr_t)(gutter+3) lParam:row]==shortStart && [sv message:SCI_POSITIONFROMPOINT wParam:(uptr_t)(gutter+ed.textMarginLeft-3) lParam:row]==shortStart
+              && [sv message:SCI_POSITIONFROMPOINT wParam:(uptr_t)(gutter+ed.textAreaWidth-3) lParam:row]==shortEnd,
+              "A click in the left margin is a click at the start of that line, and one past the text at its end");
+        check(!ed.wrap && [sv message:SCI_WRAPCOUNT wParam:0]==1, "The column implies nothing about wrapping: a long line stays one row with Wrap Lines off");
+        {
+            // Sideways scrolling with Wrap Lines off is the ordinary layout's, moved right by the left margin.
+            TTEditor *ordinary=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,1200,400)];
+            ScintillaView *plain=(ScintillaView *)ordinary.subviews.firstObject;
+            [ordinary loadDocumentText:text]; paint(ordinary);
+            const sptr_t shift=ed.textMarginLeft-plainLeft, letter=[sv message:SCI_TEXTWIDTH wParam:STYLE_DEFAULT lParam:(sptr_t)"x"];
+            auto offsetAt=[&](TTEditor *view,ScintillaView *engine,NSInteger column){ [view setSelectionAnchor:column caret:column]; [engine message:SCI_SCROLLCARET]; paint(view); return [engine message:SCI_GETXOFFSET]; };
+            const NSInteger inside=(ed.textAreaWidth-ed.textMarginLeft)/letter-12;
+            check(inside>95 && offsetAt(ed,sv,inside)==0 && offsetAt(ordinary,plain,inside)==0,
+                  "A caret past the column's width but inside the pane does not scroll the view sideways");
+            const sptr_t centredEnd=offsetAt(ed,sv,200), ordinaryEnd=offsetAt(ordinary,plain,200);
+            check(ordinaryEnd>0 && centredEnd-ordinaryEnd==shift, "At the end of a long line the view has scrolled exactly as the ordinary layout does, plus the left margin");
+            // The engine measures the widest line a pixel or two differently beside a wide margin.
+            auto padded=[&]{ return labs((long)([sv message:SCI_GETSCROLLWIDTH]-[plain message:SCI_GETSCROLLWIDTH]-shift))<=2; };
+            check(padded() && labs((long)(([sv message:SCI_GETSCROLLWIDTH]-centredEnd)-([plain message:SCI_GETSCROLLWIDTH]-ordinaryEnd)))<=2,
+                  "and the horizontal scroll range is the ordinary one plus the left margin, so the scroller reaches as far as it does in the ordinary layout");
+            check(offsetAt(ed,sv,0)==0 && offsetAt(ordinary,plain,0)==0, "fixture: both views scrolled back to the start");
+            ed.wrap=YES; paint(ed); ed.wrap=NO; paint(ed);
+            check(padded(), "The range is padded once, however often Wrap Lines is toggled");
+            ed.centeredColumnCharacters=0; paint(ed);
+            check(labs((long)([sv message:SCI_GETSCROLLWIDTH]-[plain message:SCI_GETSCROLLWIDTH]))<=2, "and with the column off it is the ordinary range again");
+            ed.centeredColumnCharacters=90; paint(ed);
+        }
+        ed.wrap=YES; paint(ed);
+        check(centred(ed,90) && labs((long)(ed.textMarginLeft-ed.textMarginRight))<=1 && ed.textMarginLeft+ed.textMarginRight+[ed textWidthOfColumns:90]==ed.textAreaWidth,
+              "Turning Wrap Lines on gives the column its right margin: equal margins that fill the text area");
+        check([sv message:SCI_POSITIONFROMPOINT wParam:(uptr_t)(gutter+ed.textAreaWidth-3) lParam:[sv message:SCI_POINTYFROMPOSITION wParam:0 lParam:shortEnd]+height/2]==shortEnd,
+              "With Wrap Lines on a click in the right margin is a click at the end of that line");
+        const sptr_t fit=[ed textWidthOfColumns:90]/MAX((sptr_t)1,[sv message:SCI_TEXTWIDTH wParam:STYLE_DEFAULT lParam:(sptr_t)"x"]);
+        check([sv message:SCI_WRAPCOUNT wParam:0]==(200+fit-1)/fit && [sv message:SCI_WRAPCOUNT wParam:1]==1, "With Wrap Lines on the text wraps at the column");
+        ed.wrap=NO; paint(ed);
+        check(centred(ed,90) && ed.textMarginRight==plainRight, "Turning Wrap Lines off removes the right margin again");
+        const NSInteger wideLeft=ed.textMarginLeft;
+        ed.zoomLevel=4;
+        check(centred(ed,90) && ed.textMarginLeft<wideLeft, "Zooming in recomputes the margins for the larger font");
+        ed.zoomLevel=0;
+        check(centred(ed,90) && ed.textMarginLeft==wideLeft, "and zooming back restores them");
+        [ed setBaseFontName:@"Menlo" size:18];
+        check(centred(ed,90) && ed.textMarginLeft<wideLeft, "A font change recomputes them");
+        [ed setBaseFontName:@"Menlo" size:14];
+        check(ed.textMarginLeft==wideLeft, "fixture: the first font again");
+        ed.lineNumbersVisible=NO;
+        check(centred(ed,90) && ed.textMarginLeft>wideLeft, "Hiding the line-number gutter widens the text area and the column is centred in it");
+        ed.lineNumbersVisible=YES;
+        check(centred(ed,90) && ed.textMarginLeft==wideLeft, "and showing it again narrows it");
+        [ed setFrameSize:NSMakeSize(500,400)]; [ed layoutSubtreeIfNeeded];
+        check(ed.textAreaWidth<[ed textWidthOfColumns:90] && ed.textMarginLeft==plainLeft && ed.textMarginRight==plainRight, "A view narrower than the column falls back to the ordinary margins");
+        [ed setFrameSize:NSMakeSize(1400,400)]; [ed layoutSubtreeIfNeeded];
+        check(centred(ed,90) && ed.textMarginLeft>wideLeft, "A wider view centres the column again, with wider margins");
+        ed.centeredColumnCharacters=60;
+        check(centred(ed,60), "A narrower column has wider margins still");
+        TTEditor *clone=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,1000,400)];
+        [clone shareDocumentWith:ed]; [clone adoptViewStateFrom:ed];
+        check(clone.centeredColumnCharacters==60 && centred(clone,60) && clone.textMarginLeft!=ed.textMarginLeft, "A second view takes the choice and centres the column in its own width");
+        ed.wrap=YES;
+        TTEditor *wrapped=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,1000,400)];
+        [wrapped shareDocumentWith:ed]; [wrapped adoptViewStateFrom:ed];
+        check(wrapped.wrap && centred(wrapped,60) && wrapped.textMarginRight>plainRight, "A second view of a wrapped view takes the wrap mode and has both margins");
+        ed.wrap=NO;
+        ed.comparisonPresentation=YES;
+        check(ed.textMarginLeft==plainLeft && ed.textMarginRight==plainRight, "A comparison pane keeps the ordinary margins");
+        ed.comparisonPresentation=NO;
+        check(centred(ed,60), "fixture: an ordinary view again");
+        [ed setSelectionAnchor:2 caret:5];
+        ed.centeredColumnCharacters=0;
+        check(ed.textMarginLeft==plainLeft && ed.textMarginRight==plainRight && [sv message:SCI_GETMARGINLEFT]==plainLeft, "Turning the column off restores the ordinary margins exactly");
+        check(ed.revision==revision && !ed.modified && [ed.text isEqualToString:text] && [sv message:SCI_GETANCHOR]==2 && [sv message:SCI_GETCURRENTPOS]==5 && ![sv message:SCI_CANUNDO],
+              "None of it touched the text, the selection, the revision, the save point or Undo");
+        });
+        ttchecks::section("text area beside the gutter and scroll bars", [&] {
+        // The text area runs from the gutter to the pane's edge, or to a scroll bar that takes
+        // space (always shown, as on a Mac with a mouse); never a gutter's width short, and never under the bar.
+        NSMutableString *lines=[NSMutableString string]; for(int i=0;i<200;++i)[lines appendString:@"a line of text\n"];
+        for(NSNumber *choice in @[@(NSScrollerStyleOverlay),@(NSScrollerStyleLegacy)]) {
+            const NSScrollerStyle style=(NSScrollerStyle)choice.integerValue; const char *name=style==NSScrollerStyleLegacy?"always-shown":"overlay";
+            TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,900,500)];
+            ScintillaView *sv=(ScintillaView *)ed.subviews.firstObject; NSScrollView *scroll=sv.scrollView;
+            scroll.scrollerStyle=style; [ed loadDocumentText:lines]; ed.changeBarsVisible=YES; ed.centeredColumnCharacters=60;
+            auto paint=[&]{ [ed layoutSubtreeIfNeeded]; NSBitmapImageRep *rep=[ed bitmapImageRepForCachingDisplayInRect:ed.bounds]; [ed cacheDisplayInRect:ed.bounds toBitmapImageRep:rep]; [ed cacheDisplayInRect:ed.bounds toBitmapImageRep:rep]; };
+            auto sound=[&]{
+                paint();
+                const CGFloat gutter=NSWidth(scroll.verticalRulerView.frame);
+                const BOOL bar=style==NSScrollerStyleLegacy && scroll.hasVerticalScroller && !scroll.verticalScroller.hidden;
+                const CGFloat right=NSWidth(scroll.bounds)-(bar?NSWidth(scroll.verticalScroller.frame):0);
+                const NSInteger spare=ed.textAreaWidth-[ed textWidthOfColumns:60];
+                return fabs(NSMinX(scroll.contentView.frame)-gutter)<0.5 && fabs(NSMaxX(scroll.contentView.frame)-right)<0.5
+                    && (!bar || NSMinX(scroll.verticalScroller.frame)>=NSMaxX(scroll.contentView.frame)-0.5)
+                    && ed.textAreaWidth==(NSInteger)floor(right-gutter) && (spare>8 ? ed.textMarginLeft==spare/2 : ed.textMarginLeft<8);
+            };
+            check(sound(), [[NSString stringWithFormat:@"With %s scroll bars the text area is the pane less the gutter and a bar that takes space, and the column is centred in it",name] UTF8String]);
+            BOOL every=YES; NSInteger first=ed.textAreaWidth; BOOL sameWidth=YES;
+            // Heights at which the text scrolls, just fits and has room to spare, and back.
+            for(NSNumber *height in @[@300,@3300,@3214,@3230,@700,@500]) { [ed setFrameSize:NSMakeSize(900,height.doubleValue)]; every=every && sound(); sameWidth=sameWidth && ed.textAreaWidth==first; }
+            check(every && sameWidth, [[NSString stringWithFormat:@"With %s scroll bars a change of height alone never changes the text area's width or the column's margins",name] UTF8String]);
+            ed.lineNumbersVisible=NO; const BOOL withoutNumbers=sound(); ed.changeBarsVisible=NO; const BOOL withoutBars=sound(); ed.lineNumbersVisible=YES; ed.changeBarsVisible=YES;
+            check(withoutNumbers && withoutBars && sound(), [[NSString stringWithFormat:@"With %s scroll bars the text area follows the gutter as line numbers and change bars come and go",name] UTF8String]);
+            [ed setFrameSize:NSMakeSize(1300,500)]; const BOOL wider=sound() && ed.textAreaWidth>first; [ed setFrameSize:NSMakeSize(520,500)];
+            check(wider && sound() && ed.textMarginLeft<8, [[NSString stringWithFormat:@"With %s scroll bars it follows the pane's width, down to a pane narrower than the column",name] UTF8String]);
+        }
         });
         ttchecks::section("line-ending mode", [&] {
         // F126: the line-ending mode is metadata only and governs later insertions.
@@ -1887,6 +2192,66 @@ int main(int argc, char **argv) {
         check([ed goToLine:4] && ed.selectionCaret==18, "The empty line after a final line break is a line");
         check(![ed goToLine:0] && ![ed goToLine:5] && ![ed goToLine:-3] && ed.selectionCaret==18, "Out-of-range lines are rejected without moving the caret");
         check([ed goToLine:1] && ed.selectionCaret==0 && ed.revision==revision && !ed.modified, "goToLine never changes the document");
+        {
+            // The exact selection state a Go to Line preview has to put back.
+            auto get = [&](unsigned int message, uptr_t w = 0) { return [sv message:message wParam:w]; };
+            [sv message:SCI_SETSELECTION wParam:1 lParam:0]; [sv message:SCI_ADDSELECTION wParam:10 lParam:8]; [sv message:SCI_ADDSELECTION wParam:12 lParam:14];
+            [sv message:SCI_SETMAINSELECTION wParam:1];
+            NSArray<NSNumber *> *several = ed.selectionSnapshot;
+            check([ed previewLine:3 column:2] == 3 && get(SCI_GETSELECTIONS) == 1 && ed.selectionCaret == 13 && ed.selectionAnchor == 13,
+                  "A Go to Line preview puts one caret at the line and column");
+            check([ed restoreSelectionSnapshot:several] && get(SCI_GETSELECTIONS) == 3 && get(SCI_GETMAINSELECTION) == 1
+                      && get(SCI_GETSELECTIONNANCHOR, 0) == 0 && get(SCI_GETSELECTIONNCARET, 0) == 1 && get(SCI_GETSELECTIONNANCHOR, 1) == 8
+                      && get(SCI_GETSELECTIONNCARET, 1) == 10 && get(SCI_GETSELECTIONNANCHOR, 2) == 14 && get(SCI_GETSELECTIONNCARET, 2) == 12
+                      && get(SCI_GETSELECTIONMODE) == SC_SEL_STREAM && [ed.selectionSnapshot isEqual:several],
+                  "A selection snapshot restores every range, its direction and which range is the main selection");
+            [sv message:SCI_SETSELECTION wParam:1 lParam:1];
+            [sv message:SCI_SETSELECTIONMODE wParam:SC_SEL_RECTANGLE];
+            [sv message:SCI_SETRECTANGULARSELECTIONANCHOR wParam:1]; [sv message:SCI_SETRECTANGULARSELECTIONCARET wParam:14];
+            [sv message:SCI_SETRECTANGULARSELECTIONCARETVIRTUALSPACE wParam:3];
+            NSArray<NSNumber *> *rectangle = ed.selectionSnapshot;
+            const sptr_t rows = get(SCI_GETSELECTIONS), extends = get(SCI_GETMOVEEXTENDSSELECTION);
+            check(ed.selectionIsRectangular && rows == 3, "Fixture: a rectangular selection over three lines, into virtual space");
+            check([ed previewLine:1 column:1] == 1 && !ed.selectionIsRectangular && get(SCI_GETSELECTIONS) == 1 && !get(SCI_GETMOVEEXTENDSSELECTION),
+                  "A preview leaves rectangular mode for its one caret");
+            check([ed restoreSelectionSnapshot:rectangle] && ed.selectionIsRectangular && get(SCI_GETSELECTIONS) == rows
+                      && get(SCI_GETRECTANGULARSELECTIONANCHOR) == 1 && get(SCI_GETRECTANGULARSELECTIONCARET) == 14
+                      && get(SCI_GETRECTANGULARSELECTIONCARETVIRTUALSPACE) == 3 && get(SCI_GETMOVEEXTENDSSELECTION) == extends
+                      && [ed.selectionSnapshot isEqual:rectangle],
+                  "A selection snapshot restores a rectangular selection, its corners, virtual space and keyboard column mode");
+            [ed executeCommand:@"streamSelection"]; [ed setSelectionAnchor:0 caret:0];
+            NSArray<NSNumber *> *plain = ed.selectionSnapshot;
+            check(![ed restoreSelectionSnapshot:@[@1, @2]] && ![ed restoreSelectionSnapshot:(NSArray<NSNumber *> *)@[@"x", @0, @0, @0, @0, @0, @0, @0, @0, @0, @0, @0]]
+                      && ed.selectionCaret == 0, "Something that is not a snapshot is refused and changes nothing");
+            {
+                // A held place follows edits, as Scintilla's own selections do.
+                [sv message:SCI_SETSELECTION wParam:10 lParam:8]; [sv message:SCI_ADDSELECTION wParam:12 lParam:14];
+                [ed holdPlace];
+                [ed previewLine:1 column:1];
+                [sv message:SCI_INSERTTEXT wParam:0 lParam:(sptr_t)"ab"];
+                NSArray<NSNumber *> *held = ed.heldSelectionSnapshot;
+                check(held != nil && !ed.heldPlaceDisplaced && ed.heldTopDocumentLine == 0 && [ed restoreSelectionSnapshot:held]
+                          && get(SCI_GETSELECTIONS) == 2 && get(SCI_GETSELECTIONNANCHOR, 0) == 10 && get(SCI_GETSELECTIONNCARET, 0) == 12
+                          && get(SCI_GETSELECTIONNANCHOR, 1) == 16 && get(SCI_GETSELECTIONNCARET, 1) == 14,
+                      "A held place moves along with text inserted before it and restores every range there");
+                [ed previewLine:1 column:1];
+                [sv message:SCI_DELETERANGE wParam:9 lParam:4];
+                held = ed.heldSelectionSnapshot;
+                check(ed.heldPlaceDisplaced && [ed restoreSelectionSnapshot:held] && get(SCI_GETSELECTIONNANCHOR, 0) == 9
+                          && get(SCI_GETSELECTIONNCARET, 0) == 9 && get(SCI_GETSELECTIONNANCHOR, 1) == 12 && get(SCI_GETSELECTIONNCARET, 1) == 10,
+                      "Deleting text a held position was in puts it where that text began and reports the place as displaced");
+                [ed releaseHeldPlace];
+                check(ed.heldSelectionSnapshot == nil && ed.heldTopDocumentLine == -1, "A released place is no longer held");
+                [ed executeCommand:@"undo"]; [ed executeCommand:@"undo"];
+                [ed setSelectionAnchor:0 caret:0];
+                plain = ed.selectionSnapshot;
+            }
+            [ed replaceSelection:@"longer "];
+            check(![ed restoreSelectionSnapshot:plain] && ed.selectionCaret == 7, "A snapshot of text that has since changed length is refused");
+            [ed executeCommand:@"undo"];
+            check(ed.revision != revision || !ed.modified, "Fixture: the edit is undone");
+            ed.text=@"é one\r\ntwo\rthree\n";[ed resetUndoHistory];[ed setSavePoint];revision=ed.revision;
+        }
         ed.text=numbered(400);
         check([ed goToLine:350] && ed.firstVisibleLine>0 && ed.firstVisibleLine<=349 && [sv message:SCI_GETFIRSTVISIBLELINE]+[sv message:SCI_LINESONSCREEN]>349, "goToLine scrolls the target line into view");
         [ed setLanguage:@"cpp"];

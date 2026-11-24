@@ -18,16 +18,6 @@ extension TabDiskIO {
     func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { false }
     func applicationDidFinishLaunching(_ notification: Notification) { launched?() }
 }
-@MainActor private final class MenuTrackingContext: NSObject {
-    var tracked: NSMenu?
-    @objc func beganTracking(_ note: Notification) {
-        tracked = note.object as? NSMenu
-        let timer = Timer(timeInterval: 0.1, repeats: false) { [self] _ in
-            MainActor.assumeIsolated { tracked?.cancelTrackingWithoutAnimation() }
-        }
-        RunLoop.main.add(timer, forMode: .eventTracking)
-    }
-}
 @MainActor private final class TabCommandContext {
     let isolated: IsolatedSupportDirectory
     init() throws { isolated = try IsolatedSupportDirectory("TabCommandProcess") }
@@ -95,10 +85,12 @@ extension TabDiskIO {
         func id(_ doc: TextDocument) -> TabID {
             host.model.groups.flatMap(\.tabs).first { $0.documentID == doc.runtimeID }!.id
         }
+        // The Window menu lists the commands that close several tabs in one submenu (DS-23).
         func item(_ menu: NSMenu, _ command: TabCommand) throws -> NSMenuItem {
             try requireValue(
-                menu.items.first { $0.identifier?.rawValue == "tabs.command." + command.rawValue },
-                "T1 menu " + command.rawValue)
+                (menu.items + menu.items.flatMap { $0.submenu?.items ?? [] }).first {
+                    $0.identifier?.rawValue == "tabs.command." + command.rawValue
+                }, "T1 menu " + command.rawValue)
         }
         func dispatch(_ item: NSMenuItem) { _ = NSApp.sendAction(item.action!, to: item.target, from: item) }
         func waitClose() { spinUntil("T1 close operation finishes") { !commands.isBusy } }
@@ -121,15 +113,19 @@ extension TabDiskIO {
         check(
             select.responds(to: NSSelectorFromString("accessibilityPerformShowMenu")),
             "T1-R1 standard accessibility Show Menu action exists")
-        // Close the actual native menu through its tracking run loop, without dispatching an item.
-        let menuContext = MenuTrackingContext()
-        NotificationCenter.default.addObserver(
-            menuContext, selector: #selector(MenuTrackingContext.beganTracking(_:)),
-            name: NSMenu.didBeginTrackingNotification, object: nil)
-        defer { NotificationCenter.default.removeObserver(menuContext) }
+        // The strip's injected presenters receive each menu, so none is tracked on the desktop.
+        var presented: [NSMenu] = []
+        let presentMenu = host.tabStrip.presentContextMenu
+        let presentAccessibilityMenu = host.tabStrip.presentAccessibilityMenu
+        host.tabStrip.presentContextMenu = { menu, _, _ in presented.append(menu) }
+        host.tabStrip.presentAccessibilityMenu = { menu, _ in presented.append(menu) }
+        defer {
+            host.tabStrip.presentContextMenu = presentMenu
+            host.tabStrip.presentAccessibilityMenu = presentAccessibilityMenu
+        }
         select.rightMouseDown(with: event)
         check(
-            host.model.activeTab?.id == active && window.firstResponder === before,
+            presented.count == 1 && host.model.activeTab?.id == active && window.firstResponder === before,
             "T1 actual right-click tracking preserves inactive target and responder")
         let controlEvent = NSEvent.mouseEvent(
             with: .leftMouseDown, location: select.convert(.zero, to: nil),
@@ -137,11 +133,12 @@ extension TabDiskIO {
             eventNumber: 2, clickCount: 1, pressure: 1)!
         select.mouseDown(with: controlEvent)
         check(
-            host.model.activeTab?.id == active && window.firstResponder === before,
+            presented.count == 2 && host.model.activeTab?.id == active && window.firstResponder === before,
             "T1 actual Control-click tracking preserves inactive target and responder")
         check(select.accessibilityPerformShowMenu(), "T1 native AX Show Menu action opens a menu")
         check(
-            host.model.activeTab?.id == active && window.firstResponder === before,
+            presented.count == 3 && presented.allSatisfy { !$0.items.isEmpty }
+                && host.model.activeTab?.id == active && window.firstResponder === before,
             "T1 AX menu tracking preserves editing focus")
         let titles = menu.items.filter { !$0.isSeparatorItem }.map(\.title)
         check(
@@ -635,6 +632,11 @@ extension TabDiskIO {
         let windowMenu = try requireValue(
             NSApp.mainMenu?.items.first { $0.title == "Window" }?.submenu, "T1 Window menu")
         windowMenu.update()
+        windowMenu.items.forEach { $0.submenu?.update() }
+        check(
+            Set(windowMenu.items.flatMap { $0.submenu?.items ?? [] }.compactMap { $0.representedObject as? String })
+                == Set([TabCommand.closeOthers, .closeLeft, .closeRight, .closeGroup, .closeSaved].map(\.rawValue)),
+            "T1 only the five commands that close several tabs are in a Window submenu; the rest are at its top level")
         for command in TabCommand.allCases {
             let x = try item(windowMenu, command)
             check(!x.isEnabled && !(x.toolTip ?? "").isEmpty, "T1 empty main menu disabled reason " + command.rawValue)

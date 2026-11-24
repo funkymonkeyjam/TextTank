@@ -2,6 +2,7 @@
 // Checks for the Foundation-only preview core (Sources/Preview): kind selection, limits, the
 // Markdown renderer, the static HTML policy, the resource resolver, delimited text, the JSON
 // tree and the SVG scan. Fixtures are in Tests/Fixtures/preview; see its README.
+import CryptoKit
 import Foundation
 @testable import TextTankCore
 
@@ -179,6 +180,11 @@ private func seconds(_ work: () -> Void) -> Double {
             Checks.section("limits") { checkLimits() }
             Checks.section("open-in settings") { try checkOpenInSettings() }
             Checks.section("Markdown fixtures") { try checkMarkdownFixtures() }
+            Checks.section("Markdown scroll map") { try checkScrollMap() }
+            Checks.section("scroll sync setting") { try checkScrollSyncSetting() }
+            Checks.section("change bars, centered column and the Close Split View shortcut") {
+                try checkViewRegroupSettings()
+            }
             Checks.section("Markdown constructs") { checkMarkdownConstructs() }
             Checks.section("Markdown safety") { try checkMarkdownSafety() }
             Checks.section("Markdown bounds") { checkMarkdownBounds() }
@@ -456,6 +462,369 @@ private func seconds(_ work: () -> Void) -> Double {
         fixtureCheck(
             try PreviewFixtures.text("markdown/unicode.md").contains("\u{00A0}"),
             "the Unicode fixture still contains no-break spaces")
+    }
+
+    // MARK: Scroll map
+
+    /// The number of elements that are not inside another element. Rendered Markdown escapes
+    /// every `<` of its text, so each `<` starts a tag.
+    private static func topLevelElementCount(_ html: String) -> Int {
+        let voidTags: Set<String> = ["img", "br", "hr", "input"]
+        var count = 0
+        var depth = 0
+        var rest = html[...]
+        while let open = rest.firstIndex(of: "<") {
+            let after = rest[rest.index(after: open)...]
+            let isEnd = after.first == "/"
+            let name = String((isEnd ? after.dropFirst() : after).prefix { $0.isLetter || $0.isNumber })
+            if isEnd {
+                depth -= 1
+            } else {
+                if depth == 0 { count += 1 }
+                if !voidTags.contains(name) { depth += 1 }
+            }
+            rest = after
+        }
+        return count
+    }
+
+    private static func mapped(_ markdown: String) -> (html: String, map: PreviewScrollMap)? {
+        let result = MarkdownRenderer.renderWithScrollMap(Data(markdown.utf8), isCancelled: never)
+        guard case .rendered(let html) = result.rendering, let map = result.map else { return nil }
+        return (html, map)
+    }
+
+    static func checkScrollMap() throws {
+        func spans(_ map: PreviewScrollMap) -> [[Int]] { map.blocks.map { [$0.firstLine, $0.lineCount] } }
+        let sample = [
+            "# Title", "", "First paragraph", "second line of it", "", "", "- one", "- two", "", "  still two", "",
+            "> quote", "continued", "", "```", "code", "", "more", "```", "", "| a | b |", "| - | - |", "| 1 | 2 |",
+            "", "[ref]: http://example.com", "", "Setext", "===", "", "    indented", "", "---", "last"
+        ].joined(separator: "\n")
+        let whole = try requireValue(mapped(sample), "the sample renders with a map")
+        check(
+            spans(whole.map) == [[0, 1], [2, 2], [6, 4], [11, 2], [14, 5], [20, 3], [26, 2], [29, 1], [31, 1], [32, 1]],
+            "each top-level block knows the lines it was made from; blank lines and a definition belong to none: \(spans(whole.map))"
+        )
+        check(
+            topLevelElementCount(whole.html) == whole.map.count && whole.map.count == 10,
+            "the page has one top-level element for each entry: \(topLevelElementCount(whole.html))")
+        check(
+            rendered(sample) == whole.html && !whole.html.contains("data-") && !whole.html.contains(" id="),
+            "the HTML is the same with or without the map, and carries no mark for it")
+        check(
+            mapped("one\r\n\r\ntwo\rstill two\r\rthree").map { spans($0.map) } == [[0, 1], [2, 2], [5, 1]],
+            "lines end at LF, CRLF or CR, as the editor counts them")
+        check(mapped("")?.map.count == 0 && mapped("\n\n[a]: b\n")?.map.count == 0, "a document with no block has an empty map")
+
+        // Every Markdown fixture: one entry per top-level element, in order, lines ascending.
+        for name in try PreviewFixtures.names(in: "markdown", withExtension: "md") {
+            let source = try PreviewFixtures.data("markdown/\(name).md")
+            let result = MarkdownRenderer.renderWithScrollMap(source, isCancelled: never)
+            guard case .rendered(let html) = result.rendering, let map = result.map else {
+                check(false, "markdown/\(name).md renders with a map")
+                continue
+            }
+            let expected = try PreviewFixtures.text("markdown/\(name).html")
+            let lineCount = MarkdownText.lines(of: Array(source)).count
+            let ordered = zip(map.blocks, map.blocks.dropFirst()).allSatisfy {
+                $0.firstLine + $0.lineCount <= $1.firstLine
+            }
+            check(
+                html == expected && map.count == topLevelElementCount(html) && ordered
+                    && map.blocks.allSatisfy { $0.lineCount >= 1 && $0.firstLine + $0.lineCount <= lineCount },
+                "markdown/\(name).md: the expected HTML, with \(map.count) entries for its \(topLevelElementCount(html)) top-level elements, in order and inside the document"
+            )
+        }
+
+        // Shapes a reader meets: front matter, nesting, a long table, raw HTML.
+        func shape(_ lines: [String], _ expected: [[Int]], _ label: String) {
+            let result = mapped(lines.joined(separator: "\n"))
+            check(
+                result.map { spans($0.map) } == expected
+                    && result.map { topLevelElementCount($0.html) } == expected.count
+                    && result?.html == rendered(lines.joined(separator: "\n")),
+                "\(label): \(result.map { spans($0.map) } ?? [])")
+        }
+        shape(
+            ["---", "title: Notes", "tags: [a, b]", "---", "", "# Heading", "", "Body"],
+            [[0, 1], [1, 3], [5, 1], [7, 1]],
+            "front matter is not a Markdown construct: its rule and its lines are blocks like any other, and the heading after it keeps its own line"
+        )
+        shape(
+            [
+                "- one", "  - one a", "    - one a i", "", "      deep paragraph", "  - one b", "- two", "", "  1. first",
+                "  2. second", "", "after"
+            ],
+            [[0, 10], [11, 1]],
+            "a nested list is one top-level block over all its lines, loose items and inner lists included")
+        shape(
+            [
+                "> outer", "> > inner", "> > - item", "> >   more", "lazy line", "", "> second quote", ">", "> ```",
+                "> code", "> ```", "", "end"
+            ],
+            [[0, 5], [6, 5], [12, 1]],
+            "a quote with a quote, a list, a lazy line and code inside is one block for each quote")
+        let rows = (1...3000).map { "| \($0) | value \($0) |" }
+        shape(
+            ["intro", "", "| n | text |", "| - | - |"] + rows + ["", "outro"], [[0, 1], [2, 3002], [3005, 1]],
+            "a long table is one block from its header to its last row")
+        let table = mapped((["| n | text |", "| - | - |"] + rows).joined(separator: "\n"))?.map
+        check(
+            table?.position(forLine: 1502) == PreviewScrollMap.Position(block: 0, fraction: 1502.0 / 3002.0)
+                && (0..<3002).allSatisfy { line in table?.position(forLine: line).flatMap { table?.line(for: $0) } == line },
+            "and every one of its lines maps to a place in it and back")
+        shape(
+            [
+                "<div onclick=\"x()\">", "raw block", "</div>", "", "<script>alert(1)</script>", "",
+                "text <b>inline</b> <img src=x onerror=y>", "", "<!-- comment -->", "# After"
+            ],
+            [[0, 3], [4, 1], [6, 1], [8, 1], [9, 1]],
+            "raw HTML is ordinary paragraph text for the map, as it is for the output")
+        let raw = mapped("<script>alert(1)</script>\n\ntext <b>inline</b> <img src=x onerror=y>")?.html
+        check(
+            raw == "<p>&lt;script&gt;alert(1)&lt;/script&gt;</p>\n<p>text &lt;b&gt;inline&lt;/b&gt; &lt;img src=x onerror=y&gt;</p>\n",
+            "and it is still escaped, never passed through: \(raw ?? "nil")")
+
+        // The adversarial fixture renders to exactly the bytes it rendered to before the map existed.
+        let adversarial = try PreviewFixtures.data("markdown/adversarial.md")
+        let adversarialExpected = try PreviewFixtures.data("markdown/adversarial.html")
+        let digest = SHA256.hash(data: adversarialExpected).map { String(format: "%02x", $0) }.joined()
+        fixtureCheck(
+            digest == "496611ef4e8d68fbc8e78a3534e0150b4e2445ba825647fdf4d045ef11b54458",
+            "markdown/adversarial.html is the file main has (SHA-256 \(digest))")
+        let withMap = MarkdownRenderer.renderWithScrollMap(adversarial, isCancelled: never)
+        if case .rendered(let html) = withMap.rendering, case .rendered(let plain) = MarkdownRenderer.render(
+            adversarial, isCancelled: never)
+        {
+            check(
+                Data(html.utf8) == adversarialExpected && Data(plain.utf8) == adversarialExpected,
+                "the adversarial Markdown fixture renders byte for byte to main's output, with and without the map")
+            check(markdownOutputViolation(html) == nil, "and has only the renderer's tags")
+        } else {
+            check(false, "the adversarial Markdown fixture renders")
+        }
+
+        // A line to a place and back.
+        let map = whole.map
+        check(
+            map.position(forLine: 3) == PreviewScrollMap.Position(block: 1, fraction: 0.5)
+                && map.position(forLine: 2)?.fraction == 0 && map.position(forLine: 16)?.block == 4,
+            "a line is a block and how far through it: \(String(describing: map.position(forLine: 3)))")
+        check(
+            map.position(forLine: 4) == PreviewScrollMap.Position(block: 1, fraction: 1)
+                && map.position(forLine: 5)?.block == 1 && map.position(forLine: 24)?.block == 5,
+            "a blank line or a definition after a block is that block's end")
+        check(
+            map.position(forLine: -5) == PreviewScrollMap.Position(block: 0, fraction: 0)
+                && map.position(forLine: 1_000_000) == PreviewScrollMap.Position(block: 9, fraction: 1)
+                && PreviewScrollMap().position(forLine: 0) == nil,
+            "a line outside the document is the nearest end; an empty map has no place")
+        let ownLines = map.blocks.flatMap { Array($0.firstLine..<$0.firstLine + $0.lineCount) }
+        check(
+            ownLines.allSatisfy { line in map.position(forLine: line).flatMap(map.line(for:)) == line },
+            "every line of a block maps to a place that maps back to that line")
+        let wide = PreviewScrollMap(blocks: [.init(firstLine: 10, lineCount: 49, fingerprint: 1)])
+        check(
+            (10..<59).allSatisfy { wide.position(forLine: $0).flatMap(wide.line(for:)) == $0 },
+            "also where the fraction of a line cannot be written exactly (49 lines)")
+        check(
+            map.line(for: .init(block: 1, fraction: 1)) == 3 && map.line(for: .init(block: 2, fraction: 0.99)) == 9
+                && map.line(for: .init(block: 4, fraction: 0.5)) == 16,
+            "a place maps to one of the block's own lines, never to the blank lines after it")
+        check(
+            map.line(for: .init(block: 10, fraction: 0)) == nil && map.line(for: .init(block: -1, fraction: 0)) == nil
+                && map.line(for: .init(block: 0, fraction: 1.01)) == nil
+                && map.line(for: .init(block: 0, fraction: -0.01)) == nil
+                && map.line(for: .init(block: 0, fraction: .nan)) == nil
+                && map.line(for: .init(block: 0, fraction: .infinity)) == nil,
+            "a block the map does not have, or a fraction outside 0 to 1, is no line at all")
+
+        // The same block after an edit.
+        func paragraphs(_ names: [String]) throws -> PreviewScrollMap {
+            try requireValue(mapped(names.joined(separator: "\n\n"))?.map, "fixture: paragraphs")
+        }
+        let letters = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"]
+        let before = try paragraphs(letters)
+        check(before.count == 10 && Set(before.blocks.map(\.fingerprint)).count == 10, "fixture: ten different blocks")
+        check(
+            try before.counterpart(of: 5, in: paragraphs(["new"] + letters)) == 6
+                && before.counterpart(of: 5, in: paragraphs(["new", "newer"] + letters)) == 7,
+            "blocks added above move the block down by as many")
+        check(
+            try before.counterpart(of: 5, in: paragraphs(Array(letters.dropFirst(2)))) == 3,
+            "blocks removed above move it up")
+        check(
+            try before.counterpart(of: 2, in: paragraphs(letters + ["new"])) == 2
+                && before.counterpart(of: 1, in: paragraphs(["A", "B", "C", "new", "D", "E", "F", "G", "H", "I", "J"])) == 1,
+            "blocks added below leave it where it is, also when they are added just after it")
+        var edited = letters
+        edited[5] = "F, edited"
+        check(try before.counterpart(of: 5, in: paragraphs(edited)) == 5, "an edit inside the block leaves it where it is")
+        edited[1] = "B, edited"
+        check(
+            try before.counterpart(of: 5, in: paragraphs(["new"] + edited)) == 6,
+            "an edited block that also moved is found through the blocks after it")
+        let same = try paragraphs(Array(repeating: "same", count: 10))
+        let grown = try paragraphs(Array(repeating: "same", count: 11))
+        let twin = try requireValue(same.counterpart(of: 5, in: grown), "a repeated block has a counterpart")
+        check(
+            (5...6).contains(twin) && grown.blocks[twin].fingerprint == same.blocks[5].fingerprint,
+            "among blocks with the same text any of the two candidates shows the same thing: \(twin)")
+        check(
+            try before.counterpart(of: 9, in: paragraphs(["A"])) == 0 && before.counterpart(of: 10, in: before) == nil
+                && before.counterpart(of: -1, in: before) == nil && before.counterpart(of: 0, in: PreviewScrollMap()) == nil,
+            "the answer is always a block of the new map, or none")
+        check(
+            try paragraphs(["x", "A"]).blocks[1].fingerprint == before.blocks[0].fingerprint
+                && before.blocks[0].fingerprint != before.blocks[1].fingerprint,
+            "a block's fingerprint is made from its own text alone")
+
+        // Limits and cancellation give no map.
+        var small = PreviewLimits.standard
+        small.maxSourceBytes = 8
+        let tooLarge = MarkdownRenderer.renderWithScrollMap(Data("a paragraph".utf8), limits: small, isCancelled: never)
+        check(
+            tooLarge.rendering == .limited(.sourceTooLarge(maxBytes: 8)) && tooLarge.map == nil,
+            "a document over the source limit is not parsed and has no map")
+        let cancelled = MarkdownRenderer.renderWithScrollMap(Data(largeMarkdown().utf8), isCancelled: { true })
+        check(cancelled.rendering == .cancelled && cancelled.map == nil, "a cancelled rendering has no map")
+    }
+
+    static func checkScrollSyncSetting() throws {
+        let fresh = EditorSettings()
+        check(fresh.syncsPreviewScrolling && fresh.syncPreviewScrolling == nil, "Sync scrolling in Both is on by default")
+        let freshJSON = try JSONSerialization.jsonObject(with: JSONEncoder().encode(fresh)) as? [String: Any]
+        check(freshJSON?["syncPreviewScrolling"] == nil, "default settings are written without the member, as before")
+        let older = try Data(contentsOf: TestPaths.fixtures.appendingPathComponent("persistence/Settings.json"))
+        let decodedOlder = try EditorSettings.decode(older)
+        check(
+            !String(decoding: older, as: UTF8.self).contains("syncPreviewScrolling")
+                && decodedOlder.syncsPreviewScrolling,
+            "an earlier settings file with no such key reads as on")
+        func settings(_ members: String) -> Data {
+            Data(
+                (#"{"tabWidth":4,"wrap":false,"useTabs":true,"version":1,"appearance":"system","shortcuts":{},"#
+                    + members + "}").utf8)
+        }
+        check(
+            try !EditorSettings.decode(settings(#""syncPreviewScrolling":false"#)).syncsPreviewScrolling
+                && EditorSettings.decode(settings(#""syncPreviewScrolling":true"#)).syncsPreviewScrolling
+                && EditorSettings.decode(settings(#""syncPreviewScrolling":null"#)).syncsPreviewScrolling,
+            "false switches it off; true and null read as on")
+        for (label, members) in [
+            ("text", #""syncPreviewScrolling":"false""#), ("a number", #""syncPreviewScrolling":0"#)
+        ] {
+            rejects("\(label) for syncPreviewScrolling fails the settings file, as any member of the wrong type does") {
+                _ = try EditorSettings.decode(settings(members))
+            }
+        }
+
+        // The store writes the one member and keeps the rest of the file, unknown members included.
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "PreviewScrollSync-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appendingPathComponent("Settings.json")
+        try settings(#""futureMember":{"kept":[1,2.50]},"lastRenderedPreviewMode":"preview""#).write(to: url)
+        let store = SettingsStore(url: url)
+        check(store.loadError == nil && store.value.syncsPreviewScrolling, "fixture: a file without the member loads as on")
+        try store.updateViewPreference(.syncPreviewScrolling) { _ in false }
+        let written = String(decoding: try Data(contentsOf: url), as: UTF8.self)
+        check(
+            !store.value.syncsPreviewScrolling && !SettingsStore(url: url).value.syncsPreviewScrolling
+                && written.contains(#""syncPreviewScrolling":false"#),
+            "switching it off writes the member and survives a round trip")
+        check(
+            written.contains(#""futureMember":{"kept":[1,2.50]}"#) && written.contains(#""lastRenderedPreviewMode":"preview""#)
+                && SettingsStore(url: url).value.toggledPreviewMode == .preview,
+            "the other members, one this build does not know among them, are kept as written")
+        let afterOff = try Data(contentsOf: url)
+        try store.updateViewPreference(.syncPreviewScrolling) { _ in false }
+        check(try Data(contentsOf: url) == afterOff, "switching off what is off writes nothing")
+        try store.updateViewPreference(.syncPreviewScrolling) { !$0 }
+        check(
+            store.value.syncsPreviewScrolling && SettingsStore(url: url).value.syncsPreviewScrolling,
+            "and it switches on again")
+    }
+
+    /// The stored keys of DS-D13 (change bars, the centered text column) and the shortcut a
+    /// person saved for Close Split View before that command lost its menu row.
+    static func checkViewRegroupSettings() throws {
+        let fresh = EditorSettings()
+        let freshJSON = try JSONSerialization.jsonObject(with: JSONEncoder().encode(fresh)) as? [String: Any]
+        check(
+            !fresh.changeBarsEnabled && !fresh.centeredColumnEnabled && fresh.centeredColumnCharacters == 90
+                && freshJSON?["changeBars"] == nil && freshJSON?["centeredColumn"] == nil
+                && freshJSON?["centeredColumnWidth"] == nil,
+            "change bars and the centered column are off by default, 90 characters wide, and default settings are written without the members")
+        let older = try EditorSettings.decode(
+            Data(contentsOf: TestPaths.fixtures.appendingPathComponent("persistence/Settings.json")))
+        check(
+            !older.changeBarsEnabled && !older.centeredColumnEnabled && older.centeredColumnCharacters == 90,
+            "an earlier settings file with none of the keys reads as off, as before")
+        func settings(_ members: String, version: Int = 1, shortcuts: String = "{}") -> Data {
+            Data(
+                (#"{"tabWidth":4,"wrap":false,"useTabs":true,"version":\#(version),"appearance":"system","shortcuts":\#(shortcuts)"#
+                    + (members.isEmpty ? "" : "," + members) + "}").utf8)
+        }
+        let chosen = try EditorSettings.decode(
+            settings(#""changeBars":true,"centeredColumn":true,"centeredColumnWidth":72"#))
+        check(
+            chosen.changeBarsEnabled && chosen.centeredColumnEnabled && chosen.centeredColumnCharacters == 72
+                && EditorViewPreference.changeBars.enabled(in: chosen)
+                && EditorViewPreference.centeredColumn.enabled(in: chosen)
+                && EditorViewPreference.changeBars.rawValue == "changeBars"
+                && EditorViewPreference.centeredColumn.rawValue == "centeredColumn",
+            "the stored choices are read, and each View command writes the member of its own name")
+        check(
+            try EditorSettings.decode(settings(#""centeredColumnWidth":12"#)).centeredColumnCharacters == 40
+                && EditorSettings.decode(settings(#""centeredColumnWidth":9000"#)).centeredColumnCharacters == 240
+                && EditorSettings.decode(settings(#""centeredColumnWidth":null"#)).centeredColumnCharacters == 90,
+            "a stored width outside 40 to 240 is read as the nearest bound; null is the default")
+        for (label, members) in [
+            ("text for changeBars", #""changeBars":"yes""#), ("a number for centeredColumn", #""centeredColumn":1"#),
+            ("a fraction for centeredColumnWidth", #""centeredColumnWidth":90.5"#)
+        ] {
+            rejects("\(label) fails the settings file, as any member of the wrong type does") {
+                _ = try EditorSettings.decode(settings(members))
+            }
+        }
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "ViewRegroup-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let url = folder.appendingPathComponent("Settings.json")
+        try settings(#""futureMember":[1,2.50]"#).write(to: url)
+        let store = SettingsStore(url: url)
+        try store.updateViewPreference(.changeBars) { !$0 }
+        try store.updateViewPreference(.centeredColumn) { !$0 }
+        let written = String(decoding: try Data(contentsOf: url), as: UTF8.self)
+        check(
+            store.value.changeBarsEnabled && store.value.centeredColumnEnabled
+                && written.contains(#""changeBars":true"#) && written.contains(#""centeredColumn":true"#)
+                && written.contains(#""futureMember":[1,2.50]"#) && SettingsStore(url: url).value == store.value,
+            "each toggle writes its one member, keeps the rest of the file and survives a round trip")
+
+        // Close Split View's saved shortcut, in a context that lists Split Tab View and not it.
+        let context = ShortcutContext(
+            commands: ["clone:": .init(title: "View › Split Tab View")], fixed: [:], isComplete: true)
+        func load(_ shortcuts: String) throws -> (settings: EditorSettings, issues: [ShortcutLoadIssue]) {
+            try EditorSettings.load(settings("", version: 2, shortcuts: shortcuts), context: context)
+        }
+        let moved = try load(#"{"closeSplit:":"ctrl+opt+k"}"#)
+        let kept = try load(#"{"closeSplit:":"ctrl+opt+k","clone:":"ctrl+opt+j"}"#)
+        let unknown = try load(#"{"noSuchCommand:":"ctrl+opt+k"}"#)
+        check(
+            moved.settings.shortcuts == ["clone:": "ctrl+opt+k"] && moved.issues.isEmpty
+                && moved.settings.effectiveShortcut(for: "clone:", in: context)?.storedText == "ctrl+opt+k",
+            "a shortcut saved for Close Split View is read as Split Tab View's, with no ignored-shortcut notice")
+        check(
+            kept.settings.shortcuts == ["clone:": "ctrl+opt+j"] && kept.issues.isEmpty,
+            "Split Tab View's own saved shortcut wins, and the retired entry is dropped quietly")
+        check(
+            unknown.settings.shortcuts.isEmpty && unknown.issues.map(\.reason) == [.unavailable],
+            "control: a shortcut for a command that never existed is still reported as ignored")
     }
 
     /// Small inputs with the output the CommonMark specification gives for them, plus the

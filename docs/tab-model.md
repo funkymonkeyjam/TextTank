@@ -33,9 +33,9 @@ Only the mounted active tab in a visible, non-minimized host runs recurring stat
 
 ## Empty state and persistence boundary
 
-Closing the final tab keeps the host open and TextTank running, without creating an untitled document. The empty host offers New/Open in the toolbar and menu; document commands are disabled. Its red close button still invokes Quit. Stage 1 adds the context commands, bulk close and reopen history described below. Stage 2 adds pin/reorder/multiselection UI below; additional visible groups and a layout picker remain excluded.
+Closing the final tab keeps the host open and TextTank running, without creating an untitled document. The empty host offers New/Open in the toolbar and menu; document commands are disabled. A group with no tabs shows more than its sentence and its New and Open buttons: see “Empty group” below. Its red close button still invokes Quit. Stage 1 adds the context commands, bulk close and reopen history described below. Stage 2 adds pin/reorder/multiselection UI below; additional visible groups and a layout choice remain excluded from that stage.
 
-WorkspaceLayoutState requires version 1, layout, focused slot and ordered group states. Each group has its slot, active-tab index and ordered tab records containing DocumentID, pinned flag, UTF-8 anchor/caret and first visible line. Validation rejects unknown or missing version, wrong counts/order/slots, duplicate documents per group, broken pin prefix, invalid active/focused references and negative offsets. No text or bytes are stored. A tab record may also carry `viewMode` (`preview` or `both`) and `previewSourceFraction` (the source's share of the width in Both, 0 to 1). Both are optional and are left out for a tab that shows Source, so records written before the fields existed read as Source and a Source tab is written exactly as before. An unknown mode or a fraction outside 0 to 1 is rejected. The mode is applied on restore only if the document still has a preview (see [preview-model](preview-model.md#presentation)). All four layout shapes round-trip in codec tests. Nothing writes this value to disk, and existing session/recovery schema and golden fixture bytes stay unchanged.
+WorkspaceLayoutState requires version 1, layout, focused slot and ordered group states. Each group has its slot, active-tab index and ordered tab records containing DocumentID, pinned flag, UTF-8 anchor/caret and first visible line. Validation rejects unknown or missing version, wrong counts/order/slots, duplicate documents per group, broken pin prefix, invalid active/focused references and negative offsets. No text or bytes are stored. A tab record may also carry `viewMode` (`preview` or `both`) and `previewSourceFraction` (the source's share of the width in Both, 0 to 1). Both are optional and are left out for a tab that shows Source, so records written before the fields existed read as Source and a Source tab is written exactly as before. An unknown mode or a fraction outside 0 to 1 is rejected. A tab record may carry `zoom`, the active pane's zoom level, and its split record `otherZoom` for the other pane, each −10 through 60. Both are optional and written only for a pane zoomed away from the Editor Settings default; a pane without one is restored at that default and follows it, so earlier records and unzoomed tabs are unchanged. A level outside the range is rejected. The mode is applied on restore only if the document still has a preview (see [preview-model](preview-model.md#presentation)). All four layout shapes round-trip in codec tests. Nothing writes this value to disk, and existing session/recovery schema and golden fixture bytes stay unchanged.
 
 ## Evidence boundary
 
@@ -169,11 +169,27 @@ region-clamped index and UTF-8-clamped viewport; an existing destination stays u
 Session/recovery/all-document search stay one per document; capture selection from
 focused or per-document MRU live editor. Chooser rows use TabID plus group identity.
 
-The trailing layout picker stays outside scrolling strips. Native dividers enforce
+Owner decision DS-D12 (23 November 2026): the layout is chosen from the toolbar's Editor Layout
+item, a standard menu toolbar item in the default, customisable toolbar, and from View > Editor
+Groups > Editor Group Layout, which stays when the item is removed from the toolbar. Both menus are
+built by the group command owner and show one checkmark. Group commands are off while a sheet is
+attached; the toolbar is validated again when a sheet begins and when it ends, so the item is never
+left disabled after the sheet has gone. No row sits between the toolbar and the
+tab strips: the group container starts at the top of the editor area. The earlier trailing layout
+picker and its 36-point row are gone, and `TabGroupGeometry.minimumContent` no longer reserves them:
+the bare minimum of a two-row or grid layout is 401 points high (two 200-point panes and a divider),
+where it was 437. The window's minimum is still 800 by 500, the larger normal size. Native dividers enforce
 320 x 200 total group bounds with responsive Find/status, shared chrome counted once,
 and screen-aware content/frame fit. Unfittable layout refuses atomically with status
 and announcement. Single retains its normal minimum; no gratuitous shrink. Same layout
-preserves divider ratios; layout changes reset equal shares, with aligned Grid columns.
+preserves divider ratios; layout changes reset equal shares, with aligned Grid columns. When the
+window is resized the Grid's two rows are aligned again after both have their new width, at the first
+row's divider, held between the 320-point minimums: a position is never copied from a row already
+resized to one still at its old width (that left the columns out of line and one under 320 points).
+The alignment runs when the container is resized, when it is laid out and when a row reports that it
+laid out its panes, so it does not depend on which of those AppKit does first. The row that was
+dragged leads. A share of the width given up to the other column's minimum is not taken back when
+the window widens: the divider keeps the share it then has, as the two-column divider does.
 Visible group-active status work is bounded (no per-Clone job); hidden/retired work stops,
 while recovery/monitoring remain per document. Reference shortcuts remain unassigned
 until conflict verification. Stage 4 extends explicit session persistence below; extra
@@ -243,3 +259,239 @@ new independent unsaved documents, intentionally not content-deduplicated with r
 Closed-tab history stays transient and is never serialized. No automatic last-session
 reopen, second workspace window, collections, comparison engine or AI provider is added.
 DS-14/20-23/35/40-43/62/70-73/84/90-92/100-101 govern these additions.
+
+## Docked Workspace Browser
+
+Owner decision DS-D11 (23 November 2026); DS-10/11/13/15/20-23/60/62/63/67/70-74 apply. The Workspace
+Browser is a sidebar inside the one workspace window. There is no browser panel: View > Workspace
+Browser, the Command Palette, Add Folder to Workspace and Monitor Current File all reach the same
+docked view. The browser's store, lists, open route and encoding offer are unchanged; only the view moved.
+
+The window's content is one root split, `WorkspaceSidebarSplit`. Its last pane is the editor area (the
+editor group container), which is never removed or rebuilt. The sidebar is
+inserted before it when shown and removed when hidden, so 1, 2 or 4 groups, their dividers, Clone
+panes and each tab's Source, Preview or Both share whatever width remains, exactly as they shared the
+whole window before. The sidebar draws on the window's background: no `NSVisualEffectView`, no
+source-list material, no change to the custom-materials budget.
+
+Widths come from `WorkspaceSidebarGeometry` in the Foundation-only core. The sidebar is at least 260
+points, at most 480 and 280 by default; its divider is 1 point and can be dragged between those
+bounds, never past the point where the editor area would lose the minimum of its layout
+(`TabGroupGeometry.minimumContent`). Only a drag changes the remembered width. The collapse rule at
+small sizes is explicit (DS-67):
+
+1. While the sidebar is shown the window's content minimum is the editor layout's minimum plus the
+   divider plus 260 points. The editor minimum is 800 by 500 for every layout: two columns need
+   2 x 320 + 1 = 641 points and two rows 2 x 200 + 1 = 401, both under the normal 800 by 500, and
+   the groups' strips and 28-point status rows are inside each group's 200. So the minimum with the
+   sidebar is 800 + 1 + 260 = 1061 by 500 for one, two and four groups. At that size a group is
+   800, 399 or 399 by 249 points and its source and preview in Both at least 199 each. It is never
+   lower than the minimum without the sidebar, and hiding the sidebar restores that minimum.
+2. Showing the sidebar in a narrower window grows the window to the new minimum and keeps it on
+   screen. A full-screen window, a split-view tile included, is never resized: its room is the
+   content it has. If the screen, or the full-screen content, cannot fit the minimum, the request
+   is deferred: a status message says the sidebar will appear when there is room.
+   The same test runs whenever the window is resized, changes screen, enters or leaves full screen
+   or changes its editor layout: a shown sidebar that no longer fits is hidden with a status
+   message, so the editor groups never fall below their minimum. A sidebar deferred or hidden for
+   want of room is waiting: View > Workspace Browser carries a mixed mark and a tooltip that says
+   so, and choosing it withdraws the request with a status message. While it waits it is shown,
+   without taking the keyboard, as soon as it fits. The saved layout records waiting as
+   `sidebarShown` false with `sidebarAwaitsRoom` true, so a build without that key reads hidden.
+   Restoring a waiting layout tries again and says nothing, whether or not it fits.
+3. A narrowing window takes width from the sidebar first, down to 260 points. The editor groups keep
+   at least 320 points each.
+4. Inside a group, Both keeps its own rule: source and preview keep 120 points each while there is
+   room and otherwise share the width equally.
+
+Nothing collapses to zero and no pane overlaps another; the sidebar's own controls fit at 260 points.
+
+View > Workspace Browser keeps its command identity and has no shortcut. It is a toggle with a
+checkmark (DS-22). Choosing it while hidden shows the sidebar and moves the keyboard to its list;
+choosing it while shown hides the sidebar. Escape in the sidebar returns the keyboard to the text and
+leaves the sidebar showing. Hiding returns the keyboard, if the sidebar held it, to the view that had
+it before, or to the active tab's editor when that view is gone. Showing for another reason (a
+restored layout, Add Folder, Monitor Current File) never moves the keyboard. None of these changes a
+document, its selection, scroll position, Undo history or the active tab. In the list the arrow keys
+move, typing selects by name, and Return opens the selected file or selects its tab, expands a folder,
+or shows an open document. The sidebar is an accessibility group named "Workspace Browser" holding an
+outline labelled "Workspace files". Tab and Shift-Tab move through its controls; past the last, or
+before the first, the keyboard goes to the text of the tab that is active when the key is pressed.
+That target is never stored, so it follows a tab switch, a change between Source, Preview and Both, a
+closed tab and a layout restored before any document was open. With no document open the controls wrap. The three views are chosen from a pop-up, because three segment titles do not fit 260 points.
+
+`WorkspaceLayoutState` version 1 gains optional keys: `sidebarAwaitsRoom`, above, and `sidebarShown` and `sidebarWidth` (points,
+greater than 0 and at most 10,000; clamped to the bounds when applied). A workspace whose sidebar was
+never shown writes neither, so its files and the golden fixtures are byte-for-byte unchanged. Once it
+has been used both are written, `sidebarShown` as true or false. A layout without the keys changes
+nothing when it is applied, which at launch means hidden: an older file opens as it always did. The
+automatic launch file carries the layout, so the sidebar's state returns at the next launch. It is
+applied at launch even when last session's documents are not reopened, because it describes the
+window, as its frame does. Restoring an explicit session applies the keys its layout has.
+
+Physical keyboard, VoiceOver, pointer dragging of the divider and full screen with the sidebar shown
+have not been observed; the native checks drive the same views and commands in an owned window.
+
+## What a tab shows, the mouse and the list of open tabs
+
+A tab's title is the document's name and nothing else. State is drawn beside it, as shapes with
+words behind them, never as a character in the title and never by colour alone (DS-62):
+
+- **Edited.** The close button shows a filled dot instead of its cross. Under the pointer, or while
+  the close button has the keyboard, it shows the cross. It is the same 28 by 28 button with the
+  same action, so a click on the dot closes through the same Save / Don't Save / Cancel review as a
+  click on the cross (DS-12), and an edited tab never looks as if it cannot be closed.
+- **Changed outside TextTank.** A warning triangle between the title and the close button. Its
+  tooltip gives the document, the notice and what to do next (DS-85).
+- **Selected for comparison.** A pair of opposed arrows in the same place, with its own tooltip.
+- **Pinned** remains the pin in place of the document icon; Source, Preview and Both remain the eye.
+
+A press on a state symbol is a press on its tab's title: a click selects the tab, a drag reorders
+it, and a Control-click or secondary click opens the tab's menu. The symbols are not accessibility
+elements. The tab's own label says the same thing in words, so it is said once, and the strip's
+published children (each tab, its eye while shown, its close button, then the list of open tabs) are
+the whole of what is offered. The symbols are 16 points wide with four points on either side, so the title, each symbol, the
+eye and the close button never abut (DS-14, DS-74).
+
+The tab's own accessibility label is one whole string for each combination of what the tab shows,
+pinned and edited ("notes.md, pinned, edited, showing Preview"), and one whole sentence form around it
+for an outside change, for comparison and for the two together ("notes.md, edited. Changed on disk.
+Selected for comparison."), so each can be translated as a whole (DS-84).
+
+**What gives way when a tab is narrow.** Tabs shrink from 220 to 130 points before the strip scrolls.
+From the trailing edge, in order of who keeps their place:
+
+1. the close button, which is also the edited dot: always;
+2. the eye of a tab in Preview or Both: always, because it is state;
+3. the outside-change symbol: always, because it warns that a save may overwrite other work;
+4. the comparison symbol: only while the title keeps 50 points, the width a title has beside the eye
+   at the minimum;
+5. the eye a Source tab shows under the pointer: only while the title keeps 82 points.
+
+So a 130-point tab shows close, and at most one of the two symbols, the outside change first; a
+130-point tab in Preview or Both shows close, the eye and the outside change, and its title keeps 30
+points. Whatever is not drawn is still in the tab's tooltip, its accessibility label and the list of
+open tabs.
+
+**Tooltip.** A tab's tooltip is the file's full path with the home folder written as `~`; a document
+with no file shows its name. When the file changed outside TextTank the notice follows on a second
+line. Only the home folder itself is abbreviated, not a sibling whose name starts the same.
+
+**Mouse.** A click with the other (middle) mouse button closes the tab it is pressed and released
+on, anywhere on the tab, without selecting it first. It goes through the close button's route
+(`WorkspaceWindowController.closeTab`), so unsaved changes get the same review and Cancel leaves
+everything as it was (DS-12). Pressed on one tab and released on another, or on the empty strip, it
+does nothing. A double-click on the empty part of the strip focuses that group and runs the same
+action as File > New. Both presses of the pair must land on the empty strip, within the double-click
+interval, with the same tabs in between: a first click that closed the last tab, ended a reorder or
+otherwise changed the tabs leaves the second with nothing to pair with. A double-click on a tab is two clicks on that tab and nothing more. A tab's
+controls take their own clicks, so the end of a reorder never counts as a click on the strip. The
+window's frame has first refusal over its inside edge (`FrameTextClick`): a point the frame claims is
+never treated as empty strip, so AppKit's own handling of a double-click there is untouched.
+
+The strip has no scroll bar. With the system set to always show scroll bars, or on a Mac with no
+trackpad, a scroll bar is not an overlay and would take its height from the 36-point strip, cutting
+the tabs off. The strip scrolls with the wheel or trackpad, selecting a tab reveals it, and the list
+below reaches every tab.
+
+**The list of open tabs.** When a group's tabs are at the 130-point minimum and still do not fit, so
+that its strip scrolls, a chevron pull-down appears at the trailing end of that strip, outside the
+scrolling area: a 28 by 28 target four points from the tabs, which keep their own separated close
+targets (DS-14, DS-74). It is hidden whenever the tabs fit (DS-10). It lists that group's tabs in
+strip order, with a checkmark on the active one; each row's title says in words when the tab is
+pinned or edited ("notes.md, pinned, edited"), a pinned row carries the pin, and a row's tooltip is
+the tab's tooltip (DS-62). Choosing a row selects the tab exactly as a plain click on it does and
+scrolls it into view. Each group has its own list. It is an ordinary system pull-down (DS-11): it
+takes the keyboard with Full Keyboard Access, is the strip's last accessibility child and is labelled
+"Open tabs in this group" (DS-70, DS-73). It is filled when it opens and holds no state of its own.
+
+The native checks for this section are `Tests/TabStripChecks.swift`, run by
+`scripts/test-preview-ui.sh`, which does not need the key window. They press the real controls with
+synthetic events in an owned window. Not observed: a physical pointer, middle button and tooltip
+display, VoiceOver, Full Keyboard Access, and the review sheet of an edited tab closed by the dot or
+the other mouse button (a check may not present a sheet; the route is the close button's own).
+## Keyboard areas of the window
+
+DS-73 (23 November 2026); DS-20/23/70-72/84 apply. Window > Move Focus holds two commands, Move Focus
+to Next Area and Move Focus to Previous Area. Their default keys are F6 and Shift-F6; each also
+answers Option-Command-` and Shift-Option-Command-`, for keyboards whose function keys need the Fn
+key. All four are yielding defaults (`DefaultShortcutItem`), and no menu command, editor key binding
+or reserved system shortcut uses them. AppKit lists the open windows at the end of the Window menu,
+and they count towards its twenty items (DS-23), so the menu keeps sixteen of its own: Move Focus is
+one submenu, and the five commands that close several tabs at once (Close Other Tabs, Close Tabs to
+the Left, Close Tabs to the Right, Close All in Group, Close Saved Tabs) are in Window > Close
+Multiple Tabs. They keep their identities, validation and titles, and every tab's own menu still
+lists them at its top level. Close Tab stays at the top level of Window.
+
+The areas form one ring, visited in this order and back:
+
+1. the Workspace Browser, while it is shown (its list takes the keyboard);
+2. for each editor group in its usual order: the tab strip (the active tab's title), the find bar
+   or Go to Line, whichever is shown (its field), the text, and the status row (its first item);
+3. a group with no tabs is one area: its New button.
+
+The text is each pane of a split view in turn. A tab that shows Both offers its source and then its
+preview. A tab that shows Preview alone offers only the preview: its hidden source is never given the
+keyboard, because that would change the tab to Both. With the keyboard in no area, the first move
+reaches the focused group's text.
+
+Moving the keyboard changes no selection, no scroll position and no group's active tab. The group
+that receives the keyboard becomes the focused group, as it does when it is clicked, so commands act
+where the focus ring is. Each move is announced by the area's name, with the group's name when there
+is more than one ("Tabs in Group 2, Right."), and the control that has the keyboard draws the
+standard focus ring (DS-71, DS-72).
+
+Inside an area the group surface handles the keys its controls pass up:
+
+- Tab strip: Left and Right Arrow move from tab to tab without selecting; Tab and Shift-Tab step
+  through every control, so a tab's mark and close button are reached, and after the last tab the
+  list of open tabs while the tabs overflow; Space or Return presses the control (a title selects
+  its tab and puts the keyboard in its text); the strip scrolls only to show the control that has
+  the keyboard.
+- Status row: Left and Right Arrow, or Tab and Shift-Tab, move between the items, including More,
+  an operation's Cancel and a follow-up button while they are shown. Space or Return presses a
+  button (position opens Go to Line, language opens the chooser).
+- A pull-down (a status field, More, the list of open tabs) opens with Space only.
+- Empty group: the arrow keys or Tab move between its buttons; Space or Return presses one.
+- Tab past the last control of an area, or Shift-Tab before the first, moves to the next or previous
+  area.
+- Escape returns the keyboard to the group's text. In a group with no tabs it returns to the text of
+  a group that has some. The two bars keep their own Escape on every control: the find bar closes
+  (DS-35), and Go to Line puts the caret, selection and scroll position back and closes.
+- Moving out of Go to Line with Move Focus is the same as Escape there: the bar closes and nothing of
+  the line that was previewed is kept. Only Return goes to the line.
+
+## Empty group
+
+DS-10/20/67/70/73/84/85/100 apply. A group with no tabs shows, from the top: one sentence, the New
+and Open… buttons, a message when a command reported one there, then a hint.
+
+The hint names up to four commands in secondary label style, one whole sentence each: New, Open,
+Quick Open and the Command Palette. Each sentence carries the key its menu item has at that moment,
+read from the menu bar, so a shortcut assigned in Settings, or a default that gave way to one, is
+what is shown; a command with no key is named by its menu instead ("Choose File > Quick Open… to
+find a file by name."). VoiceOver hears the key in words. The rows are brought up to date when the
+group becomes empty, when tabs change and when the window becomes key again.
+
+Below the hint come up to five recent files, newest first, under the heading "Recent files". Each
+is a button named for the file, with the path as its tooltip; two files with one name also show
+their folders. Activating one focuses that group and opens the file there by the Workspace Browser's
+route, the one File > Workspace > Reopen Recent File uses. The list is the one File > Open Recent
+shows. Files that no longer exist, and folders, are left out: at most twenty entries are checked,
+on a utility queue, and an answer that arrives after a newer question is dropped. A host whose
+support directory is isolated reads no list of the person's and shows none unless it supplies one.
+
+Nothing is clipped. The sentence, the buttons and a message always stay. Hint rows, then recent
+files, are added while they fit the group's height; the first that does not fit, and everything
+after it, is hidden, and so is a sentence wider than the group. A hidden row takes neither the
+keyboard nor VoiceOver. At the least group size, 320 by 200 points, the four commands fit and no
+recent file does. The buttons are keyboard stops of the group's area (see “Keyboard areas of the
+window”): the arrow keys or Tab move between them and Space or Return presses one.
+
+The strip remembers where the pointer is in its own coordinates. When it is laid out again or moved
+without the pointer moving (the sidebar or the group layout changed from the keyboard), it asks the
+window for the pointer again, so the cross and the eye are on the tab that is now under it. Every
+tab menu, from a secondary click, a Control-click or the accessibility Show Menu action, is shown
+through one of the strip's two presenters, which checks replace so that no menu is tracked on the
+desktop. A check likewise injects the close decision (`TabCommandController.decisionHandler`), which
+a single edited tab's close now honours in place of its review sheet, as a bulk close already did.

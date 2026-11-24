@@ -35,6 +35,17 @@ private final class PreviewLinkReceiver: NSObject, WKScriptMessageHandler {
     }
 }
 
+/// Receives the place a rendered Markdown page was scrolled to, from the application's own
+/// script. Like the link receiver it is kept by the content controller.
+private final class PreviewScrollReceiver: NSObject, WKScriptMessageHandler {
+    weak var presenter: PreviewWebPresenter?
+
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.frameInfo.isMainFrame else { return }
+        presenter?.pageWasScrolled(message.body)
+    }
+}
+
 /// Shows rendered Markdown, static HTML and SVG in one web view per tab.
 ///
 /// The web view runs no page script, keeps no website data, and can load nothing but the preview
@@ -69,6 +80,31 @@ private final class PreviewLinkReceiver: NSObject, WKScriptMessageHandler {
     private var startingOwnLoad = false
     private var navigating = false
     private var restoreScroll: CGPoint?
+    /// The block that was at the top of the page before this one, in that page's map, and how
+    /// far through it the top was. Set only when the page was scrolled away from its start.
+    private var restoreAnchor: (map: PreviewScrollMap, position: PreviewScrollMap.Position)?
+
+    // MARK: Following the source (rendered Markdown only)
+
+    /// The map of the page that is showing, once it has finished loading. Nil while a page
+    /// loads, and for HTML and SVG, which are not followed.
+    private(set) var scrollMap: PreviewScrollMap?
+    /// The map to scroll the page by: `scrollMap`, but only while the page it belongs to is the
+    /// last one given. While a newer page waits or loads, the page that is showing is on its
+    /// way out and is left where it is.
+    var settledScrollMap: PreviewScrollMap? { isSettled ? scrollMap : nil }
+    /// A person scrolled the page, which is now at this place of `scrollMap`. Never called for
+    /// a scroll the application made itself, nor while the page is not being followed.
+    var onScrolled: ((PreviewScrollMap.Position) -> Void)?
+    /// A page finished loading. `restored` is the place of its map that was put back at the
+    /// top because the same block was there in the page before it; nil for a page that starts
+    /// at its top or has no map.
+    var onPageLoaded: ((_ restored: PreviewScrollMap.Position?) -> Void)?
+    /// True while the tab wants the page's scrolling reported (Both, with sync on).
+    private var isFollowed = false
+    /// Names the page and the moment reporting was switched on. A report carries it back, so one
+    /// from an earlier page or an earlier switching-on is dropped. Zero is never used.
+    private(set) var followGeneration = 0
     private var accessibilityName = ""
 
     /// What the checks read. Counters and a short list of addresses; nothing of the page.
@@ -80,6 +116,12 @@ private final class PreviewLinkReceiver: NSObject, WKScriptMessageHandler {
         var finishedCount = 0
         /// Times the web content process ended.
         var contentLostCount = 0
+        /// Scroll reports from the page that were accepted, and ones that were dropped because
+        /// they were not three numbers naming this page and a place its map has.
+        var acceptedScrollReports = 0
+        var rejectedScrollReports = 0
+        /// Times the application scrolled the page to a place of its map.
+        var scrollCommands = 0
     }
     private(set) var checkRecord = CheckRecord()
     /// True when nothing is waiting or loading: what the web view shows is the last page given.
@@ -112,22 +154,49 @@ private final class PreviewLinkReceiver: NSObject, WKScriptMessageHandler {
             startLoad(in: webView)
             return
         }
-        // Remember where the page before this one was scrolled to. This is the application's own
-        // script in its own world; it runs although page scripts are switched off.
+        // Remember where the page before this one was scrolled to: the offset, and for rendered
+        // Markdown the block at the top, which is what the next page is scrolled to so that an
+        // edit above it does not move what is being read. This is the application's own script
+        // in its own world; it runs although page scripts are switched off.
         isReadingScroll = true
-        webView.evaluateJavaScript("[window.scrollX, window.scrollY]", in: nil, in: .defaultClient) {
+        let mapBefore = scrollMap
+        let source =
+            mapBefore == nil
+            ? "[window.scrollX, window.scrollY]"
+            : "[window.scrollX, window.scrollY].concat((\(Self.syncObject) && \(Self.syncObject).place()) || [])"
+        webView.evaluateJavaScript(source, in: nil, in: .defaultClient) {
             [weak self] result in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.isReadingScroll = false
-                if case .success(let value) = result, let pair = value as? [Double], pair.count == 2 {
-                    self.restoreScroll = CGPoint(x: pair[0], y: pair[1])
-                } else {
-                    self.restoreScroll = nil
+                self.restoreScroll = nil
+                self.restoreAnchor = nil
+                if case .success(let value) = result, let numbers = value as? [Double], numbers.count >= 2,
+                    numbers.allSatisfy(\.isFinite)
+                {
+                    self.restoreScroll = CGPoint(x: numbers[0], y: numbers[1])
+                    // A page still at its start stays there: text typed above the first block
+                    // should come into view, not push the page down.
+                    if let mapBefore, numbers.count == 4, numbers[1] > 0,
+                        let position = Self.position(index: numbers[2], fraction: numbers[3], in: mapBefore)
+                    {
+                        self.restoreAnchor = (mapBefore, position)
+                    }
                 }
                 if let webView = self.webView { self.startLoad(in: webView) }
             }
         }
+    }
+
+    /// A place made from two numbers a script gave, or nil unless they name a block of `map`
+    /// and a fraction from 0 to 1.
+    private static func position(index: Double, fraction: Double, in map: PreviewScrollMap)
+        -> PreviewScrollMap.Position?
+    {
+        guard index.isFinite, fraction.isFinite, index >= 0, index < Double(map.count),
+            index == index.rounded(), (0...1).contains(fraction)
+        else { return nil }
+        return PreviewScrollMap.Position(block: Int(index), fraction: fraction)
     }
 
     private func startLoad(in webView: PreviewWebView) {
@@ -141,6 +210,9 @@ private final class PreviewLinkReceiver: NSObject, WKScriptMessageHandler {
         handler.site = PreviewSchemeHandler.Site(
             page: next.page, resolver: PreviewResourceResolver(documentURL: next.documentURL))
         report = next.page.report
+        // Nothing is followed while a page loads: the map belongs to a page that is leaving.
+        scrollMap = nil
+        followGeneration = 0
         pageURL = url
         startingOwnLoad = true
         navigating = true
@@ -185,6 +257,125 @@ private final class PreviewLinkReceiver: NSObject, WKScriptMessageHandler {
         })();
         """
 
+    private static let syncMessageName = "textTankPreviewSync"
+    private static let syncObject = "globalThis.textTankPreviewSync"
+    /// Runs in the application's own script world, like the link script, and only for rendered
+    /// Markdown does anything call it. It never changes the page and loads nothing.
+    ///
+    /// The top-level blocks are the children of `<body>`, in the order of the page's
+    /// `PreviewScrollMap`. `place` finds the block at the top of the window by binary search;
+    /// `show` scrolls a block to the top, at once (never animated, so Reduce Motion needs no
+    /// separate case). Scrolling is reported only while `arm` has been given a number, once for
+    /// each scroll event (the web view sends at most one for each frame it draws), and never
+    /// for the position `show` itself just set. A report is three numbers: the number `arm` was
+    /// given, a block and a fraction. No timer is used, so the last report is never late.
+    static let syncScript = """
+        (function () {
+          var armed = 0, expected = null;
+          function blocks() { return document.body ? document.body.children : []; }
+          function top(list, index) { return list[index].getBoundingClientRect().top + window.scrollY; }
+          function extent(list, index) {
+            var start = top(list, index);
+            var end = index + 1 < list.length
+              ? top(list, index + 1) : list[index].getBoundingClientRect().bottom + window.scrollY;
+            return [start, Math.max(start, end)];
+          }
+          function place() {
+            var list = blocks(), low = 0, high = list.length - 1, y = window.scrollY;
+            if (high < 0) { return null; }
+            while (low < high) {
+              var middle = (low + high + 1) >> 1;
+              if (top(list, middle) <= y) { low = middle; } else { high = middle - 1; }
+            }
+            var range = extent(list, low), span = range[1] - range[0];
+            var fraction = span > 0 ? (y - range[0]) / span : 0;
+            return [low, Math.min(1, Math.max(0, fraction))];
+          }
+          function show(index, fraction, left) {
+            var list = blocks();
+            if (!(index >= 0 && index < list.length)) { return false; }
+            var range = extent(list, index);
+            var y = index === 0 && fraction === 0 ? 0 : range[0] + (range[1] - range[0]) * fraction;
+            window.scrollTo({ left: left === undefined ? window.scrollX : left, top: y, behavior: 'instant' });
+            expected = window.scrollY;
+            return true;
+          }
+          window.addEventListener('scroll', function () {
+            if (!armed) { return; }
+            if (expected !== null) {
+              if (Math.abs(window.scrollY - expected) < 1) { return; }
+              expected = null;
+            }
+            var at = place();
+            if (at) { window.webkit.messageHandlers.\(syncMessageName).postMessage([armed, at[0], at[1]]); }
+          }, { passive: true });
+          \(syncObject) = {
+            place: place,
+            show: show,
+            arm: function (generation, count) {
+              armed = generation > 0 && blocks().length === count ? generation : 0;
+              return armed > 0;
+            }
+          };
+        })();
+        """
+
+    /// Starts or stops reporting how the page is scrolled. It takes effect for the page that is
+    /// showing and for every page loaded after it.
+    func setFollowed(_ followed: Bool) {
+        guard followed != isFollowed else { return }
+        isFollowed = followed
+        armIfFollowed()
+    }
+
+    /// Tells the script whether to report, and with which number. The script checks that the
+    /// page has as many blocks as the map; if not, it stays silent and nothing is followed.
+    private func armIfFollowed() {
+        guard let webView, pageURL != nil else { return }
+        if isFollowed, let scrollMap {
+            Self.generationCounter += 1
+            followGeneration = Self.generationCounter
+            webView.evaluateJavaScript(
+                "\(Self.syncObject).arm(\(followGeneration), \(scrollMap.count))", in: nil, in: .defaultClient,
+                completionHandler: nil)
+        } else if followGeneration != 0 {
+            followGeneration = 0
+            webView.evaluateJavaScript(
+                "\(Self.syncObject).arm(0, 0)", in: nil, in: .defaultClient, completionHandler: nil)
+        }
+    }
+    private static var generationCounter = 0
+
+    /// Scrolls the page so that `position` of its map is at the top. The scroll is not animated
+    /// and is not reported back. Does nothing while no mapped page is showing.
+    func scroll(to position: PreviewScrollMap.Position) {
+        guard let webView, let scrollMap = settledScrollMap, scrollMap.blocks.indices.contains(position.block),
+            position.fraction.isFinite
+        else { return }
+        checkRecord.scrollCommands += 1
+        let fraction = min(1, max(0, position.fraction))
+        webView.evaluateJavaScript(
+            "\(Self.syncObject).show(\(position.block), \(fraction))", in: nil, in: .defaultClient,
+            completionHandler: nil)
+    }
+
+    /// A message from the sync script. Everything about it is checked: it must be exactly three
+    /// finite numbers, the first the number this page was armed with, the others a block the
+    /// map has and a fraction from 0 to 1. Anything else is dropped.
+    fileprivate func pageWasScrolled(_ body: Any) {
+        guard isFollowed, followGeneration != 0, let scrollMap, let numbers = body as? [NSNumber],
+            numbers.count == 3, !numbers.contains(where: { CFGetTypeID($0) == CFBooleanGetTypeID() }),
+            numbers[0].doubleValue == Double(followGeneration),
+            let position = Self.position(
+                index: numbers[1].doubleValue, fraction: numbers[2].doubleValue, in: scrollMap)
+        else {
+            checkRecord.rejectedScrollReports += 1
+            return
+        }
+        checkRecord.acceptedScrollReports += 1
+        onScrolled?(position)
+    }
+
     /// A link the person pressed and released the pointer on. Only `http`, `https` and `mailto`
     /// addresses are opened (DS-97).
     fileprivate func openClickedLink(_ url: URL?) {
@@ -207,6 +398,26 @@ private final class PreviewLinkReceiver: NSObject, WKScriptMessageHandler {
             ]))
     }
 
+    /// The one script world the application's scripts and their message handlers live in. It is
+    /// never the page's own world.
+    static let scriptWorld = WKContentWorld.defaultClient
+
+    /// Registers the link catcher and the scroll reporter with their message handlers. This is
+    /// the only place either is registered. `world` is always `scriptWorld` in the application;
+    /// the checks pass the page's world to a throwaway web view to show that their probe would
+    /// see a registration there.
+    static func installScripts(
+        on controller: WKUserContentController, linkReceiver: any WKScriptMessageHandler,
+        scrollReceiver: any WKScriptMessageHandler, world: WKContentWorld = scriptWorld
+    ) {
+        controller.add(linkReceiver, contentWorld: world, name: linkMessageName)
+        controller.addUserScript(
+            WKUserScript(source: linkScript, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: world))
+        controller.add(scrollReceiver, contentWorld: world, name: syncMessageName)
+        controller.addUserScript(
+            WKUserScript(source: syncScript, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: world))
+    }
+
     private func makeWebView(rules: WKContentRuleList) -> PreviewWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
@@ -218,10 +429,10 @@ private final class PreviewLinkReceiver: NSObject, WKScriptMessageHandler {
         configuration.userContentController.add(rules)
         let receiver = PreviewLinkReceiver()
         receiver.presenter = self
-        configuration.userContentController.add(receiver, contentWorld: .defaultClient, name: Self.linkMessageName)
-        configuration.userContentController.addUserScript(
-            WKUserScript(
-                source: Self.linkScript, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .defaultClient))
+        let scrollReceiver = PreviewScrollReceiver()
+        scrollReceiver.presenter = self
+        Self.installScripts(
+            on: configuration.userContentController, linkReceiver: receiver, scrollReceiver: scrollReceiver)
         configuration.setURLSchemeHandler(handler, forURLScheme: PreviewScheme.name)
         let created = PreviewWebView(frame: view.bounds, configuration: configuration)
         created.navigationDelegate = self
@@ -255,6 +466,12 @@ private final class PreviewLinkReceiver: NSObject, WKScriptMessageHandler {
         handler.onCountsChanged = nil
         pageURL = nil
         navigating = false
+        scrollMap = nil
+        followGeneration = 0
+        isFollowed = false
+        onScrolled = nil
+        onPageLoaded = nil
+        restoreAnchor = nil
     }
 
     // MARK: Navigation
@@ -281,12 +498,28 @@ private final class PreviewLinkReceiver: NSObject, WKScriptMessageHandler {
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        if let point = restoreScroll {
-            restoreScroll = nil
+        guard navigating else { return }
+        scrollMap = handler.site?.page.scrollMap
+        let point = restoreScroll
+        let anchor = restoreAnchor
+        restoreScroll = nil
+        restoreAnchor = nil
+        var restored: PreviewScrollMap.Position?
+        if let anchor, let point, let scrollMap,
+            let block = anchor.map.counterpart(of: anchor.position.block, in: scrollMap)
+        {
+            // The same block as before goes back to the top, wherever the edit moved it.
+            restored = PreviewScrollMap.Position(block: block, fraction: anchor.position.fraction)
+            webView.evaluateJavaScript(
+                "\(Self.syncObject).show(\(block), \(anchor.position.fraction), \(point.x))", in: nil,
+                in: .defaultClient, completionHandler: nil)
+        } else if let point {
             webView.evaluateJavaScript(
                 "window.scrollTo(\(point.x), \(point.y))", in: nil, in: .defaultClient, completionHandler: nil)
         }
+        armIfFollowed()
         settleNavigation()
+        onPageLoaded?(restored)
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
@@ -313,6 +546,8 @@ private final class PreviewLinkReceiver: NSObject, WKScriptMessageHandler {
         checkRecord.contentLostCount += 1
         navigating = false
         pageURL = nil
+        scrollMap = nil
+        followGeneration = 0
         onContentLost?()
     }
 }

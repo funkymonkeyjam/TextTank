@@ -9,6 +9,50 @@ import Darwin
 private final class LanguageMenu: NSMenu {
     var generation = -1
 }
+/// The languages a person chose most recently, newest first, kept in the private support
+/// folder so the chooser can offer them again after a relaunch.
+///
+/// The file holds language identifiers only. It is a convenience, so a failure to read or
+/// write it is never an alert (DS-40); the chooser then works from the list in memory. A file
+/// this version cannot read because a later one wrote it is left as it is.
+@MainActor final class LanguageRecentsStore {
+    static let limit = 5
+    static let maximumBytes = 16 * 1024
+    private struct File: Codable {
+        var version: Int
+        var languages: [String]
+    }
+    let url: URL
+    private(set) var ids: [String] = []
+    private var replaceable = true
+    init(url: URL? = nil) {
+        self.url = url ?? AppStorage.url(.languageRecents)
+        do {
+            let data = try PrivateFileStore.read(self.url, maximumBytes: Self.maximumBytes)
+            guard let file = try? JSONDecoder().decode(File.self, from: data) else { return }
+            if file.version == 1 { ids = Self.bounded(file.languages) } else { replaceable = false }
+        } catch where error.isFileNotFound {} catch {
+            // Too large, not a regular file or not readable: do not write over what is there.
+            replaceable = false
+        }
+    }
+    private static func bounded(_ ids: [String]) -> [String] {
+        var seen = Set<String>()
+        return Array(ids.filter { !$0.isEmpty && $0.utf8.count <= 256 && seen.insert($0).inserted }.prefix(limit))
+    }
+    func note(_ id: String) {
+        let previous = ids
+        ids = Self.bounded([id] + ids)
+        guard replaceable, ids != previous else { return }
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            let data = try encoder.encode(File(version: 1, languages: ids))
+            try PrivateFileStore.prepareDirectory(url.deletingLastPathComponent())
+            try PrivateFileStore.write(data, to: url, maximumBytes: Self.maximumBytes)
+        } catch {}
+    }
+}
 @MainActor final class LanguageController: NSObject, NSMenuDelegate {
     private let editorProvider: () -> TTEditor?
     private let languageProvider: () -> String
@@ -113,6 +157,12 @@ private final class LanguageMenu: NSMenu {
     }
     private func populate(_ menu: LanguageMenu) {
         menu.removeAllItems()
+        // The filterable chooser comes first: it is the quick way to a language by name. The
+        // ranges below keep every profile, the internal ones included, one level down (DS-23).
+        // No target: the document window that has the keyboard answers, as it does for Go to
+        // Line, and the item is disabled when there is none (DS-21).
+        menu.addItem(NSMenuItem(title: "Choose Language…", action: #selector(chooseLanguage(_:)), keyEquivalent: ""))
+        menu.addItem(.separator())
         var languages = languageMenuItems()
         if let plain = languages.firstIndex(where: { $0.representedObject as? String == LanguageProfile.plainTextID }) {
             menu.addItem(languages.remove(at: plain))
@@ -187,15 +237,27 @@ private final class LanguageMenu: NSMenu {
         item.target = self
         return item
     }
-    /// One item per profile whose lexer is linked, by title. The sorted list is kept until the catalog changes.
-    func languageMenuItems() -> [NSMenuItem] {
+    /// Every profile whose lexer is linked, by the name a person reads (DS-24). The sorted list
+    /// is kept until the catalog changes.
+    private func sortedEntries() -> [(title: String, id: String)] {
         if menuEntries == nil {
             let available = Set(TTEditor.availableLanguages())
-            menuEntries = (catalog?.profiles ?? []).filter { available.contains($0.lexer) }.sorted {
-                $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
-            }.map { ($0.title, $0.id) }
+            menuEntries = (catalog?.profiles ?? []).filter { available.contains($0.lexer) }
+                .map { ($0.displayName, $0.id) }
+                .sorted { $0.0.localizedCaseInsensitiveCompare($1.0) == .orderedAscending }
         }
-        return (menuEntries ?? []).map {
+        return menuEntries ?? []
+    }
+    /// The name shown for a language wherever one is named: the status bar, the chooser and the
+    /// Syntax Highlighting menu. An identifier with no profile is Plain Text or, for a language
+    /// whose profile has since been removed, the identifier that was stored.
+    func displayName(identifier: String) -> String {
+        profile(identifier: identifier)?.displayName
+            ?? (identifier == LanguageProfile.plainTextID ? "Plain Text" : identifier)
+    }
+    /// One item per profile whose lexer is linked, by display name.
+    func languageMenuItems() -> [NSMenuItem] {
+        return sortedEntries().map {
             let item = NSMenuItem(title: $0.title, action: #selector(selectLanguage(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = $0.id
@@ -516,7 +578,7 @@ private final class LanguageMenu: NSMenu {
             let styleIndex = selector.indexOfSelectedItem
             var style = proposed.profiles[profileIndex].styles[styleIndex]
             let edit = TTAlert()
-            edit.messageText = "\(proposed.profiles[profileIndex].title) — \(style.name)"
+            edit.messageText = "\(proposed.profiles[profileIndex].displayName) — \(style.name)"
             edit.informativeText =
                 "Choose a font and size, or leave either blank to follow the editor. Custom RGB stays fixed in light/dark appearances; turn it off to use "
                 + (proposed.profiles[profileIndex].udl == nil
@@ -569,10 +631,104 @@ private final class LanguageMenu: NSMenu {
         } catch { TTAlert.present(error) }
     }
     @objc private func selectLanguage(_ item: NSMenuItem) {
-        guard let id = item.representedObject as? String, let editor = editorProvider(),
-            applyToDocument(identifier: id, through: editor)
-        else { return }
+        guard let id = item.representedObject as? String, let editor = editorProvider() else { return }
+        select(identifier: id, in: editor)
+    }
+    /// The one route by which a person's choice of language is applied, from the menu or the
+    /// chooser. False, with nothing changed and nothing remembered, when the profile is gone or
+    /// its lexer is not linked.
+    @discardableResult private func select(identifier id: String, in editor: TTEditor) -> Bool {
+        guard applyToDocument(identifier: id, through: editor) else { return false }
         setLanguage(id)
+        recentsStore.note(id)
+        return true
+    }
+
+    // MARK: Language chooser
+
+    /// The language the document's name and first line suggest, for the chooser's first row.
+    var detectedLanguage: () -> String? = { nil }
+    /// The window the chooser is a sheet on: the workspace window.
+    var chooserParent: () -> NSWindow? = { nil }
+    /// Shows the chooser. Checks replace this so that no sheet is put on the desktop.
+    var presentChooser: @MainActor (ChoicePanel, NSWindow?) -> Void = { $0.show(parent: $1) }
+    /// Where the recently chosen languages are kept; nil for the private support folder.
+    var recentsURL: URL?
+    private(set) lazy var recentsStore = LanguageRecentsStore(url: recentsURL)
+    private(set) var chooser: ChoicePanel?
+    static let chooserIdentifier = "language.chooser"
+    static let chooserEmptyMessage = "No matching languages"
+
+    /// The chooser's rows before anything is typed: the detected language, then the languages
+    /// chosen most recently, then every other language by name. A language is listed once.
+    /// Internal profiles are left out; a recent or detected one that is no longer available is too.
+    func chooserRows(current: String?, detected: String?, recent: [String]) -> [ChoicePanel.Row] {
+        let internalIDs = LanguageProfile.internalIDs
+        let entries = sortedEntries().filter { !internalIDs.contains($0.id) }
+        let names = Dictionary(entries.map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
+        var listed = Set<String>(), rows: [ChoicePanel.Row] = []
+        func add(_ id: String, _ kind: String, _ spoken: String) {
+            guard let name = names[id], listed.insert(id).inserted else { return }
+            let marks = [kind, id == current ? "Current" : ""].filter { !$0.isEmpty }
+            let spokenMarks = [spoken, id == current ? "Current language" : ""].filter { !$0.isEmpty }
+            rows.append(
+                .init(
+                    id: id, title: name, accessory: marks.joined(separator: " · "),
+                    accessoryLabel: spokenMarks.joined(separator: ", ")))
+        }
+        if let detected { add(detected, "Detected", "Detected for this document") }
+        for id in recent { add(id, "Recent", "Recently chosen") }
+        for entry in entries { add(entry.id, "", "") }
+        return rows
+    }
+    /// Narrows the rows to those whose name contains what was typed, or whose identifier starts
+    /// with it ("cpp" finds C++). An exact name comes first, then names that start with the
+    /// text; within each, the order above is kept.
+    static func filterChooserRows(_ rows: [ChoicePanel.Row], matching text: String) -> [ChoicePanel.Row] {
+        let query = text.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return rows }
+        func rank(_ row: ChoicePanel.Row) -> Int? {
+            if row.title.localizedCaseInsensitiveCompare(query) == .orderedSame { return 0 }
+            if row.title.range(of: query, options: [.caseInsensitive, .anchored]) != nil { return 1 }
+            if row.title.localizedCaseInsensitiveContains(query) { return 2 }
+            return row.id.range(of: query, options: [.caseInsensitive, .anchored]) != nil ? 3 : nil
+        }
+        return rows.enumerated().compactMap { index, row in rank(row).map { ($0, index, row) } }
+            .sorted { ($0.0, $0.1) < ($1.0, $1.1) }.map(\.2)
+    }
+    /// View > Syntax Highlighting > Choose Language… and the language field of the status bar.
+    /// Return applies the selected language to the document the chooser was opened for; Escape
+    /// or Cancel closes it with nothing changed.
+    @objc func chooseLanguage(_ sender: Any?) {
+        if let chooser {
+            chooser.showAgain()
+            return
+        }
+        guard let editor = editorProvider() else { return }
+        let parent = chooserParent()
+        guard parent?.attachedSheet == nil else { return }
+        let panel = ChoicePanel(
+            title: "Choose Language", identifier: Self.chooserIdentifier, action: "Use Language",
+            filterLabel: "Search languages")
+        chooser = panel
+        // The list as it was when the chooser opened: choosing closes it.
+        let rows = chooserRows(current: languageProvider(), detected: detectedLanguage(), recent: recentsStore.ids)
+        panel.rows = { rows }
+        panel.filteredRows = { Self.filterChooserRows(rows, matching: $0) }
+        panel.emptyMessage = Self.chooserEmptyMessage
+        panel.onClose = { [weak self] in self?.chooser = nil }
+        panel.choose = { [weak self, weak editor] id in
+            guard let self, let editor, self.editorProvider() === editor else {
+                throw FormFailure.documentChanged
+            }
+            guard self.select(identifier: id, in: editor) else {
+                throw LanguageError.invalid("This language is no longer available. Choose another.")
+            }
+            // DS-72: the only visible result is the status bar's language field.
+            Announce.say("Syntax highlighting set to \(self.displayName(identifier: id)).", from: parent)
+            return true
+        }
+        presentChooser(panel, parent)
     }
     @objc func complete() {
         guard let editor = editorProvider(), let profile = profile(identifier: languageProvider()) else { return }
@@ -580,7 +736,7 @@ private final class LanguageMenu: NSMenu {
     }
     @objc func callTip() {
         guard let editor = editorProvider(), let profile = profile(identifier: languageProvider()) else { return }
-        editor.showCallTip("\(profile.title): \(profile.completions.prefix(30).joined(separator:", "))")
+        editor.showCallTip("\(profile.displayName): \(profile.completions.prefix(30).joined(separator:", "))")
     }
     @objc func functions() {
         do {

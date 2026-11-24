@@ -275,6 +275,9 @@ struct MarkdownBlockParser {
         var blocks: [MarkdownBlock]
         /// True when a blank line separates two of `blocks`. This is what makes a list loose.
         var hasBlankLineBetweenBlocks: Bool
+        /// For the outermost level only: the lines each of `blocks` was made from, as indices
+        /// into the lines that were parsed. Empty for the content of a quote or a list item.
+        var lineRanges: [Range<Int>] = []
     }
 
     let maxNesting: Int
@@ -298,6 +301,7 @@ struct MarkdownBlockParser {
         var index = 0
         var sawBlankLine = false
         var hasBlankLineBetweenBlocks = false
+        var lineRanges: [Range<Int>] = []
         while index < lines.count {
             try poll.checkpoint(lines[index].count + 1)
             if MarkdownText.isBlank(lines[index]) {
@@ -306,13 +310,17 @@ struct MarkdownBlockParser {
                 continue
             }
             let blockCountBefore = blocks.count
+            let firstLine = index
             index = try parseBlock(at: index, in: lines, depth: depth, into: &blocks)
             if blocks.count > blockCountBefore {
                 if sawBlankLine && blockCountBefore > 0 { hasBlankLineBetweenBlocks = true }
                 sawBlankLine = false
+                // A block is made of at least the line it starts on.
+                if depth == 0 { lineRanges.append(firstLine..<max(firstLine + 1, index)) }
             }
         }
-        return Result(blocks: blocks, hasBlankLineBetweenBlocks: hasBlankLineBetweenBlocks)
+        return Result(
+            blocks: blocks, hasBlankLineBetweenBlocks: hasBlankLineBetweenBlocks, lineRanges: lineRanges)
     }
 
     /// Parses the block that starts at the non-blank line `index` and returns the index of the

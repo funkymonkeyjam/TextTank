@@ -108,15 +108,23 @@ import TextTankCore
     }
 
     static let toggleTitle = Strings.text("view.mode.toggle", "Toggle Preview")
-    /// Shift-Command-V. It is a default that gives way to a shortcut the person assigned to the
+    /// Control-Command-V (owner decision, 24 November 2026: Shift-Command-V, the first default,
+    /// can be held system-wide by another application and then never reaches TextTank). It is
+    /// a default that gives way to a shortcut the person assigned to the
     /// same key in Settings, as Save All and Actual Size do, so a settings file that already
-    /// uses Shift-Command-V keeps working (DS-25 is not involved: no system shortcut has this key).
-    static let toggleShortcut = MenuShortcut("V")
+    /// uses Control-Command-V keeps working (DS-25 is not involved: no system shortcut has this key).
+    static let toggleShortcut = MenuShortcut("v", [.control, .command])
 
-    /// Adds Source, Preview and Both, then Toggle Preview and a separator. The items go to the
-    /// first responder; the active tab validates them, with a checkmark on the mode it shows
-    /// (DS-22) and all four disabled for a document with no preview (DS-21).
-    static func addItems(to menu: NSMenu) {
+    /// The submenu is named as the Preview mode is, and its last item as the Settings row is.
+    static var menuTitle: String { title(.preview) }
+    static let syncTitle = "Sync Scrolling in Both"
+
+    /// View > Preview (DS-D13): Source, Preview and Both, Toggle Preview, a separator and Sync
+    /// Scrolling in Both. The items go to the first responder; the active tab validates them,
+    /// with a checkmark on the mode it shows and on the stored sync setting (DS-22), and all of
+    /// them disabled for a document with no preview (DS-21).
+    static func makeMenu() -> NSMenu {
+        let menu = NSMenu(title: menuTitle)
         for mode in DocumentViewMode.allCases {
             menu.addItem(
                 title: title(mode), action: #selector(EditorWindowController.setDocumentViewMode(_:)),
@@ -126,5 +134,7 @@ import TextTankCore
             title: toggleTitle, action: #selector(EditorWindowController.toggleDocumentPreview(_:)),
             fallback: toggleShortcut)
         menu.addItem(.separator())
+        menu.addItem(title: syncTitle, action: #selector(EditorWindowController.toggleSyncPreviewScrolling(_:)))
+        return menu
     }
 }

@@ -651,7 +651,6 @@ extension DocumentChecks {
             check(
                 browserAsked == 0 && NSDocumentController.shared.documents.count == before,
                 "the refused symlink asked nothing and opened nothing")
-            browser.window?.close()
         }
 
         // F192
@@ -972,7 +971,8 @@ extension DocumentChecks {
                 "a recovered document is unsaved and titled after the file it is a draft of")
             check(
                 status.stringValue.contains("Recovered draft of shopping list.txt")
-                    && status.stringValue.contains("saved \(stampText)") && status.textColor == .secondaryLabelColor,
+                    && status.stringValue.contains("saved \(stampText)") && status.textColor == .labelColor
+                    && status.font?.fontDescriptor.symbolicTraits.contains(.bold) == false,
                 "the status line of a recovered document says what it came from and when")
             edit(recovered, "draft text, edited")
             recovered.flushRecovery()
@@ -1064,7 +1064,6 @@ extension DocumentChecks {
                 try browser.openOfferingEncoding(sessionURL) == nil && routed == [sessionURL]
                     && NSDocumentController.shared.documents.isEmpty,
                 "a session snapshot activated in the workspace browser is routed to the restore prompt")
-            browser.window?.close()
             // Reading never depends on the extension.
             let renamed = area.appendingPathComponent("older-snapshot.json")
             try WorkspaceStore.save(session, to: renamed)

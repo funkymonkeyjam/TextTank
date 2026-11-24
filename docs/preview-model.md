@@ -103,6 +103,24 @@ Inlines:
 Output follows the CommonMark reference renderer's layout: one block per line, `<p>` omitted in
 tight lists, `<hr />`, `<br />`, `<img … />`.
 
+### Which lines a block came from
+
+`MarkdownRenderer.renderWithScrollMap` returns the same fragment and, beside it, a
+`PreviewScrollMap`: one entry for each top-level block, in order, with the zero-based source line
+it starts on, the number of lines it was made from, and a fingerprint (a hash of those lines).
+The renderer writes exactly one element at the top level for each entry, so entry *n* is the
+*n*th child of the page's `<body>`. The HTML carries no mark for this and is byte for byte what
+`render` returns. Blank lines and link reference definitions belong to no entry. Lines end at LF,
+CRLF or CR, as the editor counts them. A block inside a quote or a list item has no entry of its
+own; its place is a fraction of the top-level block that holds it.
+
+- `position(forLine:)` gives a block and a fraction from 0 to 1 through it; `line(for:)` gives
+  one of the block's own lines back. Both cost a binary search or less.
+- `counterpart(of:in:)` finds a block in the map of a later rendering. An edit below a block
+  leaves its number alone and an edit above it moves it by the change in the number of blocks;
+  the block's fingerprint decides between the two, and the eight blocks after it decide when its
+  own text was edited or repeats. The cost does not depend on the size of the document.
+
 ### Deliberate differences from CommonMark
 
 These are decisions, not gaps:
@@ -298,7 +316,7 @@ locked.
 
 Every tab shows one of three modes of its document. **Source** is the editor, and the default.
 **Preview** is the read-only preview alone. **Both** is the editor and the preview side by side
-with a divider that can be dragged. The View menu has the three commands, with a checkmark on the
+with a divider that can be dragged. View > Preview has the three commands, with a checkmark on the
 one that is showing (DS-22). They have no shortcut. They are disabled for a document that
 `PreviewKind.kind` gives no preview (DS-21). The other ways to change the mode are described
 under "Switching the mode" below; all of them end in the same `chooseViewMode` (DS-20). When a document stops having one, because its
@@ -337,15 +355,15 @@ the preview of a tab that shows Preview alone.
 Besides the three View commands there are four routes. None of them changes what a preview may
 load or run.
 
-**Toggle Preview** (View, directly under Both; Shift-Command-V). From Source it shows the
+**Toggle Preview** (View > Preview, directly under Both; Control-Command-V since 24 November 2026, when the owner moved it from Shift-Command-V, which another application can hold system-wide). From Source it shows the
 rendered mode the person chose last, Preview or Both, and from either of those it returns to
 Source. Until one has been chosen it shows Both. It is disabled for a document with no preview
 (DS-21) and carries no checkmark: the three items above it show the mode (DS-22). The shortcut is
 a default of the kind Save All and Actual Size have (`DefaultShortcutItem`): a shortcut the person
 assigned to the same key in Settings keeps the key, and the menu item then has none. The Command
 Palette lists the command because it is a menu item. Like the three mode commands it is a view
-change that a macro recording neither records nor is discarded by. With it View lists twenty
-items, the DS-23 limit.
+change that a macro recording neither records nor is discarded by. Since DS-D13 the mode
+commands are in View > Preview, and View's top level lists fourteen items (DS-23).
 
 **The tab's context menu.** A tab whose document has a preview has a section with Source,
 Preview and Both, titled as in the View menu, with a checkmark on what that tab shows
@@ -507,9 +525,19 @@ one the page arranged; it is stopped and not reported. The navigation delegate o
 either: a link activation that reaches it is cancelled. Without a pointer, the address is still
 available through Copy Link. The context menu keeps only Copy and Copy Link.
 
-The application's own scripts (reading and restoring the scroll position across a new
-rendering, and the link catcher) run in `WKContentWorld.defaultClient`. Page scripts being off
-does not affect them; the checks rely on this and would fail if it changed.
+The application's own scripts (reading and restoring the place across a new rendering, the
+link catcher and the scroll reporter described under
+[Scroll sync in Both](#scroll-sync-in-both)) run in `WKContentWorld.defaultClient`. Page scripts
+being off does not affect them; the checks rely on this and would fail if it changed. The page's
+own world has none of their objects or message handlers, and a check observes that.
+
+**The reader's place across a new rendering.** For rendered Markdown the page before a new one
+is asked which top-level block is at the top of the window and how far through it the top is.
+When the new page has loaded, `PreviewScrollMap.counterpart` finds that block in the new map and
+it is scrolled back to the same fraction. An edit above what is being read therefore does not
+move it, however many blocks the edit added or removed. A page still at its very top stays at
+the top. HTML, SVG, and a Markdown page whose map is missing keep their offset in points, as
+before.
 
 ### The table (CSV, TSV)
 
@@ -536,6 +564,87 @@ members of that name where names repeat; that reads every name of the object, so
 to 100,000 names for one new parse, and rows beyond that are left closed. Invalid JSON shows the tree read before the
 error, the error sentence with its line and column in the message row, and Go to Error, which
 shows the source and puts the caret on the byte where the text stopped being valid.
+
+### Scroll sync in Both
+
+While a tab shows Both, scrolling the source scrolls the preview to the matching place and
+scrolling the preview scrolls the source to the matching line (`PreviewScrollSync`, one per
+tab, owned by the coordinator).
+
+| Format | What is matched |
+| --- | --- |
+| Markdown | A source line and a top-level block of the page, through the page's `PreviewScrollMap`, with the fraction of the block the line is at. From the preview, the source goes to one of the block's own lines. |
+| CSV, TSV | A source line and the row that starts on or before it, so a line inside a quoted value with line breaks is the row that value is in. From the table, the source goes to the line the top row starts on. |
+| JSON | A source line and the last row showing whose value starts on or before it; a value inside a closed row is that row. From the tree, the source goes to the line the top row's value starts on. |
+| HTML, SVG | Not followed. Nothing ties a place in the rendered page to a source line: the HTML scan is a tokenizer, a page can lay its content out in any order, and an SVG is one image. |
+
+The source pane that leads or follows is the tab's own: scrolling either the editor or its clone
+scrolls the preview, and the preview scrolls the pane used last.
+
+**The switch.** `syncPreviewScrolling` in the settings file is a Boolean; sync is on unless it
+is `false`, so a file without the member behaves as on. It is an Optional addition to the
+version-1 format, written as one member by `SettingsStore.updateViewPreference(.syncPreviewScrolling)`.
+There is nothing to apply when it changes: it is read at every scroll of a tab that shows Both.
+Two controls set it, and each shows a change made by the other at once: the "Sync scrolling in
+Both" row under Previews in Settings, and View > Preview > Sync Scrolling in Both (DS-D13), a
+toggle with a checkmark that is disabled, like the rest of that submenu, for a document with no
+preview. The Command Palette lists the menu item.
+
+**What it may not do.** The security rules of the web view are unchanged: page JavaScript is
+off, the response header carries the same policy, the rule list blocks the same loads, and no
+file or network access was added. The scroll reporter is one more of the application's own
+scripts in `WKContentWorld.defaultClient`. It reads the positions of the body's children and
+calls `window.scrollTo`; it changes nothing in the page and loads nothing. It reports through a
+message handler registered in that world only, and a report is three numbers: the number the page
+was armed with, a block and a fraction. The application drops a report that is not exactly
+three finite numbers (a Boolean is not a number), whose first number is not the one given to the
+page that is showing, whose block the map does not have, or whose fraction is outside 0 to 1.
+The page is armed only if it has as many top-level elements as its map has entries, and again
+for every page, so a report from a page that has left is dropped. The map itself never enters
+the page.
+
+**No echo, no jump.**
+
+- A scroll the application made is not answered. The script remembers the offset it set and
+  ignores a scroll event that leaves the page there; the source and the table remember the line
+  or row they were put at. No timer or delay is involved.
+- Nothing is animated, with Reduce Motion on or off: the page is scrolled with
+  `behavior: 'instant'` and the views with `NSClipView.scroll(to:)`.
+- A scroll of the source is looked at in the next turn of the main queue, never inside the
+  editor's own callback: Scintilla moves its top line while it is still applying an edit made
+  above it, before the document's revision changes. Several scrolls before that turn count as
+  one.
+- The preview is scrolled only while it shows the text as it is now. Between an edit and its
+  rendering the map's lines are not the text's lines, so a scroll of the source in that time is
+  remembered and followed when the new rendering is showing, and then only if the place kept
+  for the reader is not already the source's line. An edit by itself never moves the preview.
+  An edit that takes the caret elsewhere (typing at the bottom of the pane, Undo of a change
+  far away) scrolls the source, and the preview follows that once the edit is rendered.
+- While a pane is being resized nothing is followed: lines wrapping again are not scrolling.
+- A preview that has just been made, and one loaded again after its content was lost, starts
+  where the source is.
+
+**When it works.** Only while the tab is on screen, shows Both and has a followed format. A
+hidden tab, a tab in Preview alone and a tab in Source hold no observer, and the page's script
+reports nothing; Source releases everything with the pane. One scroll costs a binary search
+(over the map's entries, the rows' starting lines, or the rows showing) and one scroll of the
+other side; nothing is read or measured for the whole document. A document over the 8 MiB limit
+has no page, so nothing is followed. Sync only scrolls: it never moves the selection or the
+caret, takes the keyboard, edits, or touches Undo or the file.
+
+**Limits of the match.**
+
+- Inside one top-level block the match is proportional. In a long list, table or quote whose
+  items differ much in height, the source line and the preview can be a few items apart.
+- Between an edit and its rendering, a scroll of the preview is matched with the lines of the
+  rendering that is showing. After an edit above the place, the source can land off by the
+  number of lines the edit added or removed until the next scroll.
+- Folded or wrapped source lines are matched by document line; the fraction of a wrapped line
+  is not used.
+- Outside Both, or with sync off, the table and the tree keep their offset in points across a
+  new parse, as before, so rows added above slide the rows under it. In Both with sync on they
+  do not: when the top row was the row of the source's top line before the parse, the row of
+  that line is put back at the top after it, whether or not the edit moved a source line.
 
 ### Measurements
 
@@ -574,17 +683,25 @@ the others are left closed.
   application makes such a load.
 - The mark on the tab under a real pointer: the tracking area's enter, move and exit events, a
   physical click, and how the eye looks beside a truncated title. The checks tell the strip
-  where the pointer is and press the button through `performClick`. Pressing Shift-Command-V on
+  where the pointer is and press the button through `performClick`. Pressing Control-Command-V on
   a keyboard is not exercised either; the checks send the menu item's action.
 - The tab menu's Source, Preview and Both while a sheet or a comparison window blocks them. They
   share one test (`blockedReason`) with the tab commands, and a check observes it for a tab
   operation in progress; no check opens a sheet or a comparison window for it, because a check
   must not put a dialog on the desktop and this check process never holds the key window.
-- Shift-Command-V pressed with the keyboard in a preview. From the table, the tree and the find
+- Control-Command-V pressed with the keyboard in a preview. From the table, the tree and the find
   field no view takes the key equivalent and the action's responder chain reaches the tab. The
   web view (Markdown, HTML, SVG) answers every key equivalent itself and passes on what the
   page does not use, as it does for Command-F; that hand-back needs a key window and was not
   observed.
 - `NSDocumentController.openDocument` itself with a format set to Preview or Both. The check
   process has no document types, so it performs the same three steps (read, register, show).
+- Scroll sync under a person's hand: a trackpad or wheel scroll with momentum, the scroll bar,
+  dragging the divider or resizing the window while both sides show, and scrolling the clone
+  pane. The checks scroll the editor through its bridge, the page through the application's own
+  script and the table and tree through their clip views, and observe the other side.
+- Reduce Motion itself. Nothing in sync animates in either setting, which a check reads from
+  the script; the system setting was not switched.
+- What a scroll costs on the main thread. It is a binary search by construction; no time was
+  measured for it.
 - Release-build timings.
