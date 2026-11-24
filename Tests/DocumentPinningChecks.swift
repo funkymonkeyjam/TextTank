@@ -1139,6 +1139,25 @@ extension DocumentChecks {
                     "target": "explicit",
                 ],
             ]
+            // Merged on 23 November 2026 (DS-D13): View > Close Split View has no row of its own.
+            // View > Split Tab View is the one toggle that splits and closes; `closeSplit:` is
+            // still an action. This is the only command the regrouped View menu stopped listing.
+            let closeSplitMerged: [[String: String]] = [
+                ["action": "closeSplit:", "object": "", "key": "", "modifiers": "1048576", "target": "responder"]
+            ]
+            // Added with it: View > Preview > Sync Scrolling in Both (the stored setting, on the
+            // active tab's validation), View > Show > Change Bars and View > Centered Text Column.
+            let viewRegroupAdded: [[String: String]] = [
+                [
+                    "action": "toggleSyncPreviewScrolling:", "object": "", "key": "", "modifiers": "1048576",
+                    "target": "responder",
+                ],
+                ["action": "toggleChangeBars:", "object": "", "key": "", "modifiers": "1048576", "target": "explicit"],
+                [
+                    "action": "toggleCenteredColumn:", "object": "", "key": "", "modifiers": "1048576",
+                    "target": "explicit",
+                ],
+            ]
             // Added on 23 November 2026: View > Syntax Highlighting > Choose Language…, the
             // filterable chooser the status bar's language field also opens. Nothing was removed.
             let chooseLanguageAdded: [[String: String]] = [
@@ -1146,9 +1165,9 @@ extension DocumentChecks {
             ]
             var accounted = identities(
                 formerCommands + deliberatelyAdded + togglePreviewAdded + quickOpenWithKey + localHistoryAdded
-                    + chooseLanguageAdded)
+                    + viewRegroupAdded + chooseLanguageAdded)
             var removedRowsInFixture = 0
-            for removed in identities(deliberatelyRemoved + quickOpenWithoutKey) {
+            for removed in identities(deliberatelyRemoved + quickOpenWithoutKey + closeSplitMerged) {
                 if let index = accounted.firstIndex(of: removed) {
                     accounted.remove(at: index)
                     removedRowsInFixture += 1
@@ -1157,8 +1176,9 @@ extension DocumentChecks {
             let current = identities(menuSnapshot)
             check(
                 formerCommands.count == 338
-                    && removedRowsInFixture == deliberatelyRemoved.count + quickOpenWithoutKey.count,
-                "DS-D4 the fixture lists all 338 commands of the fourteen-menu bar, the two rows of the retired recipe automation among them")
+                    && removedRowsInFixture == deliberatelyRemoved.count + quickOpenWithoutKey.count
+                        + closeSplitMerged.count,
+                "DS-D4 the fixture lists all 338 commands of the fourteen-menu bar, the two rows of the retired recipe automation and Close Split View's row among them")
             if !check(
                 current == accounted.sorted(),
                 "DS-D4 every command of the fourteen-menu bar is listed exactly once more in the nine-menu bar, apart from the removals named")

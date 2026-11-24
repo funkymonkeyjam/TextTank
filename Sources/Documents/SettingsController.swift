@@ -105,6 +105,9 @@ extension EditorSettings {
         editor.whitespaceVisible = value.showWhitespaceEnabled
         editor.lineEndingsVisible = value.showLineEndingsEnabled
         editor.wrap = value.wrap
+        // A large-file document's owner stops its change record again (EditorSettingsApplication).
+        editor.changeBarsVisible = value.changeBarsEnabled
+        editor.centeredColumnCharacters = value.centeredColumnEnabled ? value.centeredColumnCharacters : 0
     }
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(toggleAutoIndent(_:)) {
@@ -117,6 +120,10 @@ extension EditorSettings {
             item.state = value.currentLineHighlightEnabled ? .on : .off
         } else if item.action == #selector(toggleIndentGuides(_:)) {
             item.state = value.indentGuidesEnabled ? .on : .off
+        } else if item.action == #selector(toggleChangeBars(_:)) {
+            item.state = value.changeBarsEnabled ? .on : .off
+        } else if item.action == #selector(toggleCenteredColumn(_:)) {
+            item.state = value.centeredColumnEnabled ? .on : .off
         }
         return true
     }
@@ -127,6 +134,10 @@ extension EditorSettings {
         updateViewPreference(.currentLineHighlight, sender: sender)
     }
     @objc func toggleIndentGuides(_ sender: Any?) { updateViewPreference(.indentGuides, sender: sender) }
+    /// View > Show > Change Bars and View > Centered Text Column (DS-D13): one stored choice each,
+    /// for every editor view, shown with a checkmark (DS-22).
+    @objc func toggleChangeBars(_ sender: Any?) { updateViewPreference(.changeBars, sender: sender) }
+    @objc func toggleCenteredColumn(_ sender: Any?) { updateViewPreference(.centeredColumn, sender: sender) }
     /// Show Line Numbers, Show Whitespace and Show Line Endings stay catalog commands in the View
     /// menu; the active tab routes them here so that one stored choice reaches every editor view.
     func isEnabled(_ preference: EditorViewPreference) -> Bool { preference.enabled(in: value) }
@@ -320,8 +331,9 @@ private final class SettingsKeyEquivalents: NSView {
     private let filter = NSSearchField()
     private let changedOnly = NSButton(checkboxWithTitle: "Changed from default", target: nil, action: nil)
     private let noMatches = AnnouncingLabel(wrappingLabelWithString: "")
-    private let width = NSTextField(), size = NSTextField(), zoom = NSTextField()
+    private let width = NSTextField(), size = NSTextField(), zoom = NSTextField(), column = NSTextField()
     private let widthStepper = NSStepper(), sizeStepper = NSStepper(), zoomStepper = NSStepper()
+    private let columnStepper = NSStepper()
     private let tabs = NSButton(checkboxWithTitle: "Indent with tabs", target: nil, action: nil)
     private let wrap = NSButton(checkboxWithTitle: "Wrap lines", target: nil, action: nil)
     /// Checkboxes made by `toggleRow`, with the stored member each one edits.
@@ -511,7 +523,9 @@ private final class SettingsKeyEquivalents: NSView {
         NumericInput.configure(width)
         NumericInput.configure(size, fractional: true)
         NumericInput.configure(zoom)
-        for field in [width, size, zoom] {
+        NumericInput.configure(column)
+        column.stringValue = String(displayed.centeredColumnCharacters)
+        for field in [width, size, zoom, column] {
             field.target = self
             field.action = #selector(commitField(_:))
             field.delegate = self
@@ -612,6 +626,28 @@ private final class SettingsKeyEquivalents: NSView {
             "settings.showLineEndings", .appearance, "Show line endings",
             keywords: ["eol", "crlf", "newline", "invisibles", "carriage return"], \.showLineEndings,
             default: standard.showLineEndingsEnabled)
+        // SETTINGS-ROW-EXTENSION (Appearance): View › Show › Change Bars and View › Centered Text
+        // Column, each one stored choice for every editor view (DS-D13).
+        toggleRow(
+            "settings.changeBars", .appearance, "Show change bars",
+            keywords: ["modified lines", "changed lines", "change history", "edited", "unsaved"],
+            \.changeBars, default: standard.changeBarsEnabled)
+        toggleRow(
+            "settings.centeredColumn", .appearance, "Center the text in a column",
+            keywords: ["centered text column", "centred", "margins", "focus", "reading width", "line length"],
+            \.centeredColumn, default: standard.centeredColumnEnabled)
+        let columns = EditorSettings.centeredColumnWidths
+        addRow(
+            "settings.centeredColumn.width", .appearance, "Column width (characters)",
+            keywords: ["centred column", "line length", "margins"],
+            views: numberViews(
+                "Column width (characters)", column, columnStepper, identifier: "settings.centeredColumn.width",
+                range: Double(columns.lowerBound)...Double(columns.upperBound)),
+            differs: { $0.centeredColumnCharacters != standard.centeredColumnCharacters },
+            reset: { [unowned self] in
+                try self.write { $0.centeredColumnWidth = nil }
+                self.adoptField(self.column)
+            })
 
         // Files
         ControlPresentation.populate(
@@ -860,7 +896,8 @@ private final class SettingsKeyEquivalents: NSView {
         }
     }
     @objc private func step(_ sender: NSStepper) {
-        guard let field = [widthStepper: width, sizeStepper: size, zoomStepper: zoom][sender] else { return }
+        guard let field = [widthStepper: width, sizeStepper: size, zoomStepper: zoom, columnStepper: column][sender]
+        else { return }
         // The stepper replaces whatever was being typed; it does not commit that draft first.
         field.abortEditing()
         field.stringValue =
@@ -879,6 +916,9 @@ private final class SettingsKeyEquivalents: NSView {
         } else if field === zoom {
             displayed.defaultZoom = owner.value.defaultZoom
             zoom.stringValue = String(displayed.initialZoom)
+        } else if field === column {
+            displayed.centeredColumnWidth = owner.value.centeredColumnWidth
+            column.stringValue = String(displayed.centeredColumnCharacters)
         }
     }
     /// Shows the file itself, or the folder it will be written to before any setting is changed.
@@ -912,6 +952,8 @@ private final class SettingsKeyEquivalents: NSView {
         sync(width, \.tabWidth) { String($0.tabWidth) }
         sync(size, \.fontSize) { NumericInput.editable($0.basePointSize) }
         sync(zoom, \.defaultZoom) { String($0.initialZoom) }
+        sync(column, \.centeredColumnWidth) { String($0.centeredColumnCharacters) }
+        columnStepper.integerValue = latest.centeredColumnCharacters
         widthStepper.integerValue = latest.tabWidth
         sizeStepper.doubleValue = latest.basePointSize
         zoomStepper.integerValue = latest.initialZoom
@@ -983,7 +1025,18 @@ private final class SettingsKeyEquivalents: NSView {
                     }
                     let value = n == displayed.initialZoom ? displayed.defaultZoom : n
                     try merge(value, key: \.defaultZoom, baseline: displayed.defaultZoom, into: &latest)
+                } else if field === column {
+                    guard let n = NumericInput.integer(column), EditorSettings.centeredColumnWidths.contains(n) else {
+                        throw SettingsError.centeredColumnWidth
+                    }
+                    let value = n == displayed.centeredColumnCharacters ? displayed.centeredColumnWidth : n
+                    try merge(
+                        value, key: \.centeredColumnWidth, baseline: displayed.centeredColumnWidth, into: &latest)
                 }
+            }
+            if field === column {
+                displayed.centeredColumnWidth = owner.value.centeredColumnWidth
+                column.stringValue = String(displayed.centeredColumnCharacters)
             }
             if field === width {
                 displayed.tabWidth = owner.value.tabWidth

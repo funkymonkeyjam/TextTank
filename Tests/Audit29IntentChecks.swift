@@ -67,7 +67,7 @@ import NativeSearch
                 composition.settings,
                 [
                     "showSettings:", "toggleAutoIndent:", "toggleAutoPair:", "toggleBraceHighlight:",
-                    "toggleCurrentLineHighlight:", "toggleIndentGuides:"
+                    "toggleCurrentLineHighlight:", "toggleIndentGuides:", "toggleChangeBars:", "toggleCenteredColumn:"
                 ]
             ),
             (composition.workspace, ["saveSession:", "openSession:"]),

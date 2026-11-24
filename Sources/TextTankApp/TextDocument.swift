@@ -327,7 +327,11 @@ import UniformTypeIdentifiers
             presentations.forEach { $0.showUnavailableLanguage() }
             return
         }
-        for view in presentations.flatMap(\.views) { view.wrap = EditorServices.current?.settings?.value.wrap ?? false }
+        for view in presentations.flatMap(\.views) {
+            view.wrap = EditorServices.current?.settings?.value.wrap ?? false
+            // Out of large-file mode the document follows View > Show > Change Bars like any other.
+            view.changeBarsVisible = EditorServices.current?.settings?.value.changeBarsEnabled ?? false
+        }
         presentations.forEach { $0.refreshStatusDetails() }
     }
     /// Explicit document-level language intent for loads/restores; metadata changes only after success.
@@ -1195,6 +1199,8 @@ import UniformTypeIdentifiers
             // A newly opened editor has no installed lexer. Keep the detected choice for the opt-in action.
             deferredLargeFileLanguage = detected ?? LanguageProfile.plainTextID
             editor.wrap = false
+            // No change bars in large-file mode: nothing is recorded while the person types.
+            for view in presentations.flatMap(\.views) + [editor] { view.stopChangeTracking() }
         } else if let detected {
             _ = applyLanguage(detected, using: languages)
         }

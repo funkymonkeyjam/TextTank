@@ -227,26 +227,39 @@ extension AppDelegate {
         return find
     }
 
-    /// How the document is shown. The first section is left for the Source, Preview and Both
-    /// choices and Toggle Preview; with those four the menu lists twenty items, the DS-23 limit,
-    /// so the next addition belongs in a submenu.
+    /// How the document is shown (DS-D4, DS-D13). Fourteen items at the top level: what a tab
+    /// shows, its split, how the text is laid out, zoom, folding and highlighting, the workspace
+    /// and the toolbar. A toggle that applies to every editor view is in Show; the next addition
+    /// belongs in a submenu too (DS-23).
     private func viewMenu() -> NSMenu {
         let view = NSMenu(title: "View")
-        DocumentViewCommands.addItems(to: view)
+        view.addSubmenu(DocumentViewCommands.makeMenu())
+        view.addItem(.separator())
+        // One toggle with a checkmark: it splits the tab, and closes the split when there is one
+        // (DS-22). `closeSplit:` is still an action, with no row of its own.
         view.addItem(title: EditorToolbarCommand.split.title, action: EditorToolbarCommand.split.action)
-        view.addItem(title: "Close Split View", action: #selector(EditorWindowController.closeSplit(_:)))
         view.addItem(.separator())
         view.addItem(title: "Wrap Lines", action: #selector(EditorWindowController.toggleWrap(_:)))
-        for value: EditorCommand in [.showWhitespace, .toggleEOL, .toggleLineNumbers] { view.addCommand(value) }
-        let guides = view.addSubmenu(titled: "Guides and Highlights")
-        guides.addItem(
-            title: "Show Indentation Guides", action: #selector(SettingsController.toggleIndentGuides(_:)),
+        // Each title completes "Show" (DS-24). The command is the same one, with the same
+        // identity, wherever it is named in full: the palette and Settings say "Show Line Numbers".
+        let show = view.addSubmenu(titled: ViewMenuTitles.show)
+        for value: EditorCommand in [.toggleLineNumbers, .showWhitespace, .toggleEOL] {
+            show.addCommand(value, title: ViewMenuTitles.inShow(value))
+        }
+        show.addItem(.separator())
+        show.addItem(
+            title: "Indentation Guides", action: #selector(SettingsController.toggleIndentGuides(_:)),
             target: settings)
-        guides.addItem(
-            title: "Highlight Current Line", action: #selector(SettingsController.toggleCurrentLineHighlight(_:)),
+        show.addItem(
+            title: "Current Line Highlight", action: #selector(SettingsController.toggleCurrentLineHighlight(_:)),
             target: settings)
-        guides.addItem(
-            title: "Highlight Matching Braces", action: #selector(SettingsController.toggleBraceHighlight(_:)),
+        show.addItem(
+            title: "Matching Braces", action: #selector(SettingsController.toggleBraceHighlight(_:)),
+            target: settings)
+        show.addItem(.separator())
+        show.addItem(title: "Change Bars", action: #selector(SettingsController.toggleChangeBars(_:)), target: settings)
+        view.addItem(
+            title: "Centered Text Column", action: #selector(SettingsController.toggleCenteredColumn(_:)),
             target: settings)
         view.addItem(.separator())
         view.addCommand(.zoomIn)
@@ -373,6 +386,23 @@ extension AppDelegate {
     }
 }
 
+/// The wording of View > Show (DS-D13). An item there is titled by what is shown, because the
+/// submenu already says "Show"; anywhere the command is named on its own it keeps the verb.
+enum ViewMenuTitles {
+    static let show = "Show"
+    /// "Show Line Numbers" is "Line Numbers" under Show.
+    static func inShow(_ command: EditorCommand) -> String {
+        let title = command.title
+        return title.hasPrefix(show + " ") ? String(title.dropFirst(show.count + 1)) : title
+    }
+    /// The name a command of View > Show has outside that submenu, in the Command Palette for
+    /// one: "Show Change Bars". Nil for a command anywhere else.
+    static func spokenName(route: [String]) -> String? {
+        guard route.count == 3, route[0] == "View", route[1] == show else { return nil }
+        return show + " " + route[2]
+    }
+}
+
 extension NSMenu {
     /// Lists `menu` under its own title.
     fileprivate func addSubmenu(_ menu: NSMenu) {
@@ -387,13 +417,14 @@ extension NSMenu {
     }
     /// An editor command keeps its identifier as its represented object, so shortcuts, macros
     /// and validation find it wherever it is listed.
-    fileprivate func addCommand(_ value: EditorCommand) {
+    fileprivate func addCommand(_ value: EditorCommand, title: String? = nil) {
         let action = #selector(EditorWindowController.command(_:))
+        let title = title ?? value.title
         if let fallback = value.extendedMenuShortcut {
-            addItem(title: value.title, action: action, fallback: fallback, representedObject: value.rawValue)
+            addItem(title: title, action: action, fallback: fallback, representedObject: value.rawValue)
         } else {
             addItem(
-                title: value.title, action: action, keyEquivalent: value.defaultMenuShortcut,
+                title: title, action: action, keyEquivalent: value.defaultMenuShortcut,
                 representedObject: value.rawValue)
         }
     }

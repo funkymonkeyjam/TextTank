@@ -281,7 +281,8 @@ import NativeSearch
                 [
                     "settings.appearance", "settings.font.choose", "settings.font.size", "settings.font.zoom",
                     "settings.indentGuides", "settings.currentLineHighlight", "settings.braceHighlight",
-                    "settings.lineNumbers", "settings.showWhitespace", "settings.showLineEndings"
+                    "settings.lineNumbers", "settings.showWhitespace", "settings.showLineEndings",
+                    "settings.changeBars", "settings.centeredColumn", "settings.centeredColumn.width"
                 ]
             ),
             (
@@ -440,6 +441,8 @@ import NativeSearch
             ("settings.lineNumbers", "gutter", { $0.lineNumbersEnabled }, true),
             ("settings.showWhitespace", "whitespace", { $0.showWhitespaceEnabled }, false),
             ("settings.showLineEndings", "crlf", { $0.showLineEndingsEnabled }, false),
+            ("settings.changeBars", "change bars", { $0.changeBarsEnabled }, false),
+            ("settings.centeredColumn", "center text", { $0.centeredColumnEnabled }, false),
             ("settings.syncPreviewScrolling", "sync scrolling", { $0.syncsPreviewScrolling }, true),
             ("settings.keepUntitledOnQuit", "untitled quitting", { $0.keepsUntitledOnQuit }, true),
             ("settings.keepLocalHistory", "earlier versions saving", { $0.keepsLocalHistory }, true)
@@ -630,10 +633,10 @@ import NativeSearch
             "V8 an automation's own shortcut is shown read-only with where to change it")
         // Commands the other slices added are ordinary rows: each can be given a key.
         for (title, key, status) in [
-            ("File › Quick Open…", "⇧⌘O", "Default"), ("View › Toggle Preview", "⇧⌘V", "Default"),
+            ("File › Quick Open…", "⇧⌘O", "Default"), ("View › Preview › Toggle Preview", "⇧⌘V", "Default"),
             ("Compare › Compare with Earlier Version…", "", "None"), ("Compare › Clear Local History…", "", "None"),
-            ("View › Show Whitespace", "", "None"), ("View › Show Line Endings", "", "None"),
-            ("View › Show Line Numbers", "", "None")
+            ("View › Show › Whitespace", "", "None"), ("View › Show › Line Endings", "", "None"),
+            ("View › Show › Line Numbers", "", "None")
         ] {
             try select(title)
             check(
@@ -648,7 +651,7 @@ import NativeSearch
         try find("command-shift-v")
         check(listed().isEmpty, "V8 fixture: modifiers are said in the menu bar's order")
         try find("shift-command-v")
-        check(listed() == ["View › Toggle Preview"], "V8 and by a key in words: \(listed())")
+        check(listed() == ["View › Preview › Toggle Preview"], "V8 and by a key in words: \(listed())")
         try find("")
 
         // (b) The recorder: a bare key and a reserved key are refused with the reason.
@@ -748,8 +751,8 @@ import NativeSearch
         try press("V", [.command, .shift], code: 9)
         check(
             try settings.value.shortcuts["upper"] == "V" && replace.isHidden && toggle.keyEquivalent.isEmpty
-                && text(try row("View › Toggle Preview"), 1).isEmpty
-                && text(try row("View › Toggle Preview"), 2) == "Default, given up",
+                && text(try row("View › Preview › Toggle Preview"), 1).isEmpty
+                && text(try row("View › Preview › Toggle Preview"), 2) == "Default, given up",
             "V8 a yielding default gives way to the assignment and the list says so")
 
         // Quick Open's Shift-Command-O is a yielding default too.
@@ -766,13 +769,13 @@ import NativeSearch
                 && quickOpen.keyEquivalentModifierMask == .command,
             "V8 and has it again when the assignment goes")
         // A view toggle added by another slice takes a key and runs from it.
-        try select("View › Show Whitespace")
+        try select("View › Show › Whitespace")
         try press("w", [.control, .option], code: 13)
         let whitespace = settings.value.showWhitespaceEnabled
         check(
             try settings.value.shortcuts["showWhitespace"] == "ctrl+opt+w"
-                && text(try row("View › Show Whitespace"), 1) == "⌃⌥W",
-            "V8 View › Show Whitespace takes Control-Option-W")
+                && text(try row("View › Show › Whitespace"), 1) == "⌃⌥W",
+            "V8 View › Show › Whitespace takes Control-Option-W")
         try button("default").performClick(nil)
         check(settings.value.shortcuts["showWhitespace"] == nil && settings.value.showWhitespaceEnabled == whitespace,
             "V8 fixture: the toggle's shortcut is removed and its setting was not touched")
@@ -809,7 +812,7 @@ import NativeSearch
         try button("default").performClick(nil)
         check(
             try settings.value.shortcuts["upper"] == nil && toggle.keyEquivalent == "V"
-                && toggle.keyEquivalentModifierMask == .command && text(try row("View › Toggle Preview"), 2) == "Default",
+                && toggle.keyEquivalentModifierMask == .command && text(try row("View › Preview › Toggle Preview"), 2) == "Default",
             "V8 Use Default removes one assignment and the yielding default has its key again")
         try select("File › New")
         try button("default").performClick(nil)
