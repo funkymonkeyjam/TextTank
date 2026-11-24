@@ -2533,6 +2533,72 @@
           }
         }
       }
+    },
+    "tabs.label.outsideChange": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@. %2$@."
+          }
+        }
+      }
+    },
+    "tabs.label.compared": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@. Selected for comparison."
+          }
+        }
+      }
+    },
+    "tabs.label.outsideChangeCompared": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@. %2$@. Selected for comparison."
+          }
+        }
+      }
+    },
+    "tabs.mark.outsideChange": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@: %2$@. Select this tab to choose what to do."
+          }
+        }
+      }
+    },
+    "tabs.mark.compared": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ is selected for comparison. Choose Compare with Selected on another tab to compare them."
+          }
+        }
+      }
+    },
+    "tabs.openTabs": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open tabs in this group"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

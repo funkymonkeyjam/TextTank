@@ -1609,15 +1609,16 @@ import NativeSearch
                     "wrap, bookmark and read-only details reach the position menu with no explicit refresh \(badges())")
                 visible.editor.readOnly = false
                 controller.toggleWrap(nil)
-                let hiddenTabTitle = {
-                    descendants(controller.hostWindow!.contentView!).compactMap { $0 as? NSButton }
-                        .first { $0.toolTip == hidden.displayName }?.title
+                // The edited mark is the dot in the tab's close button, not a character in its title.
+                let hiddenTabEdited = { () -> Bool? in
+                    guard let id = hiddenController.tabID else { return nil }
+                    return controller.host.tabStrips.compactMap { $0.tabAppearance(id) }.first?.closeShowsEditedDot
                 }
-                try require(hiddenTabTitle()?.hasSuffix("•") == false, "fixture: the hidden tab starts unedited")
+                try require(hiddenTabEdited() == false, "fixture: the hidden tab starts unedited")
                 _ = hidden.editor.replaceSelection("edited while hidden")
-                spinUntil("the hidden tab's edited marker") { hiddenTabTitle()?.hasSuffix("•") == true }
+                spinUntil("the hidden tab's edited marker") { hiddenTabEdited() == true }
                 check(
-                    hiddenTabTitle()?.hasSuffix("•") == true,
+                    hiddenTabEdited() == true,
                     "editing a hidden document marks its tab in the visible window's tab strip")
                 let idleRefreshes = controller.statusRefreshCount, hiddenRefreshes = hiddenController.statusRefreshCount
                 spinUntil("idle recurring refreshes") { controller.statusRefreshCount >= idleRefreshes + 2 }
