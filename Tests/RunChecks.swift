@@ -62,8 +62,10 @@ import Foundation
                 _ = try RunExecution().execute(
                     ConfiguredRun(name: "Missing", executable: "/no/such/executable", arguments: []))
             }
+            // The limit is what must stop it, not the clock: the timeout is long enough for a
+            // slow machine to produce 4 MiB, and a stop by the timeout fails the check below.
             let noisy = try RunExecution().execute(
-                ConfiguredRun(name: "Bounded output", executable: "/usr/bin/yes", arguments: []), timeout: 2)
+                ConfiguredRun(name: "Bounded output", executable: "/usr/bin/yes", arguments: []), timeout: 60)
             check(
                 noisy.reason == .outputLimit && noisy.stdout.count + noisy.stderr.count <= 4 * 1024 * 1024,
                 "output flood bounded and process stopped")
