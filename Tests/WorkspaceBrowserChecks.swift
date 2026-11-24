@@ -314,6 +314,9 @@ import os
         alive.withLock { $0 = false }
         began = ProcessInfo.processInfo.systemUptime
         let stoppedAgain = shared.outcomes(for: mixed, until: began + 0.3, probe: flaky)
+        // The wait was set as that call returned, so it has passed by this time whatever the
+        // machine's speed; a time counted from before the call can fall short on a slow one.
+        let waitOver = ProcessInfo.processInfo.systemUptime + 2.5
         alive.withLock { $0 = true }
         for _ in 0..<2 { deadGate.signal() }
         spinUntil("its late answers to arrive") { shared.busy == 0 }
@@ -322,7 +325,7 @@ import os
             stoppedAgain == localOnly && duringWait == localOnly && asked.withLock { $0 } == 9
                 && ProcessInfo.processInfo.systemUptime - began < 2.5,
             "a late answer does not end the wait: until it passes the volume is not asked at all: \(duringWait)")
-        spinUntil("the volume's second wait to pass") { ProcessInfo.processInfo.systemUptime - began > 2.9 }
+        spinUntil("the volume's second wait to pass") { ProcessInfo.processInfo.systemUptime > waitOver + 0.05 }
         let again = shared.outcomes(for: mixed, until: ProcessInfo.processInfo.systemUptime + 5, probe: flaky)
         check(
             again == everything && asked.withLock { $0 } == 14,
