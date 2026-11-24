@@ -482,8 +482,13 @@ final class DocumentTabStrip: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         scroll.drawsBackground = false
-        scroll.hasHorizontalScroller = true
-        scroll.autohidesScrollers = true
+        // No scroller. With "Show scroll bars: Always" (and on a Mac with no trackpad) a scroller is
+        // not an overlay: it would take its height from a 36-point strip and cut the tabs off.
+        // The strip still scrolls with the wheel or trackpad, selecting a tab reveals it, and
+        // the list of open tabs reaches every tab.
+        scroll.hasHorizontalScroller = false
+        scroll.hasVerticalScroller = false
+        scroll.verticalScrollElasticity = .none
         scroll.documentView = row
         addSubview(scroll)
         scroll.contentView.postsBoundsChangedNotifications = true

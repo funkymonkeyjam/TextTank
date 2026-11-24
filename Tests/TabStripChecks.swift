@@ -615,12 +615,25 @@ private final class Box<Value> {
 
         // When a close makes the tabs fit and the list of open tabs goes, the tabs fill the strip:
         // there is no empty strip where the list was for a second click to land on.
+        // The number of tabs is worked out from the strip there is, not assumed.
         var fillers: [TextDocument] = []
-        for number in 1...5 { fillers.append(try open("pair\(number).txt", "text\n", in: folder).0) }
         try resize(host, to: 800, strip: strip)
-        check(strip.showsOpenTabList && documents() == 7, "fixture: seven tabs overflow and show the list of open tabs")
+        let fitting = Int(strip.bounds.width / DocumentTabStrip.minimumTabWidth)
+        while documents() <= fitting && fillers.count < 40 {
+            fillers.append(try open("pair\(fillers.count + 1).txt", "text\n", in: folder).0)
+        }
+        try resize(host, to: 800, strip: strip)
+        check(
+            strip.showsOpenTabList && documents() == fitting + 1 && fillers.count >= 1,
+            "fixture: one tab more than fit (\(fitting) in \(strip.bounds.width) points) overflows and shows the list of open tabs")
+        let scrolling = try requireValue(
+            strip.subviews.compactMap { $0 as? NSScrollView }.first, "fixture: the strip's scrolling area")
+        check(
+            !scrolling.hasHorizontalScroller && !scrolling.hasVerticalScroller
+                && scrolling.contentView.frame.height == strip.bounds.height && scrolling.contentView.bounds.origin.y == 0,
+            "an overflowing strip has no scroll bar, whatever the scroll bar setting: its tabs keep the strip's whole height (\(scrolling.contentView.frame.height) of \(strip.bounds.height))")
         where_ = centre(strip.openTabListButton)
-        last = fillers[4]
+        last = try requireValue(fillers.last, "fixture: the last tab")
         close = try closeButton(last, in: strip)
         count = documents()
         close.performClick(nil)
@@ -628,12 +641,17 @@ private final class Box<Value> {
         window.contentView?.layoutSubtreeIfNeeded()
         strip.layout()
         let under = try target(at: where_, in: strip)
+        let lastTab = try requireValue(
+            host.model.groups.first { $0.slot == strip.groupSlot }?.tabs.last?.id, "fixture: the tab now last")
+        let lastClose = try requireValue(strip.tabLayout(lastTab), "fixture: its layout").close
         check(
-            !strip.showsOpenTabList && under is NSButton && documents() == count - 1,
-            "when the list of open tabs goes, a tab is where it was: a second click there is a click on that tab, not on empty strip")
+            !strip.showsOpenTabList && under is NSButton && documents() == count - 1
+                && lastClose.contains(strip.subviews.compactMap { $0 as? NSScrollView }.first?.documentView?.convert(where_, from: strip) ?? .zero)
+                && under.accessibilityLabel()?.hasPrefix("Close ") == true,
+            "when the list of open tabs goes, a tab is where it was: a second click there is a click on that tab, not on empty strip (\(type(of: under)) at \(where_) in a \(strip.bounds.width)-point strip, list shown \(strip.showsOpenTabList))")
 
         // And the real thing still works: two clicks, both on the empty strip, close together.
-        fillers.prefix(4).forEach { $0.close() }
+        fillers.dropLast().forEach { $0.close() }
         try resize(host, to: 1000, strip: strip)
         count = documents()
         check(count == 2, "fixture: two tabs leave most of the strip empty")

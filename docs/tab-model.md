@@ -389,6 +389,11 @@ controls take their own clicks, so the end of a reorder never counts as a click 
 window's frame has first refusal over its inside edge (`FrameTextClick`): a point the frame claims is
 never treated as empty strip, so AppKit's own handling of a double-click there is untouched.
 
+The strip has no scroll bar. With the system set to always show scroll bars, or on a Mac with no
+trackpad, a scroll bar is not an overlay and would take its height from the 36-point strip, cutting
+the tabs off. The strip scrolls with the wheel or trackpad, selecting a tab reveals it, and the list
+below reaches every tab.
+
 **The list of open tabs.** When a group's tabs are at the 130-point minimum and still do not fit, so
 that its strip scrolls, a chevron pull-down appears at the trailing end of that strip, outside the
 scrolling area: a 28 by 28 target four points from the tabs, which keep their own separated close
