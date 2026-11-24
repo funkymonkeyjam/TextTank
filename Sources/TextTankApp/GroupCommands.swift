@@ -207,7 +207,7 @@ import TextTankCore
     /// this same test, so it is never offered while its menu would be all disabled (DS-21).
     var commandsAvailable: Bool {
         !CompareCommandScope.blocksWorkspace && !host.isMutatingGroups && !host.tabCommands.isBusy
-            && !host.tabCommands.isReopening && host.window?.attachedSheet == nil
+            && !host.tabCommands.isReopening && !host.hasAttachedSheet
     }
     @objc private func invoke(_ item: NSMenuItem) {
         guard validateMenuItem(item), let call = item.representedObject as? Invocation else { return }

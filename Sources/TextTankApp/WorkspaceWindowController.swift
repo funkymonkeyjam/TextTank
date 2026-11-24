@@ -64,6 +64,10 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     private var saveScheduled = false
     lazy var tabCommands = TabCommandController(host: self)
     lazy var groupCommands = GroupCommandController(host: self)
+    /// Whether a sheet is attached, for the checks that must not present one.
+    var attachedSheetProbe: (() -> Bool)?
+    var hasAttachedSheet: Bool { attachedSheetProbe?() ?? (window?.attachedSheet != nil) }
+    private var sheetObservers: [NSObjectProtocol] = []
     /// Window > Move Focus: the keyboard route between the window's areas (DS-73).
     lazy var areaFocus = WindowAreaFocusController(host: self)
     private var removingTabs = false
@@ -115,6 +119,19 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
             toolbar.observe(\.displayMode) { [weak self] _, _ in MainActor.assumeIsolated { self?.scheduleSave() } },
             toolbar.observe(\.isVisible) { [weak self] _, _ in MainActor.assumeIsolated { self?.scheduleSave() } }
         ]
+        // A toolbar item with no action of its own is enabled only here. Group commands are off
+        // while a sheet is attached, so the toolbar is validated again when one begins and ends;
+        // otherwise Editor Layout stayed disabled after the sheet had gone (DS-21).
+        sheetObservers = [NSWindow.willBeginSheetNotification, NSWindow.didEndSheetNotification].map { name in
+            NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.validateToolbar()
+                    // The sheet is attached, or detached, just after its notification.
+                    self.perform(#selector(self.revalidateToolbar), with: nil, afterDelay: 0)
+                }
+            }
+        }
         automationObserver = NotificationCenter.default.addObserver(
             forName: .textTankAutomationsDidChange, object: EditorServices.current?.automations, queue: .main
         ) { [weak self] _ in MainActor.assumeIsolated { self?.refreshAutomationToolbar() } }
@@ -778,6 +795,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         groupSurfaces.values.forEach { $0.strip.refresh(revealingActive: false) }
     }
     func visibilityChanged() { presentations.forEach { $0.visibilityChanged() } }
+    @objc private func revalidateToolbar() { validateToolbar() }
     func validateToolbar() {
         for item in window?.toolbar?.items ?? [] { item.isEnabled = validateToolbarItem(item) }
         if let window { EditorToolbarAccessibility.apply(to: window) }
@@ -866,6 +884,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         precondition(Thread.isMainThread)
         MainActor.assumeIsolated {
             if let automationObserver { NotificationCenter.default.removeObserver(automationObserver) }
+            sheetObservers.forEach(NotificationCenter.default.removeObserver)
         }
     }
 }

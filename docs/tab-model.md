@@ -172,7 +172,9 @@ focused or per-document MRU live editor. Chooser rows use TabID plus group ident
 Owner decision DS-D12 (23 November 2026): the layout is chosen from the toolbar's Editor Layout
 item, a standard menu toolbar item in the default, customisable toolbar, and from View > Editor
 Groups > Editor Group Layout, which stays when the item is removed from the toolbar. Both menus are
-built by the group command owner and show one checkmark. No row sits between the toolbar and the
+built by the group command owner and show one checkmark. Group commands are off while a sheet is
+attached; the toolbar is validated again when a sheet begins and when it ends, so the item is never
+left disabled after the sheet has gone. No row sits between the toolbar and the
 tab strips: the group container starts at the top of the editor area. The earlier trailing layout
 picker and its 36-point row are gone, and `TabGroupGeometry.minimumContent` no longer reserves them:
 the bare minimum of a two-row or grid layout is 401 points high (two 200-point panes and a divider),
@@ -184,6 +186,10 @@ preserves divider ratios; layout changes reset equal shares, with aligned Grid c
 window is resized the Grid's two rows are aligned again after both have their new width, at the first
 row's divider, held between the 320-point minimums: a position is never copied from a row already
 resized to one still at its old width (that left the columns out of line and one under 320 points).
+The alignment runs when the container is resized, when it is laid out and when a row reports that it
+laid out its panes, so it does not depend on which of those AppKit does first. The row that was
+dragged leads. A share of the width given up to the other column's minimum is not taken back when
+the window widens: the divider keeps the share it then has, as the two-column divider does.
 Visible group-active status work is bounded (no per-Clone job); hidden/retired work stops,
 while recovery/monitoring remain per document. Reference shortcuts remain unassigned
 until conflict verification. Stage 4 extends explicit session persistence below; extra
@@ -385,7 +391,12 @@ DS-73 (23 November 2026); DS-20/23/70-72/84 apply. Window > Move Focus holds two
 to Next Area and Move Focus to Previous Area. Their default keys are F6 and Shift-F6; each also
 answers Option-Command-` and Shift-Option-Command-`, for keyboards whose function keys need the Fn
 key. All four are yielding defaults (`DefaultShortcutItem`), and no menu command, editor key binding
-or reserved system shortcut uses them. The submenu keeps the Window menu at twenty items (DS-23).
+or reserved system shortcut uses them. AppKit lists the open windows at the end of the Window menu,
+and they count towards its twenty items (DS-23), so the menu keeps sixteen of its own: Move Focus is
+one submenu, and the five commands that close several tabs at once (Close Other Tabs, Close Tabs to
+the Left, Close Tabs to the Right, Close All in Group, Close Saved Tabs) are in Window > Close
+Multiple Tabs. They keep their identities, validation and titles, and every tab's own menu still
+lists them at its top level. Close Tab stays at the top level of Window.
 
 The areas form one ring, visited in this order and back:
 
@@ -422,6 +433,8 @@ Inside an area the group surface handles the keys its controls pass up:
 - Escape returns the keyboard to the group's text. In a group with no tabs it returns to the text of
   a group that has some. The two bars keep their own Escape on every control: the find bar closes
   (DS-35), and Go to Line puts the caret, selection and scroll position back and closes.
+- Moving out of Go to Line with Move Focus is the same as Escape there: the bar closes and nothing of
+  the line that was previewed is kept. Only Return goes to the line.
 
 ## Empty group
 
