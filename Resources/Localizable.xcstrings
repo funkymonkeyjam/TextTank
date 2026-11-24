@@ -2588,6 +2588,17 @@
           }
         }
       }
+    },
+    "tabs.openTabs": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open tabs in this group"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

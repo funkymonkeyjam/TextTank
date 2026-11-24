@@ -352,3 +352,20 @@ action as File > New. A double-click on a tab is two clicks on that tab and noth
 controls take their own clicks, so the end of a reorder never counts as a click on the strip. The
 window's frame has first refusal over its inside edge (`FrameTextClick`): a point the frame claims is
 never treated as empty strip, so AppKit's own handling of a double-click there is untouched.
+
+**The list of open tabs.** When a group's tabs are at the 130-point minimum and still do not fit, so
+that its strip scrolls, a chevron pull-down appears at the trailing end of that strip, outside the
+scrolling area: a 28 by 28 target four points from the tabs, which keep their own separated close
+targets (DS-14, DS-74). It is hidden whenever the tabs fit (DS-10). It lists that group's tabs in
+strip order, with a checkmark on the active one; each row's title says in words when the tab is
+pinned or edited ("notes.md, pinned, edited"), a pinned row carries the pin, and a row's tooltip is
+the tab's tooltip (DS-62). Choosing a row selects the tab exactly as a plain click on it does and
+scrolls it into view. Each group has its own list. It is an ordinary system pull-down (DS-11): it
+takes the keyboard with Full Keyboard Access, is the strip's last accessibility child and is labelled
+"Open tabs in this group" (DS-70, DS-73). It is filled when it opens and holds no state of its own.
+
+The native checks for this section are `Tests/TabStripChecks.swift`, run by
+`scripts/test-preview-ui.sh`, which does not need the key window. They press the real controls with
+synthetic events in an owned window. Not observed: a physical pointer, middle button and tooltip
+display, VoiceOver, Full Keyboard Access, and the review sheet of an edited tab closed by the dot or
+the other mouse button (a check may not present a sheet; the route is the close button's own).

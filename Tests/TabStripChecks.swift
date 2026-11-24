@@ -76,6 +76,8 @@ import EditorBridge
         closeAll(host)
         try mouseAndToolTip(root: root, app: app, host: host)
         closeAll(host)
+        try openTabList(root: root, app: app, host: host)
+        closeAll(host)
     }
 
     // MARK: The edited dot and the state symbols
@@ -399,6 +401,132 @@ import EditorBridge
                 print("NOTE the window frame claims no point of the tab strip in this window; nothing to leave to it")
             }
         }
+    }
+    // MARK: The list of open tabs when the strip overflows
+
+    private static func choose(_ item: NSMenuItem) -> Bool {
+        guard item.isEnabled, let action = item.action else { return false }
+        return NSApp.sendAction(action, to: item.target, from: item)
+    }
+    private static func openTabList(root: URL, app: AppDelegate, host: WorkspaceWindowController) throws {
+        let folder = root.appendingPathComponent("tab-list")
+        let strip = try requireValue(host.tabStrips.first, "fixture: the focused group's tab strip")
+        let window = try requireValue(host.window, "workspace window")
+        let clip = try requireValue(
+            strip.subviews.compactMap { $0 as? NSScrollView }.first?.contentView, "fixture: the strip's scrolling area")
+        var tabs: [(TextDocument, EditorWindowController)] = []
+        for number in 1...6 { tabs.append(try open("list\(number).txt", "text\n", in: folder)) }
+        try resize(host, to: 800, strip: strip)
+        let list = strip.openTabListButton
+        func children() -> [NSView] { (strip.accessibilityChildren() ?? []).compactMap { $0 as? NSView } }
+        check(
+            !strip.showsOpenTabList && list.isHidden && !children().contains { $0 === list }
+                && clip.convert(clip.bounds, to: strip).maxX == strip.bounds.maxX,
+            "six tabs fit an 800-point strip at the minimum width: no list of open tabs, and the tabs have the whole strip")
+        tabs.append(try open("list7.txt", "text\n", in: folder))
+        try resize(host, to: 800, strip: strip)
+        check(strip.showsOpenTabList && !list.isHidden, "a seventh tab overflows the strip, and the list of open tabs appears")
+        let frame = strip.openTabListFrame, scrolling = clip.convert(clip.bounds, to: strip)
+        check(
+            frame.width == 28 && frame.height == 28 && frame.minX - scrolling.maxX == 4 && frame.maxX <= strip.bounds.maxX
+                && list.superview === strip && !list.isDescendant(of: clip),
+            "DS-14/74 it is a 28 by 28 target at the trailing end, outside the scrolling area and four points from it")
+        check(
+            list.accessibilityLabel() == "Open tabs in this group" && list.toolTip == "Open tabs in this group"
+                && children().last === list && list.menu?.items.first?.image != nil,
+            "DS-70 it is labelled Open tabs in this group, and is the strip's last accessibility child")
+        check(
+            list.acceptsFirstResponder && window.makeFirstResponder(list) && window.firstResponder === list,
+            "DS-73 it takes the keyboard like any pull-down")
+        window.makeFirstResponder(tabs[0].1.primaryEditor)
+        let lastID = try requireValue(tabs[6].1.tabID, "fixture: last tab")
+        let layout = try requireValue(strip.tabLayout(lastID), "fixture: layout")
+        check(
+            layout.close.width == 28 && layout.close.minX - layout.title.maxX == 4
+                && layout.close.maxX + 8 - (layout.title.minX - 8) == DocumentTabStrip.minimumTabWidth,
+            "the tabs keep their 130 points and their own separated 28-point close target")
+
+        // Every tab, in order, with the active one checked and pinned and edited said in words.
+        host.activate(tabs[0].1)
+        _ = tabs[2].1.primaryEditor.replaceSelection("edited ")
+        spinUntil("the edited tab") { tabs[2].0.isDocumentEdited }
+        host.tabCommands.perform(.pin, target: try requireValue(tabs[4].1.tabID, "fixture: fifth tab"))
+        _ = tabs[4].1.primaryEditor.replaceSelection("edited ")
+        spinUntil("the pinned, edited tab") { tabs[4].0.isDocumentEdited }
+        host.tabCommands.perform(.pin, target: try requireValue(tabs[5].1.tabID, "fixture: sixth tab"))
+        var items = strip.openTabListItems()
+        let order = host.model.groups.first { $0.slot == strip.groupSlot }?.tabs.map(\.id) ?? []
+        check(
+            items.count == 7 && items.compactMap { $0.representedObject as? TabID } == order,
+            "the list has every tab of the group, in the strip's order (\(items.map(\.title)))")
+        check(
+            items.map(\.title) == [
+                "list5.txt, pinned, edited", "list6.txt, pinned", "list1.txt", "list2.txt", "list3.txt, edited",
+                "list4.txt", "list7.txt"
+            ], "DS-62 each row names its document and says in words when it is pinned or edited (\(items.map(\.title)))")
+        check(
+            items.filter { $0.state == .on }.map(\.title) == ["list1.txt"] && items.allSatisfy { $0.isEnabled },
+            "the active tab, and only it, has the checkmark")
+        check(
+            (list.menu?.items.count ?? 0) == 8 && list.menu?.delegate === strip,
+            "the pull-down fills itself when it opens; its first item is its own face")
+
+        // Choosing a row selects that tab and scrolls it into view.
+        clip.scroll(to: .zero)
+        check(!strip.isTabHorizontallyVisible(lastID), "fixture: the last tab is scrolled out of view")
+        check(choose(try requireValue(items.last, "fixture: last row")), "fixture: the last row can be chosen")
+        check(
+            host.active === tabs[6].1 && strip.isTabHorizontallyVisible(lastID),
+            "choosing a tab from the list selects it and scrolls it into view")
+        clip.scroll(to: .zero)
+        items = strip.openTabListItems()
+        check(
+            items.filter { $0.state == .on }.map(\.title) == ["list7.txt"] && !strip.isTabHorizontallyVisible(lastID),
+            "fixture: the checkmark follows the active tab, which is scrolled away again")
+        check(
+            choose(try requireValue(items.last, "fixture: last row")) && host.active === tabs[6].1
+                && strip.isTabHorizontallyVisible(lastID),
+            "choosing the tab that is already active scrolls it into view")
+        let stale = try requireValue(items.first { $0.title == "list2.txt" }, "fixture: a row")
+        tabs[1].0.close()
+        _ = choose(stale)
+        check(
+            host.active === tabs[6].1 && !tabs[1].0.isOpen,
+            "a row kept from a tab that has since closed selects nothing")
+
+        // Six tabs fit again: the list goes.
+        try resize(host, to: 800, strip: strip)
+        check(
+            !strip.showsOpenTabList && !children().contains { $0 === list }
+                && clip.convert(clip.bounds, to: strip).maxX == strip.bounds.maxX,
+            "when the tabs fit again the list of open tabs disappears and the tabs have the whole strip")
+
+        // Each group has its own list, of its own tabs.
+        tabs.append(try open("list8.txt", "text\n", in: folder))
+        try resize(host, to: 800, strip: strip)
+        check(strip.showsOpenTabList, "fixture: seven tabs overflow again")
+        check(host.setEditorLayout(.twoColumns), "fixture: two editor groups")
+        let moved = [tabs[6].1, tabs[7].1].compactMap(\.tabID)
+        for id in moved { host.moveTabs([id], target: id, to: .second) }
+        window.contentView?.layoutSubtreeIfNeeded()
+        host.tabStrips.forEach { $0.layout() }
+        if host.tabStrips.count == 2 {
+            let left = host.tabStrips[0], right = host.tabStrips[1]
+            let rightTabs = host.model.groups.first { $0.slot == right.groupSlot }?.tabs.map(\.id) ?? []
+            check(
+                left.showsOpenTabList && !right.showsOpenTabList && left.openTabListButton !== right.openTabListButton
+                    && rightTabs.count == 2,
+                "with two groups, the group whose tabs overflow shows its list and the group whose tabs fit does not")
+            check(
+                left.openTabListItems().compactMap { $0.representedObject as? TabID }
+                    == (host.model.groups.first { $0.slot == left.groupSlot }?.tabs.map(\.id) ?? [])
+                    && left.openTabListItems().count == 5 && right.openTabListItems().count == 2,
+                "and each list holds its own group's tabs")
+        } else {
+            check(false, "fixture: two tab strips")
+        }
+        closeAll(host)
+        check(host.setEditorLayout(.single), "fixture: back to one group")
     }
     private static func settle() {
         let end = Date().addingTimeInterval(0.2)

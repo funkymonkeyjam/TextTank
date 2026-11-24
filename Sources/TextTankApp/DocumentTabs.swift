@@ -348,6 +348,20 @@ private final class TabDropIndicator: NSView {
 }
 final class DocumentTabStrip: NSView {
     private let scroll = NSScrollView(), row = NSView()
+    /// The list of this group's open tabs, shown only while the tabs overflow the strip. It sits
+    /// at the trailing end, outside the scrolling area, as a 28 by 28 target four points from the
+    /// tabs (DS-14, DS-74).
+    private let overflow = NSPopUpButton(frame: .zero, pullsDown: true)
+    /// The width a tab never goes below; the strip scrolls instead.
+    static let minimumTabWidth: CGFloat = 130
+    /// What the list of open tabs takes from the strip while it is shown: the 28-point button
+    /// with four points on either side.
+    static let overflowReserve: CGFloat = 36
+    /// True while the tabs do not fit at the minimum width, so the strip scrolls.
+    private var overflowing: Bool { CGFloat(order.count) * Self.minimumTabWidth > bounds.width }
+    var showsOpenTabList: Bool { !overflow.isHidden }
+    var openTabListFrame: NSRect { overflow.frame }
+    var openTabListButton: NSPopUpButton { overflow }
     @MainActor private final class Controls {
         let background = DocumentTabBackground(), select = DocumentTabButton(), close = DocumentTabButton()
         let mode = DocumentTabModeButton()
@@ -436,6 +450,24 @@ final class DocumentTabStrip: NSView {
         dropIndicator.isHidden = true
         dropIndicator.setAccessibilityElement(false)
         row.addSubview(dropIndicator)
+        // DS-11: a system pull-down, drawn as its symbol alone.
+        overflow.isBordered = false
+        overflow.imagePosition = .imageOnly
+        (overflow.cell as? NSPopUpButtonCell)?.arrowPosition = .noArrow
+        let title = NSMenuItem()
+        title.image = NSImage(systemSymbolName: "chevron.down", accessibilityDescription: nil)
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        menu.delegate = self
+        menu.addItem(title)
+        overflow.menu = menu
+        let label = Strings.text("tabs.openTabs", "Open tabs in this group")
+        overflow.toolTip = label
+        overflow.setAccessibilityLabel(label)
+        overflow.setAccessibilityParent(self)
+        overflow.identifier = NSUserInterfaceItemIdentifier("tabs.openTabs")
+        overflow.isHidden = true
+        addSubview(overflow)
         setAccessibilityElement(true)
         setAccessibilityRole(.tabGroup)
         setAccessibilityLabel("Documents")
@@ -443,7 +475,6 @@ final class DocumentTabStrip: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
     override func layout() {
         super.layout()
-        scroll.frame = bounds
         layoutTabs()
         // A narrower tab may have lost the mark it showed under the pointer.
         publishAccessibilityChildren()
@@ -619,7 +650,7 @@ final class DocumentTabStrip: NSView {
         let accessible = order.flatMap { id -> [NSView] in
             guard let c = controls[id] else { return [] }
             return c.mode.isHidden ? [c.select, c.close] : [c.select, c.mode, c.close]
-        }
+        } + (overflow.isHidden ? [] : [overflow])
         setAccessibilityChildren(accessible)
         setAccessibilityChildrenInNavigationOrder(accessible)
     }
@@ -666,11 +697,18 @@ final class DocumentTabStrip: NSView {
     /// `revealingActive` is false when only the pointer moved: showing a mark must not scroll
     /// the strip back to the active tab under the person's hand.
     private func layoutTabs(revealingActive: Bool = true) {
+        // The list of open tabs appears exactly when the tabs are at the minimum width and still
+        // do not fit; the scrolling area gives it room. Tabs that fit never show it.
+        let listed = overflowing
+        overflow.isHidden = !listed
+        overflow.frame = NSRect(x: bounds.width - 32, y: 4, width: 28, height: 28)
+        scroll.frame = NSRect(
+            x: 0, y: 0, width: max(0, bounds.width - (listed ? Self.overflowReserve : 0)), height: bounds.height)
         guard !order.isEmpty else {
             row.frame = NSRect(x: 0, y: 0, width: bounds.width, height: 36)
             return
         }
-        let preferred: CGFloat = 220, minimum: CGFloat = 130
+        let preferred: CGFloat = 220, minimum = Self.minimumTabWidth
         let width = max(minimum, min(preferred, bounds.width / CGFloat(order.count)))
         var x: CGFloat = 0, active = NSRect.zero
         for id in order {
@@ -704,7 +742,7 @@ final class DocumentTabStrip: NSView {
             if group?.activeTab == id { active = c.background.frame }
             x += width
         }
-        row.frame = NSRect(x: 0, y: 0, width: max(x, bounds.width), height: 36)
+        row.frame = NSRect(x: 0, y: 0, width: max(x, scroll.frame.width), height: 36)
         if revealingActive { row.scrollToVisible(active) }
     }
     func revealOrganizationChange(_ id: TabID) {
@@ -793,6 +831,41 @@ final class DocumentTabStrip: NSView {
         guard scroll.frame.contains(point) else { return nil }
         let p = row.convert(point, from: self)
         return order.first { controls[$0]?.background.frame.contains(p) == true }
+    }
+
+    // MARK: The list of open tabs
+
+    /// Fills the list with this group's tabs in strip order: a checkmark on the active tab, and
+    /// each title saying, in words, whether the tab is pinned or edited (DS-62). The first item
+    /// is the pull-down's own face and is kept.
+    func openTabListItems() -> [NSMenuItem] {
+        guard let menu = overflow.menu, let host else { return [] }
+        while menu.items.count > 1 { menu.removeItem(at: menu.items.count - 1) }
+        let selectable = allowsSelection
+        for tab in group?.tabs ?? [] {
+            guard let doc = host.presentation(for: tab.id)?.document as? TextDocument else { continue }
+            let name = doc.displayName ?? "Untitled"
+            let item = NSMenuItem(
+                title: String(
+                    format: Self.tabLabel(mode: .source, pinned: tab.isPinned, edited: doc.isDocumentEdited), name),
+                action: #selector(chooseOpenTab(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = tab.id
+            item.state = group?.activeTab == tab.id ? .on : .off
+            item.image = NSImage(
+                systemSymbolName: tab.isPinned ? "pin.fill" : "doc.text",
+                accessibilityDescription: tab.isPinned ? "Pinned" : nil)
+            item.toolTip = Self.tabToolTip(name: name, path: doc.fileURL?.path, notice: doc.externalFile.notice)
+            item.isEnabled = selectable
+            menu.addItem(item)
+        }
+        return Array(menu.items.dropFirst())
+    }
+    /// Selects the chosen tab, as a click on it would, and scrolls it into view.
+    @objc private func chooseOpenTab(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? TabID, controls[id] != nil else { return }
+        clickTab(id)
+        if let frame = controls[id]?.background.frame { row.scrollToVisible(frame) }
     }
 
     // MARK: Tooltip, the other mouse button and a double-click on the empty strip
@@ -937,4 +1010,7 @@ final class DocumentTabStrip: NSView {
     @objc private func closeTab(_ sender: DocumentTabButton) {
         if let id = sender.tabID { host?.closeTab(id, sender: sender) }
     }
+}
+extension DocumentTabStrip: NSMenuDelegate {
+    func menuNeedsUpdate(_ menu: NSMenu) { _ = openTabListItems() }
 }
