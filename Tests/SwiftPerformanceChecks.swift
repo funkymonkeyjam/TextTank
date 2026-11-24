@@ -275,6 +275,38 @@ import NativeSearch
         search.mode.selectItem(at: 0)
         search.window?.close()
     }
+    /// Fix round 2: a long search text, case-insensitively, in text with no ASCII. The engine
+    /// then tries positions one at a time; this pins that it stays inside the large-document
+    /// budget (two seconds per 64 MiB), and prints the rate (DS-101).
+    private static func longNeedleInCJK() throws {
+        let size = 16 * mib
+        let line =
+            String(repeating: "\u{65e5}\u{672c}\u{8a9e}\u{306e}\u{6587}\u{7ae0}\u{3092}\u{691c}\u{7d22}", count: 7)
+            + "\n"
+        var data = Data(capacity: size + 16_384)
+        let unit = Data(line.utf8)
+        while data.count < size { data.append(unit) }
+        let needle = String(repeating: "\u{691c}\u{7d22}\u{3059}\u{308b}", count: 750)
+        try require(needle.utf16.count == 3_000, "a 3,000-unit search text: above the by-position threshold")
+        data.append(Data((needle + "\u{3002}").utf8))
+        let budget = SearchCore.largeTimeLimit(bytes: 64 * mib) * Double(data.count) / Double(64 * mib)
+        for (name, query, expected) in [("foldcjk_absent", needle + "\u{7121}", 0), ("foldcjk_found", needle, 1)] {
+            let before = try peak(), start = now()
+            let report = try SearchCore.searchBytes(data, options: SearchOptions(query: query), timeLimit: 600)
+            let elapsed = now() - start
+            try metric(name, since: start, initialPeak: before)
+            print(
+                String(
+                    format: "SWIFT_PERF %@ mib_per_s=%.1f proportional_budget_s=%.3f", name,
+                    Double(data.count) / Double(mib) / elapsed, budget))
+            check(
+                report.hits.count == expected,
+                "\(name): the long case-insensitive search of CJK text finds exactly what is there")
+            check(
+                elapsed <= budget * budgetScale(),
+                "\(name): a long case-insensitive search text in CJK text stays within the large-document budget")
+        }
+    }
     private static func budgetScale() -> Double {
         let parsed = ProcessInfo.processInfo.environment["TEXTTANK_PERF_BUDGET_SCALE"].flatMap(Double.init) ?? 1
         return parsed > 0 ? parsed : 1
@@ -283,7 +315,7 @@ import NativeSearch
         Checks.run("SwiftPerformanceChecks") {
             let mode = try requireValue(CommandLine.arguments.dropFirst().first, "selected performance workload")
             try require(
-                ["open32", "save32", "recovery32", "recovery64", "replace100k", "find72"].contains(mode),
+                ["open32", "save32", "recovery32", "recovery64", "replace100k", "find72", "foldcjk"].contains(mode),
                 "known workload")
             let support = try IsolatedSupportDirectory("SwiftPerformance")
             defer { support.restore() }
@@ -302,6 +334,9 @@ import NativeSearch
             if mode == "replace100k" { try replaceAll(using: delegate) }
             else if mode == "find72" {
                 try largeFind(using: delegate, in: support.url)
+            }
+            else if mode == "foldcjk" {
+                try longNeedleInCJK()
             }
             else { try documentCase(mode, in: support.url) }
             withExtendedLifetime(documents) {}
