@@ -2555,6 +2555,149 @@
           }
         }
       }
+    },
+    "areas.sidebar": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Workspace Browser."
+          }
+        }
+      }
+    },
+    "areas.tabs": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tabs."
+          }
+        }
+      }
+    },
+    "areas.tabs.group": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tabs in %@."
+          }
+        }
+      }
+    },
+    "areas.find": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Find bar."
+          }
+        }
+      }
+    },
+    "areas.find.group": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Find bar in %@."
+          }
+        }
+      }
+    },
+    "areas.text": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Text of %@."
+          }
+        }
+      }
+    },
+    "areas.text.group": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Text of %1$@ in %2$@."
+          }
+        }
+      }
+    },
+    "areas.preview": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preview of %@."
+          }
+        }
+      }
+    },
+    "areas.preview.group": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preview of %1$@ in %2$@."
+          }
+        }
+      }
+    },
+    "areas.status": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Document status."
+          }
+        }
+      }
+    },
+    "areas.status.group": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Document status in %@."
+          }
+        }
+      }
+    },
+    "areas.empty": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Empty editor group."
+          }
+        }
+      }
+    },
+    "areas.empty.group": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@, empty."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

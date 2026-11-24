@@ -1137,8 +1137,16 @@ extension DocumentChecks {
                     "target": "explicit",
                 ],
             ]
+            // Added on 23 November 2026 (DS-73): Window > Move Focus > Move Focus to Next Area and
+            // Move Focus to Previous Area, F6 and Shift-F6, each listed once more as a hidden item
+            // for its second key, Option-Command-` and Shift-Option-Command-`. Nothing was removed.
+            let moveFocusAdded: [[String: String]] = [
+                ("moveFocusToNextArea:", "\u{F709}", "0"), ("moveFocusToPreviousArea:", "\u{F709}", "131072"),
+                ("moveFocusToNextArea:", "`", "1572864"), ("moveFocusToPreviousArea:", "~", "1572864"),
+            ].map { ["action": $0.0, "object": "", "key": $0.1, "modifiers": $0.2, "target": "explicit"] }
             var accounted = identities(
-                formerCommands + deliberatelyAdded + togglePreviewAdded + quickOpenWithKey + localHistoryAdded)
+                formerCommands + deliberatelyAdded + togglePreviewAdded + quickOpenWithKey + localHistoryAdded
+                    + moveFocusAdded)
             var removedRowsInFixture = 0
             for removed in identities(deliberatelyRemoved + quickOpenWithoutKey) {
                 if let index = accounted.firstIndex(of: removed) {

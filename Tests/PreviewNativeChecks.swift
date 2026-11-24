@@ -412,6 +412,9 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         Checks.section("fail closed") { try failClosed(root: root) }
         Checks.section("docked Workspace Browser") { try WorkspaceSidebarChecks.run(root: root, app: app, host: host) }
         Checks.section("Editor Layout toolbar item") { try WindowLayoutChecks.layoutControl(app: app, host: host) }
+        Checks.section("Move Focus between window areas") {
+            try WindowLayoutChecks.focusAreas(root: root, app: app, host: host)
+        }
         settle(0.5)
         check(
             listener.connections == allowedConnections,

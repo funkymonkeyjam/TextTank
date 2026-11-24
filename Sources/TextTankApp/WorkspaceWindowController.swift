@@ -64,6 +64,8 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
     private var saveScheduled = false
     lazy var tabCommands = TabCommandController(host: self)
     lazy var groupCommands = GroupCommandController(host: self)
+    /// Window > Move Focus: the keyboard route between the window's areas (DS-73).
+    lazy var areaFocus = WindowAreaFocusController(host: self)
     private var removingTabs = false
     private var returnTab: TabID?
     private var returnSelection: (TabSelectionState, TabWorkspace)?
@@ -163,16 +165,18 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         validateToolbar()
         if focus { window?.makeFirstResponder(presentation.keyboardFocusView) }
     }
-    func focusGroup(_ slot: GroupSlot) {
+    /// `focus` is false when the caller places the keyboard itself, in the group's tab strip or
+    /// status row (Window > Move Focus): the group is focused and the keyboard is left alone.
+    func focusGroup(_ slot: GroupSlot, focus: Bool = true) {
         guard !isMutatingGroups, !tabCommands.isBusy, window?.attachedSheet == nil else { return }
         tabCommands.cancelReopen()
         endBackgroundCloseReturn()
         do { try model.focusGroup(slot, openDocuments: openIDs) } catch { return }
         if let active {
-            activate(active, preserveSelection: true)
+            activate(active, focus: focus, preserveSelection: true)
         } else {
             window?.nextResponder = NSApp
-            window?.makeFirstResponder(nil)
+            if focus { window?.makeFirstResponder(nil) }
             metadataChanged()
             validateToolbar()
         }
@@ -320,6 +324,11 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         if hadKeyboard { window?.makeFirstResponder(target) }
         sidebarReturnResponder = nil
     }
+    /// The sidebar's list, which takes the keyboard when the sidebar is entered.
+    var sidebarFocusView: NSView? { isSidebarShown ? sidebarBrowser?.outline : nil }
+    /// Window > Move Focus is about to put the keyboard in the sidebar. Escape there then returns
+    /// to the text, not to a control an earlier command remembered.
+    func sidebarWillTakeKeyboardByArea() { sidebarReturnResponder = nil }
     /// Escape in the sidebar: the keyboard goes back to the text and the sidebar stays.
     func returnKeyboardFromSidebar() {
         guard sidebarHasKeyboard else { return }

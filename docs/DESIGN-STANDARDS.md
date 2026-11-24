@@ -218,7 +218,10 @@ Owner decision, 23 November 2026:
 - DS-71. The text area is named after its document, and after its pane in a split view.
 - DS-72. A result that only changes a label is announced: use `Announce.say` for one-off messages and
   `AnnouncingLabel` for a tool window's status label. Do not announce progress ticks.
-- DS-73. Every task can be completed from the keyboard, including leaving any dialog.
+- DS-73. Every task can be completed from the keyboard, including leaving any dialog. Window > Move
+  Focus moves the keyboard between the areas of the workspace window (sidebar, tab strip, find bar,
+  text, preview, status row, each editor group) without changing a selection, a scroll position or an
+  active tab; Escape returns to the text. `docs/tab-model.md` has the contract.
 - DS-74. Mac control sizes: 28 by 28 points by default, 20 by 20 at the least.
 
 ### Writing

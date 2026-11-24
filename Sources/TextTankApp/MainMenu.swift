@@ -332,6 +332,9 @@ extension AppDelegate {
             title: "Previous Tab", action: #selector(previousDocumentTab(_:)), keyEquivalent: "\t",
             modifiers: [.control, .shift], target: self)
         window.addItem(title: "Open Documents…", action: #selector(showDocumentTabs(_:)))
+        // DS-73: the keyboard route between the window's areas. The two commands share one
+        // submenu, which keeps this level at twenty items (DS-23).
+        workspaceWindow.areaFocus.addMenuItems(to: window.addSubmenu(titled: WindowAreaFocusController.menuTitle))
         for section in TabCommandController.sections {
             window.addItem(.separator())
             for command in section {

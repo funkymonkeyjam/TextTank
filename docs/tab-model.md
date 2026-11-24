@@ -306,3 +306,44 @@ window, as its frame does. Restoring an explicit session applies the keys its la
 
 Physical keyboard, VoiceOver, pointer dragging of the divider and full screen with the sidebar shown
 have not been observed; the native checks drive the same views and commands in an owned window.
+
+## Keyboard areas of the window
+
+DS-73 (23 November 2026); DS-20/23/70-72/84 apply. Window > Move Focus holds two commands, Move Focus
+to Next Area and Move Focus to Previous Area. Their default keys are F6 and Shift-F6; each also
+answers Option-Command-` and Shift-Option-Command-`, for keyboards whose function keys need the Fn
+key. All four are yielding defaults (`DefaultShortcutItem`), and no menu command, editor key binding
+or reserved system shortcut uses them. The submenu keeps the Window menu at twenty items (DS-23).
+
+The areas form one ring, visited in this order and back:
+
+1. the Workspace Browser, while it is shown (its list takes the keyboard);
+2. for each editor group in its usual order: the tab strip (the active tab's title), the find bar
+   while it is shown (its Find field), the text, and the status row (its first item);
+3. a group with no tabs is one area: its New button.
+
+The text is each pane of a split view in turn. A tab that shows Both offers its source and then its
+preview. A tab that shows Preview alone offers only the preview: its hidden source is never given the
+keyboard, because that would change the tab to Both. With the keyboard in no area, the first move
+reaches the focused group's text.
+
+Moving the keyboard changes no selection, no scroll position and no group's active tab. The group
+that receives the keyboard becomes the focused group, as it does when it is clicked, so commands act
+where the focus ring is. Each move is announced by the area's name, with the group's name when there
+is more than one ("Tabs in Group 2, Right."), and the control that has the keyboard draws the
+standard focus ring (DS-71, DS-72).
+
+Inside an area the group surface handles the keys its controls pass up:
+
+- Tab strip: Left and Right Arrow move from tab to tab without selecting; Tab and Shift-Tab step
+  through every control, so a tab's mark and close button are reached; Space or Return presses the
+  control (a title selects its tab and puts the keyboard in its text); the strip scrolls only to
+  show the control that has the keyboard.
+- Status row: Left and Right Arrow, or Tab and Shift-Tab, move between the items; Space opens the
+  item's menu.
+- Empty group: the arrow keys or Tab move between its buttons; Space or Return presses one.
+- Tab past the last control of an area, or Shift-Tab before the first, moves to the next or previous
+  area.
+- Escape returns the keyboard to the group's text. In a group with no tabs it returns to the text of
+  a group that has some. In the find bar Escape keeps its own meaning and closes the bar (DS-35).
+

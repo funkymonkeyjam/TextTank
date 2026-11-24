@@ -83,6 +83,7 @@ import NativeSearch
             (composition.runner, ["configure:", "manage:", "addSample:", "cancel:"]),
             (composition.utilities, ["run:", "hexOptions:", "convertNumber:", "exportStyled:"]),
             (composition.workspaceWindow.groupCommands, ["invoke:"]),
+            (composition.workspaceWindow.areaFocus, ["moveFocusToNextArea:", "moveFocusToPreviousArea:"]),
             (
                 composition.languages,
                 [
