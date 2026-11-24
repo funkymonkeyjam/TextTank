@@ -15,10 +15,81 @@ final class EditorGroupSurface: NSView {
     let strip = DocumentTabStrip()
     let content = NSView()
     private let heading = NSButton()
-    private let placeholder = NSStackView()
+    /// What a group with no tabs shows: one sentence, New and Open, any message, then the hint.
+    private let placeholder = NSView()
+    private let emptyPrompt = NSTextField(
+        wrappingLabelWithString: Strings.text("emptyGroup.prompt", "Open a document or create a new one."))
+    private let emptyActions = NSStackView()
     let emptyStatus = AnnouncingLabel(labelWithString: "")
     private(set) weak var mounted: NSView?
     private weak var newButton: NSButton?
+
+    // MARK: Empty-group hint
+
+    /// A command the hint names, with the sentence for the key it has now and the sentence that
+    /// names its menu when it has none. The key is read from the menu bar each time, so a
+    /// shortcut assigned in Settings is the one shown (DS-20).
+    private struct HintCommand {
+        let action: Selector
+        let withKey: (key: String, english: String)
+        let withoutKey: (key: String, english: String)
+    }
+    private static let hintCommands: [HintCommand] = [
+        HintCommand(
+            action: EditorToolbarCommand.new.action,
+            withKey: ("emptyGroup.hint.new", "Press %@ for a new document."),
+            withoutKey: ("emptyGroup.hint.new.menu", "Choose File > New for a new document.")),
+        HintCommand(
+            action: EditorToolbarCommand.open.action,
+            withKey: ("emptyGroup.hint.open", "Press %@ to open a document."),
+            withoutKey: ("emptyGroup.hint.open.menu", "Choose File > Open… to open a document.")),
+        HintCommand(
+            action: #selector(WorkspaceBrowserController.quickOpen(_:)),
+            withKey: ("emptyGroup.hint.quickOpen", "Press %@ for Quick Open, to find a file by name."),
+            withoutKey: ("emptyGroup.hint.quickOpen.menu", "Choose File > Quick Open… to find a file by name.")),
+        HintCommand(
+            action: NSSelectorFromString("paletteAction"),
+            withKey: ("emptyGroup.hint.palette", "Press %@ for the Command Palette."),
+            withoutKey: (
+                "emptyGroup.hint.palette.menu", "Choose Help > Command Palette… to run any command."
+            ))
+    ]
+    /// One label for each command, in secondary label style. A command the menu bar does not
+    /// list has no row.
+    private(set) var hintRows: [NSTextField] = []
+    private let recentHeading = NSTextField(labelWithString: Strings.text("emptyGroup.recent", "Recent files"))
+    /// One button for each recent file that still exists, newest first.
+    private(set) var recentButtons: [NSButton] = []
+    /// The files the buttons open, in the same order.
+    private(set) var recentFiles: [URL] = []
+    static let recentLimit = 5
+    /// How many recent files are checked for existence at most; the rest are never looked at.
+    static let recentCandidateLimit = 20
+    /// The recently opened files, newest first: the list File > Open Recent shows. A host whose
+    /// support directory is isolated has no access to the person's list and shows none, unless
+    /// it supplies its own here.
+    static var recentFilesProvider: @MainActor () -> [URL] = {
+        AppStorage.permitsLegacyDefaults ? NSDocumentController.shared.recentDocumentURLs : []
+    }
+    /// Opens a recent file by the Workspace Browser's own route, the one File > Workspace >
+    /// Reopen Recent File uses: an open document is shown, a file that cannot be decoded is
+    /// answered with the encoding chooser, and a failure is explained (DS-20).
+    static var openRecentFile: @MainActor (URL) -> Void = { url in
+        guard let browser = EditorServices.current?.workspaceBrowser else {
+            NSDocumentController.shared.openDocument(withContentsOf: url, display: true) { _, _, error in
+                if let error, (error as NSError).code != NSUserCancelledError { NSApp.presentError(error) }
+            }
+            return
+        }
+        let item = NSMenuItem(title: url.lastPathComponent, action: nil, keyEquivalent: "")
+        item.representedObject = url
+        browser.openRecent(item)
+    }
+    private var recentCandidates: [URL]?
+    private var recentGeneration = 0
+    /// When the recent list was last read. A routine refresh reads it at most every two seconds.
+    private var recentReadAt = -Double.infinity
+    private var keyObserver: NSObjectProtocol?
     init(slot: GroupSlot, host: WorkspaceWindowController) {
         self.slot = slot
         self.host = host
@@ -30,17 +101,28 @@ final class EditorGroupSurface: NSView {
         heading.target = self
         heading.action = #selector(focusGroup(_:))
         heading.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        let label = NSTextField(wrappingLabelWithString: "Open a document or create a new one.")
-        let new = NSButton(title: "New", target: self, action: #selector(createGroupDocument(_:)))
+        let new = NSButton(
+            title: Strings.text("emptyGroup.new", "New"), target: self, action: #selector(createGroupDocument(_:)))
         newButton = new
-        let open = NSButton(title: "Open…", target: self, action: #selector(openGroupDocument(_:)))
-        placeholder.orientation = .vertical
-        placeholder.spacing = 8
-        let actions = NSStackView(views: [new, open])
-        actions.spacing = 8
+        let open = NSButton(
+            title: Strings.text("emptyGroup.open", "Open…"), target: self, action: #selector(openGroupDocument(_:)))
+        new.setAccessibilityLabel(Strings.text("emptyGroup.new.label", "New document in this group"))
+        open.setAccessibilityLabel(Strings.text("emptyGroup.open.label", "Open a document in this group"))
+        emptyActions.setViews([new, open], in: .leading)
+        emptyActions.spacing = 8
         emptyStatus.lineBreakMode = .byWordWrapping
         emptyStatus.maximumNumberOfLines = 2
-        [label, actions, emptyStatus].forEach { placeholder.addArrangedSubview($0) }
+        let small = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        hintRows = Self.hintCommands.map { _ in
+            let row = NSTextField(labelWithString: "")
+            row.font = small
+            row.textColor = .secondaryLabelColor
+            row.lineBreakMode = .byClipping
+            return row
+        }
+        recentHeading.font = small
+        recentHeading.textColor = .secondaryLabelColor
+        ([emptyPrompt, emptyActions, emptyStatus] + hintRows + [recentHeading]).forEach { placeholder.addSubview($0) }
         [heading, strip, content].forEach { addSubview($0) }
         content.addSubview(placeholder)
         setAccessibilityElement(true)
@@ -173,9 +255,140 @@ final class EditorGroupSurface: NSView {
             return false
         }
     }
+    // MARK: Empty-group hint: live keys and recent files
+
+    /// The first item of the menu bar that sends `action` and is listed.
+    private static func menuItem(_ action: Selector, in menu: NSMenu?) -> NSMenuItem? {
+        guard let menu else { return nil }
+        for item in menu.items {
+            if item.action == action, !item.isHidden { return item }
+            if let found = menuItem(action, in: item.submenu) { return found }
+        }
+        return nil
+    }
+    /// Brings the command rows up to date with the keys the menu bar has now.
+    func refreshHint() {
+        guard mounted == nil else { return }
+        var changed = false
+        for (command, row) in zip(Self.hintCommands, hintRows) {
+            var text = "", spoken = ""
+            if let item = Self.menuItem(command.action, in: NSApp.mainMenu) {
+                if let key = ControlPresentation.shortcut(of: item) {
+                    let format = Strings.text(command.withKey.key, command.withKey.english)
+                    text = String(format: format, key)
+                    spoken = String(format: format, ControlPresentation.spokenShortcut(of: item) ?? key)
+                } else {
+                    text = Strings.text(command.withoutKey.key, command.withoutKey.english)
+                    spoken = text
+                }
+            }
+            if row.stringValue != text {
+                row.stringValue = text
+                changed = true
+            }
+            // VoiceOver reads the key in words: "Shift-Command-O", not its symbols.
+            if row.accessibilityLabel() != spoken { row.setAccessibilityLabel(spoken) }
+        }
+        if changed { needsLayout = true }
+    }
+    /// Lists the recent files that still exist. The list is read on the main thread, at most every
+    /// two seconds unless `force` is set (the group became empty, or the window became key);
+    /// whether each file exists is asked on a utility queue, for at most `recentCandidateLimit`
+    /// files, and an answer that arrives after a newer question is dropped (DS-100).
+    func refreshRecentFiles(force: Bool = false) {
+        guard mounted == nil else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard force || now - recentReadAt >= 2 else { return }
+        recentReadAt = now
+        var seen = Set<String>()
+        let candidates = Array(
+            Self.recentFilesProvider().filter { $0.isFileURL && seen.insert($0.standardizedFileURL.path).inserted }
+                .prefix(Self.recentCandidateLimit))
+        guard force || candidates != recentCandidates else { return }
+        recentCandidates = candidates
+        recentGeneration += 1
+        let generation = recentGeneration, limit = Self.recentLimit
+        guard !candidates.isEmpty else {
+            showRecentFiles([])
+            return
+        }
+        let deliver: @MainActor @Sendable ([URL]) -> Void = { [weak self] found in
+            guard let self, self.recentGeneration == generation else { return }
+            self.showRecentFiles(found)
+        }
+        DispatchQueue.global(qos: .utility).async {
+            var existing: [URL] = []
+            for url in candidates where existing.count < limit {
+                var directory: ObjCBool = false
+                if FileManager.default.fileExists(atPath: url.path, isDirectory: &directory), !directory.boolValue {
+                    existing.append(url)
+                }
+            }
+            let found = existing
+            DispatchQueue.main.async { deliver(found) }
+        }
+    }
+    private func showRecentFiles(_ urls: [URL]) {
+        guard urls != recentFiles || recentButtons.count != urls.count else { return }
+        let hadKeyboard = recentButtons.contains { $0 === window?.firstResponder }
+        recentButtons.forEach { $0.removeFromSuperview() }
+        recentFiles = urls
+        // Two files with the same name are told apart by their folder, as in File > Open Recent.
+        let names = Dictionary(grouping: urls, by: \.lastPathComponent)
+        recentButtons = urls.enumerated().map { index, url in
+            let duplicate = (names[url.lastPathComponent]?.count ?? 0) > 1
+            let name =
+                duplicate
+                ? String(
+                    format: Strings.text("emptyGroup.recent.nameInFolder", "%1$@ — %2$@"), url.lastPathComponent,
+                    url.deletingLastPathComponent().lastPathComponent) : url.lastPathComponent
+            let button = NSButton(title: name, target: self, action: #selector(openRecent(_:)))
+            button.tag = index
+            button.isBordered = false
+            button.image = NSImage(systemSymbolName: "doc.text", accessibilityDescription: nil)
+            button.imagePosition = .imageLeading
+            button.alignment = .left
+            button.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+            button.lineBreakMode = .byTruncatingMiddle
+            button.toolTip = url.path
+            button.identifier = .init("groups.recent.\(index)")
+            button.setAccessibilityLabel(
+                String(format: Strings.text("emptyGroup.recent.open", "Open recent file %@"), name))
+            placeholder.addSubview(button)
+            return button
+        }
+        needsLayout = true
+        layoutSubtreeIfNeeded()
+        if hadKeyboard, let first = emptyGroupFocusView { window?.makeFirstResponder(first) }
+    }
+    @objc private func openRecent(_ sender: NSButton) {
+        guard !CompareCommandScope.blocksWorkspace, recentFiles.indices.contains(sender.tag) else { return }
+        host?.focusGroup(slot)
+        Self.openRecentFile(recentFiles[sender.tag])
+    }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let keyObserver { NotificationCenter.default.removeObserver(keyObserver) }
+        keyObserver = nil
+        guard let window else { return }
+        // Coming back from Settings or from another application: a key may have been reassigned
+        // and a recent file may have gone.
+        keyObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.refreshHint()
+                self?.refreshRecentFiles(force: true)
+            }
+        }
+        refreshHint()
+        refreshRecentFiles(force: true)
+    }
     func refresh() {
         strip.groupSlot = slot
         strip.refresh()
+        refreshHint()
+        refreshRecentFiles()
         let name = host?.groupLabel(slot) ?? "Group \(slot.rawValue)"
         let focused = host?.model.focusedGroup == slot
         heading.identifier = .init("groups.heading.\(slot.rawValue)")
@@ -191,6 +404,16 @@ final class EditorGroupSurface: NSView {
             if let root { content.addSubview(root) }
         }
         placeholder.isHidden = root != nil
+        if root == nil {
+            refreshHint()
+            refreshRecentFiles(force: true)
+        }
+        needsLayout = true
+    }
+    /// Shows a message in a group with no tabs, where there is no status row to show it.
+    func showEmptyStatus(_ message: String) {
+        emptyStatus.stringValue = message
+        ControlPresentation.label(message, control: emptyStatus)
         needsLayout = true
     }
     override func layout() {
@@ -202,8 +425,74 @@ final class EditorGroupSurface: NSView {
         strip.frame = NSRect(x: 0, y: max(0, bounds.height - h - 36), width: bounds.width, height: 36)
         content.frame = NSRect(x: 0, y: 0, width: bounds.width, height: max(0, bounds.height - h - 36))
         mounted?.frame = content.bounds
-        placeholder.frame = NSRect(
-            x: 12, y: max(0, (content.bounds.height - 110) / 2), width: max(0, content.bounds.width - 24), height: 110)
+        layoutPlaceholder()
+    }
+    /// Stacks the placeholder from the top: the sentence, New and Open and any message always;
+    /// then as many hint rows and recent files as fit, in that order. A row that does not fit in
+    /// the height, or a sentence wider than the group, is hidden, never clipped (DS-67), and a
+    /// hidden row takes neither the keyboard nor VoiceOver.
+    private func layoutPlaceholder() {
+        placeholder.frame = content.bounds.insetBy(dx: min(12, content.bounds.width / 2), dy: 0)
+        guard !placeholder.isHidden else { return }
+        let width = placeholder.bounds.width, gap: CGFloat = 8, rowGap: CGFloat = 3, margin: CGFloat = 8
+        func height(_ label: NSTextField) -> CGFloat {
+            ceil(label.sizeThatFits(NSSize(width: width, height: .greatestFiniteMagnitude)).height)
+        }
+        emptyStatus.isHidden = emptyStatus.stringValue.isEmpty
+        var rows: [(view: NSView, height: CGFloat, gap: CGFloat)] = [
+            (emptyPrompt, height(emptyPrompt), 0), (emptyActions, ceil(emptyActions.fittingSize.height), gap)
+        ]
+        if !emptyStatus.isHidden { rows.append((emptyStatus, height(emptyStatus), gap)) }
+        var used = rows.reduce(CGFloat(0)) { $0 + $1.height + $1.gap }
+        let available = placeholder.bounds.height - 2 * margin
+        var full = false
+        /// Adds `views` together or not at all. Once one thing does not fit, nothing after it is
+        /// shown, so what is listed is always the start of the list.
+        func offer(_ views: [(NSView, CGFloat)], leading: CGFloat) {
+            let needed = views.enumerated().reduce(CGFloat(0)) { total, entry in
+                total + entry.element.1 + (entry.offset == 0 ? leading : rowGap)
+            }
+            guard !full, used + needed <= available else {
+                full = true
+                views.forEach { $0.0.isHidden = true }
+                return
+            }
+            for (index, entry) in views.enumerated() {
+                entry.0.isHidden = false
+                rows.append((entry.0, entry.1, index == 0 ? leading : rowGap))
+            }
+            used += needed
+        }
+        var first = true
+        for row in hintRows {
+            let size = row.intrinsicContentSize
+            guard !row.stringValue.isEmpty, ceil(size.width) <= width else {
+                row.isHidden = true
+                continue
+            }
+            offer([(row, ceil(size.height))], leading: first ? gap : rowGap)
+            first = false
+        }
+        let headingHeight = ceil(recentHeading.intrinsicContentSize.height)
+        if recentButtons.isEmpty { recentHeading.isHidden = true }
+        for (index, button) in recentButtons.enumerated() {
+            let entry = (button as NSView, max(20, ceil(button.intrinsicContentSize.height)))
+            // The heading appears with the first file or not at all.
+            offer(index == 0 ? [(recentHeading, headingHeight), entry] : [entry], leading: index == 0 ? gap : rowGap)
+        }
+        // Centred when there is room, otherwise from the top, so the sentence and the buttons stay.
+        var y = placeholder.bounds.height - max(margin, (placeholder.bounds.height - used) / 2)
+        for row in rows {
+            y -= row.gap + row.height
+            let fitting = row.view === emptyActions ? ceil(emptyActions.fittingSize.width) : width
+            row.view.frame = NSRect(x: 0, y: y, width: min(width, fitting), height: row.height)
+        }
+    }
+    deinit {
+        precondition(Thread.isMainThread)
+        MainActor.assumeIsolated {
+            if let keyObserver { NotificationCenter.default.removeObserver(keyObserver) }
+        }
     }
 }
 

@@ -415,6 +415,7 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         Checks.section("Move Focus between window areas") {
             try WindowLayoutChecks.focusAreas(root: root, app: app, host: host)
         }
+        Checks.section("empty-group hint") { try WindowLayoutChecks.emptyGroupHint(root: root, app: app, host: host) }
         settle(0.5)
         check(
             listener.connections == allowedConnections,

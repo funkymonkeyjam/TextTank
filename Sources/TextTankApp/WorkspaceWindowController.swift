@@ -700,10 +700,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         if let active {
             active.showTransientStatus(message, seconds: 8, announce: true)
         } else {
-            if let status = groupSurfaces[model.focusedGroup]?.emptyStatus {
-                status.stringValue = message
-                ControlPresentation.label(message, control: status)
-            }
+            groupSurfaces[model.focusedGroup]?.showEmptyStatus(message)
             Announce.say(message, from: window)
         }
     }

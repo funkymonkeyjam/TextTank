@@ -564,6 +564,253 @@ import EditorBridge
         check(host.setEditorLayout(.single), "fixture: back to one group")
     }
 
+    // MARK: Empty-group hint
+
+    private static func settle(_ seconds: TimeInterval) {
+        let end = Date().addingTimeInterval(seconds)
+        while Date() < end { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+    }
+    static func emptyGroupHint(root: URL, app: AppDelegate, host: WorkspaceWindowController) throws {
+        let window = try requireValue(host.window, "fixture: workspace window")
+        let bar = try requireValue(NSApp.mainMenu, "fixture: menu bar")
+        let folder = root.appendingPathComponent("hint")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let originalSize = window.contentView?.bounds.size ?? NSSize(width: 1080, height: 720)
+        let provider = EditorGroupSurface.recentFilesProvider
+        let documents = NSDocumentController.shared as? TextDocumentController
+        let recorded = documents?.recordsRecentDocuments
+        // The owned application must not add a fixture to any list of recent documents.
+        documents?.recordsRecentDocuments = false
+        window.setContentSize(NSSize(width: 1400, height: 700))
+        defer {
+            EditorGroupSurface.recentFilesProvider = provider
+            if let recorded { documents?.recordsRecentDocuments = recorded }
+            NSDocumentController.shared.documents.filter { $0.fileURL?.path.hasPrefix(folder.path) == true }
+                .forEach { $0.close() }
+            EditorSettingsApplication.applyShortcuts(app.settings.value, to: bar)
+            _ = host.setEditorLayout(.single)
+            window.setContentSize(originalSize)
+        }
+        let (_, keptTab) = try open("kept.txt", "kept\n", in: folder)
+        host.activate(keptTab)
+        check(host.setEditorLayout(.twoColumns), "fixture: two editor groups, the second with no tabs")
+        window.contentView?.layoutSubtreeIfNeeded()
+        let surface = try requireValue(host.groupSurfaces[.second], "fixture: second group")
+        let area = try requireValue(surface.emptyGroupArea, "the group with no tabs shows its placeholder")
+        func inside(_ view: NSView) -> Bool {
+            !view.isHiddenOrHasHiddenAncestor
+                && area.bounds.insetBy(dx: -0.5, dy: -0.5).contains(view.convert(view.bounds, to: area))
+        }
+        func shownRows() -> [String] { surface.hintRows.filter(inside).map(\.stringValue) }
+        func buttons() -> [NSButton] { EditorGroupSurface.controls(in: area).compactMap { $0 as? NSButton } }
+
+        // New and Open stay; the four commands are named with the keys the menu has now.
+        check(
+            buttons().prefix(2).map(\.title) == ["New", "Open…"]
+                && buttons().prefix(2).map { $0.accessibilityLabel() ?? "" } == [
+                    "New document in this group", "Open a document in this group"
+                ],
+            "the empty group keeps its New and Open buttons, named for what they do (DS-70)")
+        let commands: [(Selector, String)] = [
+            (#selector(AppDelegate.newDocument(_:)), "Press %@ for a new document."),
+            (#selector(NSDocumentController.openDocument(_:)), "Press %@ to open a document."),
+            (#selector(WorkspaceBrowserController.quickOpen(_:)), "Press %@ for Quick Open, to find a file by name."),
+            (NSSelectorFromString("paletteAction"), "Press %@ for the Command Palette.")
+        ]
+        func menuItem(_ action: Selector, in menu: NSMenu) -> NSMenuItem? {
+            for item in menu.items {
+                if item.action == action, !item.isHidden { return item }
+                if let found = item.submenu.flatMap({ menuItem(action, in: $0) }) { return found }
+            }
+            return nil
+        }
+        let items = try commands.map { try requireValue(menuItem($0.0, in: bar), "fixture: menu item for \($0.0)") }
+        let live = zip(commands, items).map { String(format: $0.0.1, ControlPresentation.shortcut(of: $0.1) ?? "?") }
+        check(
+            live == [
+                "Press ⌘N for a new document.", "Press ⌘O to open a document.",
+                "Press ⇧⌘O for Quick Open, to find a file by name.",
+                "Press ⇧⌘P for the Command Palette."
+            ], "fixture: the four commands have their default keys in the menu bar: \(live)")
+        check(
+            shownRows() == live,
+            "the empty group names New, Open, Quick Open and the Command Palette with their keys: \(shownRows())")
+        check(
+            surface.hintRows.allSatisfy {
+                $0.textColor == .secondaryLabelColor && !$0.isEditable && !$0.isSelectable
+                    && $0.font?.pointSize == NSFont.smallSystemFontSize
+            }, "the rows are labels in secondary label style")
+        check(
+            surface.hintRows.map { $0.accessibilityLabel() ?? "" } == [
+                "Press Command-N for a new document.", "Press Command-O to open a document.",
+                "Press Shift-Command-O for Quick Open, to find a file by name.",
+                "Press Shift-Command-P for the Command Palette."
+            ], "DS-70 VoiceOver reads each row with its key in words")
+
+        // Live keys: a default that gave way to an assigned shortcut, and a key changed in the menu.
+        var custom = app.settings.value
+        custom.shortcuts[EditorCommand.upper.rawValue] = "O"
+        EditorSettingsApplication.applyShortcuts(custom, to: bar)
+        surface.refresh()
+        window.contentView?.layoutSubtreeIfNeeded()
+        check(
+            items[2].keyEquivalent.isEmpty && shownRows()[2] == "Choose File > Quick Open… to find a file by name.",
+            "when an assigned shortcut takes Quick Open's default key, the row names its menu instead: \(shownRows())")
+        EditorSettingsApplication.applyShortcuts(app.settings.value, to: bar)
+        let paletteKey = (items[3].keyEquivalent, items[3].keyEquivalentModifierMask)
+        items[3].keyEquivalent = "k"
+        items[3].keyEquivalentModifierMask = [.command, .control]
+        surface.refresh()
+        window.contentView?.layoutSubtreeIfNeeded()
+        check(
+            shownRows() == Array(live.prefix(3)) + ["Press ⌃⌘K for the Command Palette."]
+                && surface.hintRows[3].accessibilityLabel()
+                    == "Press Control-Command-K for the Command Palette.",
+            "a key changed in the menu is the key the row shows next: \(shownRows())")
+        (items[3].keyEquivalent, items[3].keyEquivalentModifierMask) = paletteKey
+        surface.refresh()
+        window.contentView?.layoutSubtreeIfNeeded()
+        check(shownRows() == live, "fixture: the default keys are back")
+
+        // Recent files: none in an isolated host unless the check supplies them.
+        check(
+            !AppStorage.permitsLegacyDefaults && surface.recentButtons.isEmpty && surface.recentFiles.isEmpty
+                && provider().isEmpty,
+            "with the support directory isolated, no recent file of the person's is read or listed")
+        var names = ["one.txt", "two.md", "three.txt", "four.txt", "five.txt", "six.txt"]
+        let existing = try names.map { name -> URL in
+            let url = folder.appendingPathComponent(name)
+            try Data("\(name)\n".utf8).write(to: url)
+            return url
+        }
+        let gone = folder.appendingPathComponent("gone.txt"), directory = folder.appendingPathComponent("a-folder")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        // More candidates than are ever checked: the files that exist are all past the limit.
+        let unchecked = (0..<EditorGroupSurface.recentCandidateLimit).map {
+            folder.appendingPathComponent("missing-\($0).txt")
+        }
+        EditorGroupSurface.recentFilesProvider = { unchecked + existing }
+        surface.refreshRecentFiles(force: true)
+        settle(0.4)
+        check(
+            surface.recentButtons.isEmpty,
+            "only the first \(EditorGroupSurface.recentCandidateLimit) recent files are checked for existence")
+        EditorGroupSurface.recentFilesProvider = { [existing[0], gone, existing[1], directory] + existing[2...] }
+        surface.refreshRecentFiles(force: true)
+        check(
+            surface.recentButtons.isEmpty,
+            "the existence check does not run on the main thread: nothing is listed until it answers")
+        spinUntil("the recent files are listed") { surface.recentButtons.count == EditorGroupSurface.recentLimit }
+        window.contentView?.layoutSubtreeIfNeeded()
+        names.removeLast()
+        check(
+            surface.recentButtons.map(\.title) == names && surface.recentFiles == Array(existing.prefix(5)),
+            "up to five recent files are listed, newest first; a file that no longer exists and a folder are left out: \(surface.recentButtons.map(\.title))"
+        )
+        check(
+            surface.recentButtons.allSatisfy(inside)
+                && surface.recentButtons.map { $0.accessibilityLabel() ?? "" } == names.map { "Open recent file " + $0 }
+                && surface.recentButtons.map { $0.toolTip ?? "" } == existing.prefix(5).map(\.path),
+            "each is a button named for the file it opens, with the path as its tooltip (DS-70)")
+        let all = buttons()
+        check(
+            all.count == 7 && Array(all.suffix(5)) == surface.recentButtons
+                && !all.indices.contains { a in
+                    all.indices.contains { b in
+                        a < b
+                            && all[a].convert(all[a].bounds, to: area).intersects(
+                                all[b].convert(all[b].bounds, to: area))
+                    }
+                },
+            "New, Open and the five files are the placeholder's keyboard stops, in reading order, none overlapping")
+
+        // Keyboard: the area command reaches the placeholder; arrows and Tab move; Return opens.
+        window.makeFirstResponder(keptTab.keyboardFocusView)
+        let focus = host.areaFocus
+        focus.move(1)
+        focus.move(1)
+        check(window.firstResponder === all[0], "fixture: the keyboard is on New in the empty group")
+        surface.keyDown(with: try key(125, String(UnicodeScalar(UInt32(NSDownArrowFunctionKey))!), in: window))
+        surface.keyDown(with: try key(125, String(UnicodeScalar(UInt32(NSDownArrowFunctionKey))!), in: window))
+        check(
+            window.firstResponder === surface.recentButtons[0], "Down Arrow moves through Open to the first recent file"
+        )
+        surface.keyDown(with: try key(48, "\t", in: window))
+        check(
+            window.firstResponder === surface.recentButtons[1] && surface.recentButtons[1].focusRingType != .none,
+            "Tab moves on, and the button with the keyboard draws the standard focus ring")
+        let before = NSDocumentController.shared.documents.count
+        surface.recentButtons[1].keyDown(with: try key(36, "\r", in: window))
+        spinUntil("the recent file opens") {
+            NSDocumentController.shared.documents.contains { $0.fileURL?.lastPathComponent == "two.md" }
+        }
+        let opened = try requireValue(
+            NSDocumentController.shared.documents.first { $0.fileURL?.lastPathComponent == "two.md" } as? TextDocument,
+            "activating a recent file's row opens that file")
+        spinUntil("the opened file is the active tab") { (host.active?.document as? TextDocument) === opened }
+        check(
+            NSDocumentController.shared.documents.count == before + 1
+                && host.model.groups.first { $0.slot == .second }?.tabs.count == 1
+                && (host.active?.document as? TextDocument) === opened && opened.editor.text == "two.md\n"
+                && surface.emptyGroupArea == nil,
+            "it opens once, in the group whose row was activated, and that group is no longer empty")
+        opened.close()
+        window.contentView?.layoutSubtreeIfNeeded()
+        check(surface.emptyGroupArea != nil, "fixture: the second group is empty again")
+
+        // The minimum group size: rows that do not fit are hidden, never clipped (DS-67).
+        check(host.setEditorLayout(.single), "fixture: one group before the window shrinks")
+        window.setContentSize(NSSize(width: 800, height: 500))
+        check(host.setEditorLayout(.grid2x2), "fixture: four groups in a window at its minimum size")
+        window.contentView?.layoutSubtreeIfNeeded()
+        // The dividers as far as they go: the fourth group is 320 by 200 points, the least a group can be.
+        for divider in host.groupContainer.dividers {
+            let extent = divider.isVertical ? divider.bounds.width : divider.bounds.height
+            let least = CGFloat(
+                divider.isVertical ? TabGroupGeometry.minimumPane.width : TabGroupGeometry.minimumPane.height)
+            divider.setPosition(extent - divider.dividerThickness - least, ofDividerAt: 0)
+        }
+        window.contentView?.layoutSubtreeIfNeeded()
+        let small = try requireValue(host.groupSurfaces[.fourth], "fixture: fourth group")
+        small.refreshRecentFiles(force: true)
+        spinUntil("the small group has its recent files") { small.recentFiles.count == EditorGroupSurface.recentLimit }
+        window.contentView?.layoutSubtreeIfNeeded()
+        let smallArea = try requireValue(small.emptyGroupArea, "fixture: the fourth group's placeholder")
+        let everything =
+            EditorGroupSurface.controls(in: smallArea) as [NSView] + small.hintRows.filter { !$0.isHidden }
+        check(
+            abs(small.bounds.width - 320) < 1 && abs(small.bounds.height - 200) < 1,
+            "fixture: the group is at its minimum size, 320 by 200: \(NSStringFromSize(small.bounds.size))")
+        let frames = everything.map { $0.convert($0.bounds, to: smallArea) }
+        check(
+            frames.allSatisfy { smallArea.bounds.insetBy(dx: -0.5, dy: -0.5).contains($0) }
+                && !frames.indices.contains { a in
+                    frames.indices.contains { b in a < b && frames[a].intersects(frames[b]) }
+                },
+            "at that size everything shown is whole and nothing overlaps: "
+                + frames.map { NSStringFromRect($0) }.joined(separator: "; "))
+        let shownSmall = small.hintRows.filter { !$0.isHidden }
+        check(
+            EditorGroupSurface.controls(in: smallArea).prefix(2).map { ($0 as? NSButton)?.title ?? "" } == [
+                "New", "Open…"
+            ]
+                && shownSmall.allSatisfy { $0.frame.width >= ceil($0.intrinsicContentSize.width) - 0.5 }
+                && shownSmall.map(\.stringValue) == Array(live.prefix(shownSmall.count)),
+            "New and Open stay, and the rows that are shown are the first ones, each with its whole sentence: \(shownSmall.map(\.stringValue))"
+        )
+        check(
+            shownSmall.count == 4,
+            "the smallest group still names all four commands: \(shownSmall.count) rows of widths \(small.hintRows.map { ceil($0.intrinsicContentSize.width) }) in \(smallArea.bounds.width) points"
+        )
+        check(
+            small.recentButtons.filter { !$0.isHidden }.count < EditorGroupSurface.recentLimit
+                && small.recentButtons.filter { $0.isHidden }.allSatisfy { button in
+                    !EditorGroupSurface.controls(in: smallArea).contains { $0 === button }
+                },
+            "recent files that do not fit are hidden and take no keyboard stop: \(small.recentButtons.filter { !$0.isHidden }.count) shown"
+        )
+    }
+
     static func nativeAttribute(_ element: Any, _ name: String) -> String {
         guard let object = element as? NSObject, object.responds(to: NSSelectorFromString(name)) else { return "" }
         return object.perform(NSSelectorFromString(name))?.takeUnretainedValue() as? String ?? ""

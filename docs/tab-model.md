@@ -33,7 +33,7 @@ Only the mounted active tab in a visible, non-minimized host runs recurring stat
 
 ## Empty state and persistence boundary
 
-Closing the final tab keeps the host open and TextTank running, without creating an untitled document. The empty host offers New/Open in the toolbar and menu; document commands are disabled. Its red close button still invokes Quit. Stage 1 adds the context commands, bulk close and reopen history described below. Stage 2 adds pin/reorder/multiselection UI below; additional visible groups and a layout choice remain excluded from that stage.
+Closing the final tab keeps the host open and TextTank running, without creating an untitled document. The empty host offers New/Open in the toolbar and menu; document commands are disabled. A group with no tabs shows more than its sentence and its New and Open buttons: see “Empty group” below. Its red close button still invokes Quit. Stage 1 adds the context commands, bulk close and reopen history described below. Stage 2 adds pin/reorder/multiselection UI below; additional visible groups and a layout choice remain excluded from that stage.
 
 WorkspaceLayoutState requires version 1, layout, focused slot and ordered group states. Each group has its slot, active-tab index and ordered tab records containing DocumentID, pinned flag, UTF-8 anchor/caret and first visible line. Validation rejects unknown or missing version, wrong counts/order/slots, duplicate documents per group, broken pin prefix, invalid active/focused references and negative offsets. No text or bytes are stored. A tab record may also carry `viewMode` (`preview` or `both`) and `previewSourceFraction` (the source's share of the width in Both, 0 to 1). Both are optional and are left out for a tab that shows Source, so records written before the fields existed read as Source and a Source tab is written exactly as before. An unknown mode or a fraction outside 0 to 1 is rejected. A tab record may carry `zoom`, the active pane's zoom level, and its split record `otherZoom` for the other pane, each −10 through 60. Both are optional and written only for a pane zoomed away from the Editor Settings default; a pane without one is restored at that default and follows it, so earlier records and unzoomed tabs are unchanged. A level outside the range is rejected. The mode is applied on restore only if the document still has a preview (see [preview-model](preview-model.md#presentation)). All four layout shapes round-trip in codec tests. Nothing writes this value to disk, and existing session/recovery schema and golden fixture bytes stay unchanged.
 
@@ -346,4 +346,31 @@ Inside an area the group surface handles the keys its controls pass up:
   area.
 - Escape returns the keyboard to the group's text. In a group with no tabs it returns to the text of
   a group that has some. In the find bar Escape keeps its own meaning and closes the bar (DS-35).
+
+## Empty group
+
+DS-10/20/67/70/73/84/85/100 apply. A group with no tabs shows, from the top: one sentence, the New
+and Open… buttons, a message when a command reported one there, then a hint.
+
+The hint names up to four commands in secondary label style, one whole sentence each: New, Open,
+Quick Open and the Command Palette. Each sentence carries the key its menu item has at that moment,
+read from the menu bar, so a shortcut assigned in Settings, or a default that gave way to one, is
+what is shown; a command with no key is named by its menu instead ("Choose File > Quick Open… to
+find a file by name."). VoiceOver hears the key in words. The rows are brought up to date when the
+group becomes empty, when tabs change and when the window becomes key again.
+
+Below the hint come up to five recent files, newest first, under the heading "Recent files". Each
+is a button named for the file, with the path as its tooltip; two files with one name also show
+their folders. Activating one focuses that group and opens the file there by the Workspace Browser's
+route, the one File > Workspace > Reopen Recent File uses. The list is the one File > Open Recent
+shows. Files that no longer exist, and folders, are left out: at most twenty entries are checked,
+on a utility queue, and an answer that arrives after a newer question is dropped. A host whose
+support directory is isolated reads no list of the person's and shows none unless it supplies one.
+
+Nothing is clipped. The sentence, the buttons and a message always stay. Hint rows, then recent
+files, are added while they fit the group's height; the first that does not fit, and everything
+after it, is hidden, and so is a sentence wider than the group. A hidden row takes neither the
+keyboard nor VoiceOver. At the least group size, 320 by 200 points, the four commands fit and no
+recent file does. The buttons are keyboard stops of the group's area (see “Keyboard areas of the
+window”): the arrow keys or Tab move between them and Space or Return presses one.
 

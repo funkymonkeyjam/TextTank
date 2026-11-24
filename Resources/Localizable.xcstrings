@@ -2698,6 +2698,182 @@
           }
         }
       }
+    },
+    "emptyGroup.prompt": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open a document or create a new one."
+          }
+        }
+      }
+    },
+    "emptyGroup.new": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New"
+          }
+        }
+      }
+    },
+    "emptyGroup.open": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open…"
+          }
+        }
+      }
+    },
+    "emptyGroup.new.label": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New document in this group"
+          }
+        }
+      }
+    },
+    "emptyGroup.open.label": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open a document in this group"
+          }
+        }
+      }
+    },
+    "emptyGroup.hint.new": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Press %@ for a new document."
+          }
+        }
+      }
+    },
+    "emptyGroup.hint.new.menu": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose File > New for a new document."
+          }
+        }
+      }
+    },
+    "emptyGroup.hint.open": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Press %@ to open a document."
+          }
+        }
+      }
+    },
+    "emptyGroup.hint.open.menu": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose File > Open… to open a document."
+          }
+        }
+      }
+    },
+    "emptyGroup.hint.quickOpen": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Press %@ for Quick Open, to find a file by name."
+          }
+        }
+      }
+    },
+    "emptyGroup.hint.quickOpen.menu": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose File > Quick Open… to find a file by name."
+          }
+        }
+      }
+    },
+    "emptyGroup.hint.palette": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Press %@ for the Command Palette."
+          }
+        }
+      }
+    },
+    "emptyGroup.hint.palette.menu": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose Help > Command Palette… to run any command."
+          }
+        }
+      }
+    },
+    "emptyGroup.recent": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recent files"
+          }
+        }
+      }
+    },
+    "emptyGroup.recent.nameInFolder": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ — %2$@"
+          }
+        }
+      }
+    },
+    "emptyGroup.recent.open": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open recent file %@"
+          }
+        }
+      }
     }
   },
   "version": "1.0"
