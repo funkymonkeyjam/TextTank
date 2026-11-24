@@ -22,6 +22,8 @@ enum SearchOutcome: Equatable {
     case selectedNextMatch
     /// Replace found no selected match in Selection or All open documents scope.
     case noMatchSelected
+    /// Next or Previous selected a match in a document too large to count as part of the move.
+    case movedToMatch
 }
 /// What a replacement did to one document; nothing is changed unless it is `applied`.
 enum ReplaceOutcome: Equatable { case applied(Int), readOnly, multipleSelections, closed, stale }
@@ -34,7 +36,9 @@ struct ReplaceSkips: Equatable {
 }
 
 /// Native snapshot search. Workers never access TTEditor; results are revision checked.
-final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate {
+final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate,
+    NSComboBoxDelegate
+{
     var currentEditor: () -> TTEditor? = { nil }
     var openEditors: () -> [TTEditor] = { [] }
     var onCommand: ((SearchOptions, String, TTEditor) -> Void)?
@@ -42,6 +46,25 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     var sharedFlagsChanged: (() -> Void)?
     var writeFindText: (String) -> Void = { _ in }
     var onUnrecordableCommand: ((String) -> Void)?
+    /// DS-35, one Find: the text to find and the text to replace it with are one pair of values,
+    /// shown live by this window and by every find bar. A surface reports what is typed in it
+    /// (`setSharedQuery`, `setSharedReplacement`) and is told what was typed elsewhere through
+    /// `sharedTextChanged`, which never calls back into the surface that made the change, so the
+    /// field being typed in keeps its caret and selection. Sharing text runs no search.
+    private(set) var sharedQuery = "", sharedReplacement = ""
+    /// Called with the surface that made the change (nil for a change made by a command).
+    var sharedTextChanged: ((AnyObject?) -> Void)?
+    /// The last ten distinct searches and replacements, kept in the private settings file and
+    /// offered by both surfaces. Nothing in it is applied until the person chooses an entry.
+    private(set) var findHistory = FindHistory()
+    var historyChanged: (() -> Void)?
+    /// The find pasteboard text this application last wrote or took in. Another application's
+    /// search is imported when the pasteboard no longer holds this.
+    private var findPasteboardSeen: String?
+    /// A document longer than this many UTF-16 units is searched as bytes, in windows of
+    /// `largeChunkBytes`. Checks lower both to exercise that path on small fixtures.
+    var largeDocumentUnits = SearchCore.maximumTextUnits
+    var largeChunkBytes = SearchCore.largeChunkBytes
     private enum Scope: Int, CaseIterable {
         case currentDocument, selection, allOpenDocuments
         var title: String {
@@ -55,7 +78,15 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     private var selectedScope: Scope {
         ControlPresentation.selectedID(scope).flatMap(Int.init).flatMap(Scope.init(rawValue:)) ?? .currentDocument
     }
-    let queryField = NSTextField(), replacementField = NSTextField()
+    /// Combo boxes: the arrow button and the Down Arrow key both open the history (DS-73).
+    let queryField = NSComboBox(), replacementField = NSComboBox()
+    /// Visible captions; a placeholder disappears as soon as something is typed.
+    let queryCaption = NSTextField(labelWithString: "Find"),
+        replacementCaption = NSTextField(labelWithString: "Replace with")
+    /// DS-45: an expression that does not compile is marked here, under the field, in full.
+    let patternNotice = NSTextField(wrappingLabelWithString: "")
+    private let patternIcon = NSImageView()
+    private var fieldGrid: NSGridView?
     let mode = NSPopUpButton(), scope = NSPopUpButton()
     let caseButton = NSButton(checkboxWithTitle: "Match case", target: nil, action: nil)
     let wordButton = NSButton(checkboxWithTitle: "Whole word", target: nil, action: nil)
@@ -113,6 +144,23 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     private var resultBuffers: [Buffer] = [], rows: [Row] = []
     private var resultKey: ResultKey?, resultTruncated = false
     private var searchButtons: [NSButton] = []
+    /// DS-21: what the last search that found nothing was a search for. Replace All stays
+    /// disabled while the fields, options, scope and documents are still exactly that.
+    private struct EmptySearch: Equatable {
+        struct Document: Equatable { let editor: ObjectIdentifier, revision: UInt, selection: NSRange? }
+        let query: [UInt8], mode: SearchOptions.Mode, matchCase: Bool, wholeWord: Bool, dotMatchesNewline: Bool
+        let scope: Scope, documents: [Document]
+    }
+    private var emptySearch: EmptySearch?
+    /// What the search now running is a search of, captured when it was asked for.
+    private var searchIdentity: EmptySearch?
+    /// Progress steps shown for large-document searches so far; for checks.
+    private(set) var progressReports = 0
+    var replaceAllButton: NSButton { searchButtons[4] }
+    private var largeNavigation: Navigation?, largeScope: Navigation?
+    /// Whether an editor at a revision is above `largeDocumentUnits`, so that the next press does
+    /// not count the document again.
+    private var largeDecision: (editor: ObjectIdentifier, revision: UInt, limit: Int, large: Bool)?
     private var lastNavigation: Navigation?, navigationScope: Navigation?
     /// Set while the match after a single Replace is being looked for: what that Replace reported.
     private var appliedReplace: (status: String, outcome: SearchOutcome?)?
@@ -172,6 +220,20 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         queryField.placeholderString = "Find"
         queryField.setAccessibilityLabel("Find in document")
         replacementField.setAccessibilityLabel("Replace matches with")
+        for field in [queryField, replacementField] {
+            field.delegate = self
+            field.usesDataSource = false
+            field.completes = false
+            field.numberOfVisibleItems = FindHistory.capacity
+            field.setContentHuggingPriority(.init(1), for: .horizontal)
+        }
+        patternNotice.isSelectable = true
+        patternNotice.setAccessibilityLabel("Problem with the search expression")
+        // The mark is a symbol and words, never colour alone (DS-62).
+        patternIcon.image = NSImage(
+            systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: "Expression not valid")
+        patternIcon.contentTintColor = .systemRed
+        patternIcon.setContentHuggingPriority(.required, for: .horizontal)
         mode.setAccessibilityLabel("Search mode")
         scope.setAccessibilityLabel("Search scope")
         // Return in the query field is Find Next. Only Return sends it, never leaving the field.
@@ -183,18 +245,15 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             mode, choices: SearchOptions.Mode.allCases.map { (String($0.rawValue), $0.displayName) }, selected: "0")
         ControlPresentation.populate(
             scope, choices: Scope.allCases.map { (String($0.rawValue), $0.title) }, selected: "0")
-        options = preferences.value.options
-        queryField.stringValue = options.query
-        replacementField.stringValue = options.replacement
-        mode.selectItem(at: mode.indexOfItem(withRepresentedObject: String(options.mode.rawValue)))
-        caseButton.state = options.matchCase ? .on : .off
-        wordButton.state = options.wholeWord ? .on : .off
-        dotButton.state = options.dotMatchesNewline ? .on : .off
-        wrapButton.state = options.wrap ? .on : .off
+        // A new launch is in Normal mode with both fields empty. What was searched for before is
+        // in the history, offered by the fields and never put back by itself.
+        applyStartingPreferences()
         for control in [mode as NSControl, caseButton, wordButton, dotButton, wrapButton] {
             control.target = self
             control.action = #selector(advancedFlagsChanged(_:))
         }
+        scope.target = self
+        scope.action = #selector(scopeChanged(_:))
         let actions: [(String, Selector)] = [
             ("Previous", #selector(previous(_:))), ("Next", #selector(next(_:))),
             ("Find All / Count", #selector(findAll(_:))), ("Replace", #selector(replaceOne(_:))),
@@ -241,19 +300,36 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             preferences.state.error == nil
             ? "" : "Saved search settings could not be read. Reset them to keep new settings."
         preferenceNotice.toolTip = preferences.state.error?.localizedDescription
-        let root = NSStackView(views: [
-            queryField, replacementField, opts, flags, buttons, marks, preferenceRow, status, scroll
+        let spacer = NSGridCell.emptyContentView
+        let grid = NSGridView(views: [
+            [queryCaption, queryField], [spacer, NSStackView(views: [patternIcon, patternNotice])],
+            [replacementCaption, replacementField]
         ])
+        grid.column(at: 0).xPlacement = .trailing
+        grid.rowAlignment = .firstBaseline
+        grid.columnSpacing = 8
+        grid.rowSpacing = 8
+        grid.row(at: 1).isHidden = true
+        fieldGrid = grid
+        // The whole message is shown: an error that is cut off cannot be acted on (DS-81).
+        status.lineBreakMode = .byWordWrapping
+        status.maximumNumberOfLines = 3
+        status.cell?.wraps = true
+        status.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let root = NSStackView(views: [grid, opts, flags, buttons, marks, preferenceRow, status, scroll])
         root.orientation = .vertical
         root.alignment = .leading
         root.spacing = 8
         root.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
         window.contentView = root
-        for v in [queryField, replacementField, opts, flags, buttons, marks, preferenceRow, status, scroll] {
+        for v in [grid, opts, flags, buttons, marks, preferenceRow, status, scroll] {
             v.widthAnchor.constraint(equalTo: root.widthAnchor, constant: -24).isActive = true
         }
-        scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 150).isActive = true
-        window.minSize = NSSize(width: 780, height: 440)
+        // The results give way first when a three-line message and the expression notice both show.
+        let resultsHeight = scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 150)
+        resultsHeight.priority = .defaultHigh
+        resultsHeight.isActive = true
+        window.minSize = NSSize(width: 780, height: 500)
         window.initialFirstResponder = queryField
         WindowFrames.track(window, as: "TextTank.FindAndReplace")
     }
@@ -267,21 +343,164 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     @objc func showSearch(_ sender: Any?) {
         // Find and Replace acts on the source; a tab showing only its preview shows both first.
         EditorServices.current?.activePresentation?.revealSource()
-        if let shared = readFindText(), !shared.isEmpty { queryField.stringValue = shared }
+        importFindPasteboard()
         showPanel(sender)
     }
     func showFromInline(query: String, replacement: String, sender: Any?) {
         window?.makeFirstResponder(nil)
-        queryField.stringValue = query
-        replacementField.stringValue = replacement
+        setSharedQuery(query, from: nil)
+        setSharedReplacement(replacement, from: nil)
         showPanel(sender)
+    }
+    /// Takes in what another application searched for. The pasteboard is read when a Find surface
+    /// opens; text this application put there, or already took, is not taken again, so opening
+    /// the window never replaces what was typed in the find bar a moment ago.
+    @discardableResult func importFindPasteboard(onlyIfEmpty: Bool = false) -> Bool {
+        guard let board = readFindText(), !board.isEmpty else { return false }
+        let fresh = findPasteboardSeen.map { !$0.utf8.elementsEqual(board.utf8) } ?? true
+        findPasteboardSeen = board
+        guard fresh, !onlyIfEmpty || sharedQuery.isEmpty else { return false }
+        setSharedQuery(board, from: nil)
+        return true
+    }
+    /// At launch: what is on the find pasteboard now was put there before this launch, possibly
+    /// by an earlier launch of this application. It is not taken in, so a new launch starts with
+    /// an empty Find field; a search made in another application from now on still is.
+    func adoptFindPasteboard() { findPasteboardSeen = readFindText() ?? "" }
+    /// What this application searched for becomes the find pasteboard text (DS-35).
+    func shareFindPasteboard(_ text: String) {
+        findPasteboardSeen = text
+        writeFindText(text)
+    }
+    func setSharedQuery(_ text: String, from source: AnyObject?) {
+        let changed = !sharedQuery.utf8.elementsEqual(text.utf8)
+        sharedQuery = text
+        // The window's own field is set only when someone else changed the text: setting the
+        // field that is being typed in would move its caret.
+        if source !== self, !queryField.stringValue.utf8.elementsEqual(text.utf8) { queryField.stringValue = text }
+        guard changed else { return }
+        clearPatternMark()
+        updateReplaceAllAvailability()
+        sharedTextChanged?(source)
+    }
+    func setSharedReplacement(_ text: String, from source: AnyObject?) {
+        let changed = !sharedReplacement.utf8.elementsEqual(text.utf8)
+        sharedReplacement = text
+        if source !== self, !replacementField.stringValue.utf8.elementsEqual(text.utf8) {
+            replacementField.stringValue = text
+        }
+        if changed { sharedTextChanged?(source) }
+    }
+    /// A search that was asked for (not text that was merely typed) enters the history, and the
+    /// history is saved with the option flags. A replacement is remembered when one was used.
+    func remember(query: String, replacement: String?) {
+        var changed = !query.isEmpty && findHistory.remember(query: query)
+        if let replacement, !replacement.isEmpty, findHistory.remember(replacement: replacement) { changed = true }
+        guard changed else { return }
+        publishHistory()
+        savePreferences(sharedOptions(query: "", replacement: ""))
+    }
+    /// Forgets the remembered searches or the remembered replacements, here and in the file.
+    func clearHistory(replacements: Bool) {
+        if replacements { findHistory.clearReplacements() } else { findHistory.clearQueries() }
+        publishHistory()
+        savePreferences(sharedOptions(query: "", replacement: ""))
+    }
+    private func publishHistory() {
+        queryField.removeAllItems()
+        queryField.addItems(withObjectValues: findHistory.queries)
+        replacementField.removeAllItems()
+        replacementField.addItems(withObjectValues: findHistory.replacements)
+        historyChanged?()
+    }
+    private func applyStartingPreferences() {
+        options = preferences.value.startingOptions
+        findHistory = preferences.value.history
+        setSharedQuery("", from: nil)
+        setSharedReplacement("", from: nil)
+        mode.selectItem(at: mode.indexOfItem(withRepresentedObject: String(options.mode.rawValue)))
+        caseButton.state = options.matchCase ? .on : .off
+        wordButton.state = options.wholeWord ? .on : .off
+        dotButton.state = options.dotMatchesNewline ? .on : .off
+        wrapButton.state = options.wrap ? .on : .off
+        publishHistory()
+    }
+    private func savePreferences(_ options: SearchOptions) {
+        do {
+            try preferences.save(FindPreferences(saving: options, history: findHistory))
+            preferenceNotice.isHidden = true
+        } catch { showPreferenceFailure(error) }
+    }
+    // Typing in either field is shared as it happens. No search runs.
+    func controlTextDidChange(_ notification: Notification) {
+        guard let field = notification.object as? NSComboBox else { return }
+        if field === queryField { setSharedQuery(field.stringValue, from: self) }
+        if field === replacementField { setSharedReplacement(field.stringValue, from: self) }
+    }
+    /// An entry chosen from a field's history becomes the shared text. Choosing with the arrow
+    /// keys reports each entry passed; the field shows the entry, as a combo box does.
+    func comboBoxSelectionDidChange(_ notification: Notification) {
+        guard let field = notification.object as? NSComboBox, field.indexOfSelectedItem >= 0,
+            let chosen = field.objectValueOfSelectedItem as? String
+        else { return }
+        if field === queryField { setSharedQuery(chosen, from: nil) }
+        if field === replacementField { setSharedReplacement(chosen, from: nil) }
+    }
+    private func markPattern(_ message: String) {
+        patternNotice.stringValue = message
+        fieldGrid?.row(at: 1).isHidden = false
+        queryField.toolTip = message
+        queryField.setAccessibilityHelp(message)
+    }
+    private func clearPatternMark() {
+        guard fieldGrid?.row(at: 1).isHidden == false else { return }
+        patternNotice.stringValue = ""
+        fieldGrid?.row(at: 1).isHidden = true
+        queryField.toolTip = nil
+        queryField.setAccessibilityHelp(nil)
+    }
+    var patternIsMarked: Bool { fieldGrid?.row(at: 1).isHidden == false }
+    @objc private func scopeChanged(_ sender: Any?) { updateReplaceAllAvailability() }
+    func windowDidUpdate(_ notification: Notification) { updateReplaceAllAvailability() }
+    /// What a search for the current fields, options, scope and documents would be a search of.
+    /// Reads no document text.
+    private func currentSearchIdentity() -> EmptySearch {
+        let scopeIndex = selectedScope
+        let editors = scopeIndex == .allOpenDocuments ? openEditors() : currentEditor().map { [$0] } ?? []
+        let flags = sharedOptions(query: "", replacement: "")
+        return EmptySearch(
+            query: Array(queryField.stringValue.utf8), mode: flags.mode, matchCase: flags.matchCase,
+            wholeWord: flags.wholeWord, dotMatchesNewline: flags.dotMatchesNewline, scope: scopeIndex,
+            documents: editors.map {
+                EmptySearch.Document(
+                    editor: ObjectIdentifier($0), revision: $0.revision,
+                    selection: scopeIndex == .selection
+                        ? NSRange(location: $0.selectionStart, length: $0.selectionEnd - $0.selectionStart) : nil)
+            })
+    }
+    /// DS-21: Replace All is not offered for a search already known to find nothing. Editing the
+    /// Find text, an option, the scope or a document offers it again.
+    func updateReplaceAllAvailability() {
+        guard !searchButtons.isEmpty else { return }
+        if let known = emptySearch, known != currentSearchIdentity() { emptySearch = nil }
+        let offered = emptySearch == nil
+        replaceAllButton.toolTip =
+            offered ? nil : "The last search found no matches. Change the Find text, an option or the document."
+        if !isSearching, replaceAllButton.isEnabled != offered { replaceAllButton.isEnabled = offered }
+    }
+    private func noteCount(_ matches: Int, truncated: Bool) {
+        emptySearch = matches == 0 && !truncated ? searchIdentity : nil
     }
     private func showPanel(_ sender: Any?) {
         showWindow(sender)
         window?.makeKeyAndOrderFront(sender)
         window?.makeFirstResponder(queryField)
     }
-    @objc private func advancedFlagsChanged(_ sender: NSControl) { sharedFlagsChanged?() }
+    @objc private func advancedFlagsChanged(_ sender: NSControl) {
+        clearPatternMark()
+        updateReplaceAllAvailability()
+        sharedFlagsChanged?()
+    }
     enum InlineFlag { case matchCase, wholeWord, regex }
     func setInlineFlag(_ flag: InlineFlag, enabled: Bool) {
         switch flag {
@@ -291,6 +510,8 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             let desired: SearchOptions.Mode = enabled ? .regularExpression : .normal
             mode.selectItem(at: mode.indexOfItem(withRepresentedObject: String(desired.rawValue)))
         }
+        clearPatternMark()
+        updateReplaceAllAvailability()
         sharedFlagsChanged?()
     }
     func sharedOptions(query: String, replacement: String) -> SearchOptions {
@@ -304,16 +525,22 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         o.wrap = wrapButton.state == .on
         return o
     }
-    private func readOptions() -> SearchOptions {
+    /// `remembering` is the action about to run: its search enters the history, and so does its
+    /// replacement when the action replaces.
+    private func readOptions(remembering action: Action? = nil) -> SearchOptions {
         // Commit the shared field editor before reading distinct window fields.
         window?.makeFirstResponder(nil)
         let o = sharedOptions(query: queryField.stringValue, replacement: replacementField.stringValue)
-        do {
-            try preferences.save(FindPreferences(options: o))
-            preferenceNotice.isHidden = true
-        } catch { showPreferenceFailure(error) }
+        setSharedQuery(o.query, from: self)
+        setSharedReplacement(o.replacement, from: self)
+        if let action {
+            let replacing = action == .replaceOne || action == .replaceAll
+            if !o.query.isEmpty, findHistory.remember(query: o.query) { publishHistory() }
+            if replacing, !o.replacement.isEmpty, findHistory.remember(replacement: o.replacement) { publishHistory() }
+        }
+        savePreferences(o)
         options = o
-        writeFindText(o.query)
+        shareFindPasteboard(o.query)
         return o
     }
     private func showPreferenceFailure(_ error: Error) {
@@ -327,14 +554,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         guard StoreRecovery.confirmPreferenceReset(preferences.state) else { return }
         do {
             try preferences.reset()
-            options = preferences.value.options
-            queryField.stringValue = options.query
-            replacementField.stringValue = options.replacement
-            mode.selectItem(at: mode.indexOfItem(withRepresentedObject: String(options.mode.rawValue)))
-            caseButton.state = options.matchCase ? .on : .off
-            wordButton.state = options.wholeWord ? .on : .off
-            dotButton.state = options.dotMatchesNewline ? .on : .off
-            wrapButton.state = options.wrap ? .on : .off
+            applyStartingPreferences()
             sharedFlagsChanged?()
             preferenceNotice.isHidden = true
             status.stringValue = "Saved search settings were reset. Documents were not changed."
@@ -400,6 +620,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         task = nil
         isSearching = false
         appliedReplace = nil
+        updateReplaceAllAvailability()
     }
     /// Every exit that selects and changes nothing reports here. Find Next and Find Previous also
     /// work from the menu while this window is closed, so their failures are audible too (F308).
@@ -410,7 +631,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     }
     private enum Action { case next, previous, all, replaceAll, replaceOne, bookmark, mark }
     private func run(_ action: Action) {
-        let opts = readOptions(), navigating = action == .next || action == .previous
+        let opts = readOptions(remembering: action), navigating = action == .next || action == .previous
         guard !opts.query.isEmpty else {
             fail("Enter a search expression.", .needsInput, audible: navigating)
             return
@@ -432,6 +653,17 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         // A scope kept for Selection scope ends with any action in another scope: navigation there
         // would otherwise leave a selection that reads as a continuation inside the old scope.
         if !selectionScope { navigationScope = nil }
+        searchIdentity = currentSearchIdentity()
+        // A document above the engine's limit is searched as bytes, on its own.
+        if scopeIndex == .allOpenDocuments {
+            if let large = editors.first(where: { largeSnapshot(of: $0) != nil }) {
+                report(SearchFailure.largeDocumentAllOpen(EditorLifetime.title(large)), audible: navigating)
+                return
+            }
+        } else if let editor = editors.first, let data = largeSnapshot(of: editor) {
+            runLarge(action, options: opts, editor: editor, data: data, selectionScope: selectionScope)
+            return
+        }
         var buffers: [Buffer] = [], freshScope = false
         for e in editors {
             let revision = e.revision
@@ -562,10 +794,309 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                 self.finish()
             } catch {
                 guard let self, self.generation == token else { return }
-                self.fail(error.localizedDescription, .failed(error.localizedDescription), audible: navigating)
+                self.report(error, audible: navigating)
                 self.finish()
             }
         }
+    }
+    /// A search that could not run or finish. An expression that does not compile also marks the
+    /// Find field, in full, until the expression or the mode changes (DS-45).
+    private func report(_ error: Error, audible: Bool) {
+        if TTSearchEngine.invalidPattern(error as NSError) { markPattern(error.localizedDescription) }
+        if let failure = error as? SearchFailure, failure == .macroResultLimit {
+            fail(
+                "Result limit reached; replacements were not applied. Narrow the scope.", .limitReached, audible: false)
+            return
+        }
+        fail(error.localizedDescription, .failed(error.localizedDescription), audible: audible)
+    }
+    /// The document's bytes when it is longer than `largeDocumentUnits` UTF-16 units, else nil.
+    /// A document that short in bytes is never copied; a longer one is copied once and counted
+    /// without being decoded, and the answer is remembered for its revision.
+    func largeSnapshot(of editor: TTEditor) -> Data? {
+        let limit = largeDocumentUnits
+        guard editor.byteLength > limit else { return nil }
+        let id = ObjectIdentifier(editor), revision = editor.revision
+        if let known = largeDecision, known.editor == id, known.revision == revision, known.limit == limit {
+            // The copy lives exactly as long as the search that holds it, whatever pool the caller has.
+            return known.large ? autoreleasepool { editor.utf8Data } : nil
+        }
+        let data = Self.largeSnapshot(of: editor, limit: limit)
+        largeDecision = (id, revision, limit, data != nil)
+        return data
+    }
+    static func largeSnapshot(of editor: TTEditor, limit: Int = SearchCore.maximumTextUnits) -> Data? {
+        guard editor.byteLength > limit else { return nil }
+        let data = autoreleasepool { editor.utf8Data }
+        return SearchCore.isLarge(data, limit: limit) ? data : nil
+    }
+    private enum LargeResult: Sendable {
+        case count(Int, truncated: Bool)
+        case effect(SearchSession.ByteEffect)
+        /// Replace found that the selection is not a match and looked for the next match instead.
+        case nextInstead(SearchSession.ByteEffect)
+    }
+    private nonisolated static func name(of action: Action) -> String {
+        switch action {
+        case .previous: return "previous"
+        case .replaceOne: return "replaceOne"
+        case .replaceAll: return "replaceAll"
+        default: return "next"
+        }
+    }
+    /// Off the main thread, over the immutable bytes. Normal and Extended text is searched in
+    /// windows. A regular expression is searched only in a selection that fits the snapshot
+    /// engine: the selected bytes are decoded on their own, so the expression sees the selection
+    /// as the whole text, and its matches are moved back to their byte positions in the document.
+    private nonisolated static func computeLarge(
+        _ action: Action, data: Data, options: SearchOptions, selection: NSRange, scope: NSRange?, freshScope: Bool,
+        continuing: Bool, chunkBytes: Int, cancellation: TTSearchCancellation,
+        progress: @escaping @Sendable (Int, Int) -> Void
+    ) throws -> LargeResult {
+        let search = SearchSession.ByteSearch(chunkBytes: chunkBytes, cancellation: cancellation, progress: progress)
+        if options.mode == .regularExpression {
+            guard let scope else { throw SearchFailure.largeDocumentRegex }
+            guard let text = String(data: data.subdata(in: scope.location..<NSMaxRange(scope)), encoding: .utf8) else {
+                throw SearchFailure.positionMapping
+            }
+            let report = try SearchCore.search(
+                text, options: options, cancellation: cancellation,
+                purpose: action == .all || action == .replaceAll ? .allMatches : .navigation)
+            guard let ranges = SearchCore.byteRanges(report.hits.map(\.range), in: text) else {
+                throw SearchFailure.positionMapping
+            }
+            let hits = zip(ranges, report.hits).map {
+                ByteSearchHit(
+                    range: NSRange(location: $0.0.location + scope.location, length: $0.0.length),
+                    replacement: $0.1.replacement)
+            }
+            if action == .all { return .count(hits.count, truncated: report.truncated) }
+            guard !report.truncated else { throw SearchFailure.macroResultLimit }
+            return .effect(
+                try SearchSession.plan(
+                    byteHits: hits, options: options, action: name(of: action), selection: selection,
+                    freshScope: freshScope, continuing: continuing))
+        }
+        if action == .all {
+            let total = scope?.length ?? data.count
+            let report = try SearchCore.searchBytes(
+                data, options: options, range: scope, chunkBytes: chunkBytes, cancellation: cancellation,
+                progress: { progress($0, total) })
+            return .count(report.hits.count, truncated: report.truncated)
+        }
+        let effect = try SearchSession.planBytes(
+            data, options: options, action: name(of: action), selection: selection, scope: scope,
+            freshScope: freshScope, search: search)
+        if action == .replaceOne, effect == .noMatch, scope == nil {
+            return .nextInstead(
+                try SearchSession.planBytes(
+                    data, options: options, action: "next", selection: selection, search: search))
+        }
+        return .effect(effect)
+    }
+    /// Progress of a large-document search. It ends with an ellipsis, so the status label shows
+    /// it without announcing every step (DS-51, DS-72).
+    private func showProgress(_ done: Int, of total: Int, token: UUID) {
+        guard generation == token, isSearching, appliedReplace == nil, total > 0 else { return }
+        progressReports += 1
+        status.stringValue = "Searching, \(Strings.number(min(100, done * 100 / total)))%…"
+    }
+    /// Current document and Selection scope in a document above the engine's limit. Next and
+    /// Previous go to the nearest match without listing the rest; Find All / Count counts without
+    /// listing; Replace and Replace All are each one Undo step. Marks and bookmarks are refused.
+    private func runLarge(
+        _ action: Action, options opts: SearchOptions, editor: TTEditor, data: Data, selectionScope: Bool
+    ) {
+        let navigating = action == .next || action == .previous
+        guard action != .mark, action != .bookmark else {
+            report(SearchFailure.largeDocumentAction, audible: false)
+            return
+        }
+        let revision = editor.revision, anchor = editor.selectionAnchor, caret = editor.selectionCaret
+        let selection = NSRange(location: editor.selectionStart, length: editor.selectionEnd - editor.selectionStart)
+        var chosenScope: NSRange?, firstPress = false
+        if selectionScope {
+            guard editor.selectionCount == 1 else {
+                fail("Select one nonempty range first.", .needsInput, audible: navigating)
+                return
+            }
+            // F35, in bytes: after Next or Previous has moved the selection onto a match, the
+            // scope is the range remembered from the first press.
+            if navigating, let last = largeNavigation, last.editor === editor, last.revision == revision,
+                last.range == selection, let kept = largeScope, kept.editor === editor, kept.revision == revision
+            {
+                chosenScope = kept.range
+            } else {
+                guard selection.length > 0 else {
+                    fail("Select one nonempty range first.", .needsInput, audible: navigating)
+                    return
+                }
+                chosenScope = selection
+                if navigating {
+                    largeScope = Navigation(editor: editor, revision: revision, range: selection, from: nil)
+                    firstPress = true
+                }
+            }
+        } else {
+            largeScope = nil
+        }
+        let scope = chosenScope, freshScope = firstPress
+        if opts.mode == .regularExpression {
+            guard let scope else {
+                report(SearchFailure.largeDocumentRegex, audible: navigating)
+                return
+            }
+            guard scope.length <= largeDocumentUnits else {
+                report(SearchFailure.largeSelectionRegex, audible: navigating)
+                return
+            }
+        }
+        let continuing =
+            largeNavigation.map { $0.editor === editor && $0.revision == revision && $0.range == selection } ?? false
+        cancellation?.cancel()
+        task?.cancel()
+        let token = UUID()
+        generation = token
+        let flag = TTSearchCancellation()
+        cancellation = flag
+        searchButtons.forEach { $0.isEnabled = false }
+        appliedReplace = nil
+        status.stringValue = "Searching…"
+        isSearching = true
+        lastOutcome = nil
+        rows = []
+        resultBuffers = []
+        resultKey = nil
+        table.reloadData()
+        let chunk = largeChunkBytes
+        let progress: @Sendable (Int, Int) -> Void = { [weak self] done, total in
+            Task { @MainActor in self?.showProgress(done, of: total, token: token) }
+        }
+        task = Task { @MainActor [weak self] in
+            do {
+                let result = try await Task.detached(priority: .userInitiated) {
+                    try Self.computeLarge(
+                        action, data: data, options: opts, selection: selection, scope: scope, freshScope: freshScope,
+                        continuing: continuing, chunkBytes: chunk, cancellation: flag, progress: progress)
+                }.value
+                guard let self, self.generation == token, !flag.cancelled else { return }
+                // G372: the editor stayed editable while the search ran. A result for text or a
+                // selection that has since changed, or for an editor that is no longer current,
+                // selects and replaces nothing.
+                guard EditorLifetime.isOpen(editor), editor.revision == revision, self.currentEditor() === editor,
+                    editor.selectionAnchor == anchor, editor.selectionCaret == caret
+                else {
+                    self.fail("Result is stale; search again. Selection unchanged.", .staleResult, audible: navigating)
+                    self.onUnrecordableCommand?(
+                        "The document changed while the search was running; the search step was not recorded.")
+                    self.finish()
+                    return
+                }
+                let replaced = self.completeLarge(
+                    result, action: action, options: opts, editor: editor, revision: revision,
+                    recorded: !selectionScope)
+                if replaced {
+                    // F45: a single Replace then moves to the next match, in the text as it is now.
+                    let after = autoreleasepool { editor.utf8Data }, afterRevision = editor.revision
+                    let from = NSRange(
+                        location: editor.selectionStart, length: editor.selectionEnd - editor.selectionStart)
+                    let done = self.status.stringValue, outcome = self.lastOutcome
+                    self.appliedReplace = (done, outcome)
+                    let next = try? await Task.detached(priority: .userInitiated) {
+                        try SearchSession.planBytes(
+                            after, options: opts, action: "next", selection: from,
+                            search: SearchSession.ByteSearch(chunkBytes: chunk, cancellation: flag))
+                    }.value
+                    guard self.generation == token, !flag.cancelled else { return }
+                    if editor.revision != afterRevision || !EditorLifetime.isOpen(editor) {
+                        self.status.stringValue = done + " The document changed before the next match was selected."
+                    } else if case .select(let bytes)? = next, Self.selectResult(bytes, in: editor) {
+                        self.largeNavigation = Navigation(
+                            editor: editor, revision: afterRevision, range: bytes, from: self.currentEditor())
+                        self.status.stringValue = done + " Selected the next match."
+                        self.onCommand?(opts, "next", editor)
+                    } else if next == .noMatch {
+                        self.status.stringValue = done + " No further matches."
+                    }
+                    self.lastOutcome = outcome
+                }
+                self.finish()
+            } catch {
+                guard let self, self.generation == token else { return }
+                self.report(error, audible: navigating)
+                self.finish()
+            }
+        }
+    }
+    /// Applies a finished large-document search. True when a single Replace was applied and the
+    /// next match should now be selected.
+    private func completeLarge(
+        _ result: LargeResult, action: Action, options opts: SearchOptions, editor: TTEditor, revision: UInt,
+        recorded: Bool
+    ) -> Bool {
+        let effect: SearchSession.ByteEffect
+        var insteadOfReplace = false
+        switch result {
+        case .count(let count, let truncated):
+            status.stringValue =
+                Self.foundStatus(count, 1, truncated)
+                + " Matches in a document this large are not listed. Use Next and Previous to go to them."
+            lastOutcome = .found(matches: count, documents: 1, truncated: truncated)
+            noteCount(count, truncated: truncated)
+            return false
+        case .effect(let planned): effect = planned
+        case .nextInstead(let planned):
+            effect = planned
+            insteadOfReplace = true
+        }
+        switch effect {
+        case .noMatch:
+            switch action {
+            case .replaceAll:
+                lastReplaceSkips = ReplaceSkips()
+                status.stringValue = Self.replacedStatus(changed: 0, skips: ReplaceSkips())
+                lastOutcome = .replaced(changed: 0, stale: 0)
+                noteCount(0, truncated: false)
+            case .replaceOne where !insteadOfReplace:
+                fail("No match is selected; use Next first.", .noMatchSelected, audible: false)
+            default:
+                fail("No further matches.", .noFurtherMatches, audible: action != .replaceOne)
+            }
+        case .select(let bytes):
+            guard Self.selectResult(bytes, in: editor) else {
+                fail("Result is stale; search again. Selection unchanged.", .staleResult, audible: true)
+                return false
+            }
+            largeNavigation = Navigation(editor: editor, revision: revision, range: bytes, from: currentEditor())
+            if !EditorLifetime.isVisible(editor) { EditorLifetime.activate(editor) }
+            status.stringValue =
+                insteadOfReplace ? "Selected the next match; press Replace again to replace it." : "Selected a match."
+            lastOutcome = insteadOfReplace ? .selectedNextMatch : .movedToMatch
+            if recorded { onCommand?(opts, action == .previous ? "previous" : "next", editor) }
+        case .replace(let hits):
+            let all = action == .replaceAll
+            let capture = all ? BulkChangeCapture(editor, name: "Replace All") : nil
+            let priorName = editor.exchangeNextUndoName(all ? "Replace All" : "Replace")
+            defer { _ = editor.exchangeNextUndoName(priorName) }
+            var changed = 0, skips = ReplaceSkips()
+            switch Self.replace(bytes: hits, revision: revision, in: editor) {
+            case .applied(let count):
+                changed = count
+                capture?.finish()
+            case .readOnly: skips.readOnly = 1
+            case .multipleSelections: skips.multipleSelections = 1
+            case .closed: skips.closed = 1
+            case .stale: skips.stale = 1
+            }
+            lastReplaceSkips = skips
+            status.stringValue = Self.replacedStatus(changed: changed, skips: skips)
+            lastOutcome = .replaced(changed: changed, stale: skips.total)
+            if changed > 0, skips.total == 0 {
+                if recorded { onCommand?(opts, all ? "replaceAll" : "replaceOne", editor) }
+                return !all && recorded
+            }
+        }
+        return false
     }
     private static func foundStatus(_ matches: Int, _ documents: Int, _ truncated: Bool) -> String {
         Strings.found(matches, documents: documents, truncated: truncated)
@@ -602,6 +1133,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         table.reloadData()
         status.stringValue = Self.foundStatus(rows.count, buffers.count, truncated)
         lastOutcome = .found(matches: rows.count, documents: buffers.count, truncated: truncated)
+        noteCount(rows.count, truncated: truncated)
         switch action {
         case .all: break
         case .next, .previous:
@@ -789,14 +1321,27 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         options: SearchOptions, action: String, on editor: TTEditor,
         timeLimit: TimeInterval = SearchController.recordedStepTimeLimit
     ) throws {
-        let text = editor.text, revision = editor.revision
-        let report = try SearchCore.search(
-            text, options: options, timeLimit: timeLimit,
-            purpose: action == "replaceAll" ? .allMatches : .navigation)
+        let revision = editor.revision
         let matched: Bool
         do {
-            matched = try applySingleReport(
-                report, text: text, revision: revision, options: options, action: action, in: editor)
+            if let data = largeSnapshot(of: editor) {
+                // The same step in a document above the engine's limit: still synchronous and
+                // bounded, with the large-document budget of `timeLimit` per started 64 MiB.
+                let budget = timeLimit * (SearchCore.largeTimeLimit(bytes: data.count) / SearchCore.defaultTimeLimit)
+                let effect = try SearchSession.planBytes(
+                    data, options: options, action: action,
+                    selection: NSRange(
+                        location: editor.selectionStart, length: editor.selectionEnd - editor.selectionStart),
+                    search: SearchSession.ByteSearch(chunkBytes: largeChunkBytes, timeLimit: budget))
+                matched = try Self.apply(effect, revision: revision, in: editor)
+            } else {
+                let text = editor.text
+                let report = try SearchCore.search(
+                    text, options: options, timeLimit: timeLimit,
+                    purpose: action == "replaceAll" ? .allMatches : .navigation)
+                matched = try applySingleReport(
+                    report, text: text, revision: revision, options: options, action: action, in: editor)
+            }
         } catch let condition as SearchFailure.ReplacementCondition {
             // Keep the existing recorded-macro error API and wording. Inline feedback receives
             // typed conditions directly and selects complete templates instead of these fragments.
@@ -818,6 +1363,13 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         var options = SearchOptions()
         options.query = query
         options.matchCase = matchCase
+        if let data = largeSnapshot(of: editor) {
+            let effect = try SearchSession.planBytes(
+                data, options: options, action: backwards ? "previous" : "next",
+                selection: NSRange(location: editor.selectionStart, length: editor.selectionEnd - editor.selectionStart)
+            )
+            return try apply(effect, revision: editor.revision, in: editor)
+        }
         let text = editor.text, revision = editor.revision
         let report = try SearchCore.search(text, options: options, purpose: .navigation)
         return try applySingleReport(
@@ -829,18 +1381,30 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     /// Macro playback deliberately retains bounded synchronous scheduling over the same engine/apply path.
     func performInline(
         options: SearchOptions, action: String, on editor: TTEditor, cancellation: TTSearchCancellation,
-        isCurrent: @escaping () -> Bool, completion: @escaping (InlineSearchOutcome) -> Void
+        isCurrent: @escaping () -> Bool, progress: (@Sendable (Int, Int) -> Void)? = nil,
+        completion: @escaping (InlineSearchOutcome) -> Void
     ) {
-        let text = editor.text, revision = editor.revision, selections = editor.selectionRanges
+        // Above the engine's limit the document is searched as bytes; nothing is decoded whole.
+        let large = largeSnapshot(of: editor), chunk = largeChunkBytes
+        let selection = NSRange(location: editor.selectionStart, length: editor.selectionEnd - editor.selectionStart)
+        let text = large == nil ? editor.text : "", revision = editor.revision, selections = editor.selectionRanges
         let anchor = editor.selectionAnchor, caret = editor.selectionCaret
         let targetDocumentID = EditorLifetime.document(for: editor)?.runtimeID
         let window = editor.window
         Task { @MainActor [weak self, weak editor, weak window] in
             do {
-                let report = try await Task.detached(priority: .userInitiated) {
-                    try SearchCore.search(
-                        text, options: options, cancellation: cancellation,
-                        purpose: action == "replaceAll" ? .allMatches : .navigation)
+                let found = try await Task.detached(priority: .userInitiated) { () throws -> InlineFound in
+                    if let large {
+                        return .bytes(
+                            try SearchSession.planBytes(
+                                large, options: options, action: action, selection: selection,
+                                search: SearchSession.ByteSearch(
+                                    chunkBytes: chunk, cancellation: cancellation, progress: progress)))
+                    }
+                    return .report(
+                        try SearchCore.search(
+                            text, options: options, cancellation: cancellation,
+                            purpose: action == "replaceAll" ? .allMatches : .navigation))
                 }.value
                 guard !cancellation.cancelled else {
                     completion(.cancelled)
@@ -856,9 +1420,19 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                     completion(.stale)
                     return
                 }
-                let matched = try self.applySingleReport(
-                    report, text: text, revision: revision, options: options, action: action, in: editor)
-                if matched && action == "replaceAll" { completion(.replacedAll(report.hits.count)) }
+                let matched: Bool, replaced: Int
+                switch found {
+                case .report(let report):
+                    matched = try self.applySingleReport(
+                        report, text: text, revision: revision, options: options, action: action, in: editor)
+                    replaced = report.hits.count
+                case .bytes(let effect):
+                    matched = try Self.apply(effect, revision: revision, in: editor)
+                    if case .replace(let hits) = effect { replaced = hits.count } else { replaced = 0 }
+                }
+                if matched && action == "replaceAll" {
+                    completion(.replacedAll(replaced))
+                }
                 else { completion(matched ? .applied : .noMatch) }
             } catch {
                 guard !cancellation.cancelled else {
@@ -883,6 +1457,35 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                     completion(.failed(error))
                 }
             }
+        }
+    }
+    private enum InlineFound: Sendable {
+        case report(SearchReport)
+        case bytes(SearchSession.ByteEffect)
+    }
+    /// Applies what was planned for a document searched as bytes, by the rules applySingleReport
+    /// uses: a closed or changed document selects and replaces nothing.
+    private static func apply(_ effect: SearchSession.ByteEffect, revision: UInt, in editor: TTEditor) throws -> Bool {
+        guard EditorLifetime.isOpen(editor), editor.revision == revision else {
+            throw Self.recordedSearchStopped("the document changed or selection is not on a character boundary")
+        }
+        switch effect {
+        case .noMatch: return false
+        case .select(let bytes):
+            guard Self.selectResult(bytes, in: editor) else {
+                throw Self.recordedSearchStopped("the match could not be selected")
+            }
+            return true
+        case .replace(let hits):
+            let condition: SearchFailure.ReplacementCondition
+            switch Self.replace(bytes: hits, revision: revision, in: editor) {
+            case .applied: return true
+            case .readOnly: condition = .readOnly
+            case .multipleSelections: condition = .multipleSelections
+            case .closed: condition = .closed
+            case .stale: condition = .stale
+            }
+            throw condition
         }
     }
     private func applySingleReport(
@@ -948,14 +1551,56 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         let highlights: [NSRange]
         let selected: NSRange?
         let countText: String
+        /// The whole document was searched and holds no match (DS-21: Replace All is then disabled).
+        var foundNothing: Bool { highlights.isEmpty && countText == "No matches" }
+    }
+    /// The live count in a document above the engine's limit: the same 256-match paint set and
+    /// count wording, found by the windowed byte search. Nothing is decoded whole.
+    private nonisolated static func previewBytes(
+        _ snapshot: Data, options: SearchOptions, openingCaret: Int, chunkBytes: Int,
+        cancellation: TTSearchCancellation
+    ) throws -> InlinePreview {
+        let limit = 256
+        let report = try SearchCore.searchBytes(
+            snapshot, options: options, limit: limit, chunkBytes: chunkBytes, cancellation: cancellation)
+        let ranges = report.hits.map(\.range)
+        var selected = ranges.first { $0.location >= openingCaret }
+        if report.truncated && selected == nil {
+            let tail = NSRange(location: openingCaret, length: snapshot.count - openingCaret)
+            selected = try SearchCore.searchBytes(
+                snapshot, options: options, range: tail, limit: 1, chunkBytes: chunkBytes, cancellation: cancellation
+            ).hits.first?.range
+        }
+        guard !cancellation.cancelled else { throw CancellationError() }
+        if selected == nil && options.wrap { selected = ranges.first }
+        var visible = ranges
+        if let selected, !visible.contains(selected) { visible.removeLast(); visible.append(selected) }
+        let count: String
+        if report.truncated {
+            count = "\(limit)+ matches"
+        } else if let selected, let i = ranges.firstIndex(of: selected) {
+            count = "\(i + 1) of \(ranges.count)"
+        } else {
+            count = ranges.isEmpty ? "No matches" : "\(ranges.count) matches"
+        }
+        return InlinePreview(highlights: visible, selected: selected, countText: count)
     }
     /// Read-only. Range conversion and searching operate only on the immutable editor snapshot.
     nonisolated static func preview(_ snapshot: Data, options: SearchOptions, openingCaret: Int,
-                                    cancellation: TTSearchCancellation) throws -> InlinePreview {
+        cancellation: TTSearchCancellation,
+        unitLimit: Int = SearchCore.maximumTextUnits,
+        chunkBytes: Int = SearchCore.largeChunkBytes
+    ) throws -> InlinePreview {
         guard !cancellation.cancelled else { throw CancellationError() }
         guard (0...snapshot.count).contains(openingCaret),
-              openingCaret == snapshot.count || snapshot[snapshot.startIndex + openingCaret] & 0xc0 != 0x80,
-              let text = String(data: snapshot, encoding: .utf8) else { throw SearchFailure.positionMapping }
+            openingCaret == snapshot.count || snapshot[snapshot.startIndex + openingCaret] & 0xc0 != 0x80
+        else { throw SearchFailure.positionMapping }
+        if SearchCore.isLarge(snapshot, limit: unitLimit) {
+            return try previewBytes(
+                snapshot, options: options, openingCaret: openingCaret, chunkBytes: chunkBytes,
+                cancellation: cancellation)
+        }
+        guard let text = String(data: snapshot, encoding: .utf8) else { throw SearchFailure.positionMapping }
         let limit = 256
         let report = try SearchCore.search(text, options: options, cancellation: cancellation, limit: limit)
         let utf16 = text.utf16, utf8 = text.utf8
@@ -1025,15 +1670,25 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         guard !hits.isEmpty else { return .applied(0) }
         // The selection is not the edit cursor (G374): it is carried through the replacements, and
         // Undo returns to the selection the command began with.
+        guard let ranges = SearchCore.byteRanges(hits.map(\.range), in: text) else { return .stale }
+        return replace(
+            bytes: zip(ranges, hits).map { ByteSearchHit(range: $0.0, replacement: $0.1.replacement) },
+            revision: revision, in: editor)
+    }
+    /// The same replacement for matches already held as byte ranges (ascending, not overlapping).
+    static func replace(bytes hits: [ByteSearchHit], revision: UInt, in editor: TTEditor) -> ReplaceOutcome {
+        guard EditorLifetime.isOpen(editor) else { return .closed }
+        guard !editor.readOnly else { return .readOnly }
+        guard editor.revision == revision else { return .stale }
+        guard editor.selectionCount == 1 else { return .multipleSelections }
+        guard !hits.isEmpty else { return .applied(0) }
         let anchor = editor.selectionAnchor, caret = editor.selectionCaret
-        guard let ranges = SearchCore.byteRanges(hits.map(\.range), in: text),
+        guard
             editor.replaceSearchRanges(
-                ranges.map { TTByteRange(location: $0.location, length: $0.length) },
+                hits.map { TTByteRange(location: $0.range.location, length: $0.range.length) },
                 withTexts: hits.map(\.replacement), expectedRevision: revision)
         else { return .stale }
-        let edits = zip(ranges, hits).map {
-            SearchSession.Edit(range: $0.0, replacementBytes: $0.1.replacement.utf8.count)
-        }
+        let edits = hits.map { SearchSession.Edit(range: $0.range, replacementBytes: $0.replacement.utf8.count) }
         let carried = SearchSession.carriedSelection(anchor: anchor, caret: caret, edits: edits)
         _ = editor.setSelectionAnchor(carried.anchor, caret: carried.caret)
         // The text changed: show where, as for a selected match.

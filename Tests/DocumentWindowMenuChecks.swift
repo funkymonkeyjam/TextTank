@@ -1687,6 +1687,20 @@ extension DocumentChecks {
             check(controller.regexBox.state == .on && controller.findCount.stringValue != "No matches"
                     && !controller.findCount.stringValue.contains(" of ") && NSApp.modalWindow == nil,
                   "a malformed bar regex reports its error in the Find bar")
+            // DS-45: the field is marked and the whole message is shown, not a clipped count label.
+            let malformed = try requireValue(controller.findField.toolTip, "the Find field carries the message")
+            check(
+                controller.findFieldIsMarked && controller.findCount.stringValue == "Expression not valid"
+                    && malformed.count > 20 && controller.findField.accessibilityHelp() == malformed
+                    && controller.statusText == malformed && controller.findField.stringValue == "[",
+                "an invalid pattern marks the Find field and shows the full message in the status line")
+            controller.findField.stringValue = "[a]"
+            controller.controlTextDidChange(
+                Notification(name: NSControl.textDidChangeNotification, object: controller.findField))
+            spinUntil("the corrected regex to publish") { !controller.findCount.stringValue.isEmpty }
+            check(
+                !controller.findFieldIsMarked && controller.findField.accessibilityHelp() == nil,
+                "correcting the expression removes the mark")
             sessionDelegate.searchController.mode.selectItem(at: priorMode)
             _ = NSApp.sendAction(sessionDelegate.searchController.mode.action!, to: sessionDelegate.searchController,
                                  from: sessionDelegate.searchController.mode)
@@ -1703,6 +1717,103 @@ extension DocumentChecks {
             controller.hideFind(nil)
             check(document.editor.selectionAnchor == 3 && document.editor.selectionCaret == 1,
                   "closing an uncommitted live Find restores the reversed opening selection")
+            // V3, DS-35: one Find text and one replacement, live in the bar and the Find window.
+            let oneFind = sessionDelegate.searchController
+            let peerBar = try requireValue(plain.presentation, "fixture: another tab's find bar")
+            controller.showFind(nil)
+            let barEditor = try requireValue(
+                controller.findField.currentEditor() as? NSTextView,
+                "fixture: the Find field editor")
+            barEditor.string = "alp"
+            barEditor.setSelectedRange(NSRange(location: 1, length: 1))
+            controller.controlTextDidChange(
+                Notification(name: NSControl.textDidChangeNotification, object: controller.findField))
+            check(
+                oneFind.queryField.stringValue == "alp" && oneFind.sharedQuery == "alp"
+                    && peerBar.findField.stringValue == "alp",
+                "text typed in the find bar is in the Find and Replace window, and in other tabs' bars, as it is typed")
+            check(
+                barEditor.selectedRange() == NSRange(location: 1, length: 1)
+                    && controller.hostWindow?.firstResponder === barEditor && barEditor.string == "alp",
+                "sharing the typed text leaves the caret and selection in the find bar where they were")
+            controller.replaceField.stringValue = "swap"
+            controller.controlTextDidChange(
+                Notification(name: NSControl.textDidChangeNotification, object: controller.replaceField))
+            check(
+                oneFind.replacementField.stringValue == "swap", "the replacement typed in the bar is in the window too")
+            oneFind.queryField.stringValue = "beta"
+            oneFind.controlTextDidChange(
+                Notification(name: NSControl.textDidChangeNotification, object: oneFind.queryField))
+            oneFind.replacementField.stringValue = "BETA"
+            oneFind.controlTextDidChange(
+                Notification(name: NSControl.textDidChangeNotification, object: oneFind.replacementField))
+            check(
+                controller.findField.stringValue == "beta" && controller.replaceField.stringValue == "BETA"
+                    && peerBar.findField.stringValue == "beta" && !controller.inlineSearchPending
+                    && !oneFind.isSearching,
+                "text typed in the Find and Replace window is in the find bar as it is typed, and runs no search")
+            // History: reachable from the bar by pointer (the magnifying glass) and keyboard (Down Arrow).
+            for word in ["alpha", "beta"] {
+                controller.findField.stringValue = word
+                controller.findFromMenu(backwards: false)
+                spinUntil("a remembered bar Find to finish") { !controller.inlineSearchPending }
+            }
+            let recentFinds = controller.findHistoryMenu(replacements: false)
+            check(
+                recentFinds.items.prefix(2).map(\.title) == ["beta", "alpha"]
+                    && oneFind.findHistory.queries.prefix(2) == ["beta", "alpha"]
+                    && (oneFind.queryField.objectValues as? [String])?.prefix(2) == ["beta", "alpha"],
+                "a search made from the bar is in the history both surfaces offer, newest first")
+            check(
+                controller.findField.searchMenuTemplate?.items.prefix(2).map(\.title) == ["beta", "alpha"]
+                    && controller.findField.searchMenuTemplate?.items.contains {
+                        $0.submenu?.title == "Recent Replacements"
+                    } == true,
+                "the Find field's magnifying glass opens the recent searches, with the recent replacements beneath")
+            var shownHistory: (menu: NSMenu, anchor: NSView)?
+            let nativeHistoryPresenter = controller.presentFindHistory
+            controller.presentFindHistory = { shownHistory = ($0, $1) }
+            check(
+                controller.control(
+                    controller.findField, textView: NSTextView(),
+                    doCommandBy: #selector(NSResponder.moveDown(_:)))
+                    && shownHistory?.menu.items.first?.title == "beta" && shownHistory?.anchor === controller.findField,
+                "Down Arrow in the Find field opens its history")
+            check(
+                controller.control(
+                    controller.replaceField, textView: NSTextView(),
+                    doCommandBy: #selector(NSResponder.moveDown(_:)))
+                    && shownHistory?.menu.title == "Recent Replacements"
+                    && shownHistory?.anchor === controller.replaceField,
+                "Down Arrow in the Replace field opens the replacement history")
+            controller.presentFindHistory = nativeHistoryPresenter
+            let earlier = recentFinds.items[1]
+            check(
+                NSApp.sendAction(
+                    try requireValue(earlier.action, "a history entry has an action"), to: earlier.target, from: earlier
+                )
+                    && controller.findField.stringValue == "alpha" && oneFind.queryField.stringValue == "alpha",
+                "an entry chosen from the history is the Find text in the bar and in the window")
+            // DS-21: Replace All is not offered once the live count has found nothing.
+            _ = document.editor.setSelectionAnchor(0, caret: 0)
+            controller.findField.stringValue = "no such text here"
+            controller.controlTextDidChange(
+                Notification(name: NSControl.textDidChangeNotification, object: controller.findField))
+            spinUntil("the live count to find nothing") { controller.findCount.stringValue == "No matches" }
+            check(
+                !controller.replaceAllButton.isEnabled && controller.replaceAllButton.toolTip?.isEmpty == false
+                    && controller.findNavigation.isEnabled,
+                "the bar's Replace All is disabled, with the reason, when the live count found nothing")
+            controller.findField.stringValue = "alpha"
+            controller.controlTextDidChange(
+                Notification(name: NSControl.textDidChangeNotification, object: controller.findField))
+            check(
+                controller.replaceAllButton.isEnabled && controller.replaceAllButton.toolTip == nil,
+                "changing the Find text offers Replace All again at once")
+            spinUntil("the live count for the new text") { !controller.findCount.stringValue.isEmpty }
+            check(controller.replaceAllButton.isEnabled, "a live count with matches leaves Replace All enabled")
+            controller.hideFind(nil)
+            _ = document.editor.setSelectionAnchor(3, caret: 1)
             controller.findField.stringValue = priorQuery
             controller.showFind(nil)
             let beforeBarRecording = document.editor.text
