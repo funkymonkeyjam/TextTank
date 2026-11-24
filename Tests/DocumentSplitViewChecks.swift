@@ -568,6 +568,13 @@ extension DocumentChecks {
             defer { _ = try? delegate.settings.save(EditorSettings()) }
             let (document, controller, window) = try opened("view-choice-a.txt", "one\n\ttwo\n")
             let (other, otherController, _) = try opened("view-choice-b.txt", "three\n")
+            var later: TextDocument?
+            // Closed on every exit, so a failed requirement leaves no tab behind for later sections.
+            defer {
+                later?.close()
+                other.close()
+                document.close()
+            }
             delegate.workspaceWindow.activate(controller)
             delegate.noteActive(controller)
             _ = window.makeFirstResponder(document.editor)
@@ -612,10 +619,11 @@ extension DocumentChecks {
             let reread = SettingsController(url: delegate.settings.url)
             let rebuilt = TTEditor(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
             reread.apply(to: rebuilt)
-            let (later, laterController, _) = try opened("view-choice-c.txt", "four\n")
+            let (third, laterController, _) = try opened("view-choice-c.txt", "four\n")
+            later = third
             laterController.clone(nil)
             check(
-                reread.value.lineNumbers == false && !rebuilt.lineNumbersVisible && !later.editor.lineNumbersVisible
+                reread.value.lineNumbers == false && !rebuilt.lineNumbersVisible && !third.editor.lineNumbersVisible
                     && laterController.secondary?.lineNumbersVisible == false,
                 "V4 line numbers stay off after settings are read again, in a rebuilt view, a new tab and its clone")
             for (id, shown) in [
@@ -628,21 +636,18 @@ extension DocumentChecks {
                 check(
                     (id == "showWhitespace" ? saved.showWhitespace : saved.showLineEndings) == true
                         && saved.lineNumbers == false
-                        && (views() + [later.editor]).allSatisfy { $0[keyPath: shown] }
+                        && (views() + [third.editor]).allSatisfy { $0[keyPath: shown] }
                         && controller.validateMenuItem(mark) && mark.state == .on,
                     "V4 \(id) is saved, reaches every open view and checks its menu item")
             }
             try controller.perform(command: "toggleLineNumbers")
             check(
-                try stored().lineNumbers == true && (views() + [later.editor]).allSatisfy(\.lineNumbersVisible)
+                try stored().lineNumbers == true && (views() + [third.editor]).allSatisfy(\.lineNumbersVisible)
                     && controller.validateMenuItem(numbers) && numbers.state == .on,
                 "V4 Show Line Numbers on again is saved and reaches every open view")
             check(
                 !document.isDocumentEdited && !other.isDocumentEdited,
                 "V4 a view choice does not edit any document")
-            later.close()
-            other.close()
-            document.close()
         }
 
         // G338, G342

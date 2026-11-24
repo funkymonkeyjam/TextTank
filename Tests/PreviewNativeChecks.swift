@@ -1605,6 +1605,27 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         markdownTab.restoreSessionTab(older)
         check(markdownTab.viewMode == .source, "a record from before the field existed restores Source")
 
+        // V4: a tab's own zoom is captured and restored with it; a tab at the default records none.
+        check(try record(plain).zoom == nil, "a tab at the default zoom is captured without a zoom")
+        plainTab.primaryEditor.zoomLevel = 5
+        let zoomedRecord = try record(plain)
+        check(
+            try zoomedRecord.zoom == 5 && record(markdown).zoom == nil,
+            "a zoomed tab is captured with its zoom and the other tab without one")
+        plainTab.primaryEditor.resetZoomLevel()
+        check(try record(plain).zoom == nil, "after Actual Size the tab is captured without a zoom again")
+        plainTab.restoreSessionTab(zoomedRecord)
+        check(
+            plainTab.primaryEditor.zoomLevel == 5 && !plainTab.primaryEditor.followsDefaultZoom
+                && markdownTab.primaryEditor.zoomLevel == 0,
+            "restoring the record restores that tab's zoom and no other tab's")
+        var unzoomed = zoomedRecord
+        unzoomed.zoom = nil
+        plainTab.restoreSessionTab(unzoomed)
+        check(
+            plainTab.primaryEditor.zoomLevel == 0 && plainTab.primaryEditor.followsDefaultZoom,
+            "a record without a zoom restores the Settings default zoom")
+
         // Restoring a whole layout gives the keyboard to the pane the session recorded, here
         // the clone pane, although the keyboard is in the tab's first pane when the restore runs
         // (as it is after documents are reopened).
