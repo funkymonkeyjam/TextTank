@@ -139,8 +139,14 @@ enum DesignStatusChecks {
             more.accessibilityLabel()?.hasPrefix("More status fields") == true,
             "DS-70 the More menu is named for what it holds")
         let languageIdentity = visibleLanguage.map(ObjectIdentifier.init)
+        // The keyboard is on More when the window widens and More leaves the row.
+        check(window.makeFirstResponder(more) && window.firstResponder === more, "fixture: the keyboard is on More")
         window.setContentSize(NSSize(width: 2400, height: 500))
         root.layoutSubtreeIfNeeded()
+        check(
+            more.superview == nil && window.firstResponder === field("status.eol.0")
+                && (window.firstResponder as? NSView)?.window === window,
+            "DS-73 when More leaves the row with the keyboard, the keyboard moves to the row's last field: \(String(describing: window.firstResponder))")
         check(
             visibleLanguage?.isHiddenOrHasHiddenAncestor == false,
             "DB-R5 collapsed language returns when the owned window widens")
@@ -609,7 +615,16 @@ enum DesignStatusChecks {
         check(
             cancels == 1 && row.progress?.id == search,
             "SR-3 Cancel in the row calls the operation's own cancellation once")
+        check(window.makeFirstResponder(cancel) && window.firstResponder === cancel, "fixture: the keyboard is on Cancel")
         center.end(search, announce: "Search cancelled. Nothing was changed.")
+        root.layoutSubtreeIfNeeded()
+        let lastField = descendants(row).compactMap { $0 as? NSButton }.filter {
+            ["status.eol.0", "status.encoding.0", "status.indent.0", "status.language.0", "status.position.0"]
+                .contains($0.identifier?.rawValue ?? "") && !$0.isHiddenOrHasHiddenAncestor
+        }.max { $0.frame.minX < $1.frame.minX }
+        check(
+            lastField != nil && window.firstResponder === lastField,
+            "DS-73 when Cancel leaves the row with the keyboard, the keyboard moves to the row's last visible field")
         check(
             bar.isHidden && cancel.isHidden && row.progress == nil
                 && said().last == "Search cancelled. Nothing was changed.",
@@ -725,12 +740,50 @@ enum DesignStatusChecks {
         check(
             !followUp.isHidden && controller.statusText == document.currentSaveStateStatus,
             "SR-4 the button outlasts the message, so it does not have to be caught in four seconds")
+        check(
+            window.makeFirstResponder(followUp) && window.firstResponder === followUp,
+            "fixture: the keyboard is on the follow-up button")
         _ = document.editor.setSelectionAnchor(0, caret: 0)
         _ = document.editor.replaceSelection("x")
         controller.refreshStatusDetails()
         check(
             followUp.isHidden && !controller.hasStatusFollowUp,
             "SR-4 the follow-up is withdrawn when the text changes again")
+        check(
+            window.firstResponder
+                === descendants(row).compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "status.eol.0" },
+            "DS-73 when a follow-up leaves the row with the keyboard, the keyboard moves to the row's last field")
+        // A row with no field to take the keyboard gives it back to the text.
+        row.update([])
+        controller.offerStatusFollowUp(
+            StatusFollowUp(title: "Owned", accessibilityLabel: "Owned follow-up", toolTip: "", run: {}, isCurrent: { true }))
+        root.layoutSubtreeIfNeeded()
+        check(window.makeFirstResponder(followUp), "fixture: the keyboard is on the only control of the row")
+        controller.offerStatusFollowUp(nil)
+        // The editor hands the keyboard to its own text view.
+        check(
+            (window.firstResponder as? NSView)?.isDescendant(of: controller.keyboardFocusView) == true
+                && (window.firstResponder as? NSView)?.isDescendant(of: row) == false,
+            "DS-73 with no field in the row, the keyboard returns to the text: \(String(describing: window.firstResponder))")
+        controller.refreshStatusDetails()
+        // A field whose value goes while it has the keyboard: the selection, after Clear Selection.
+        _ = document.editor.setSelectionAnchor(0, caret: 1)
+        controller.refreshStatusDetails()
+        root.layoutSubtreeIfNeeded()
+        let selectionPopup = try requireValue(
+            descendants(row).compactMap { $0 as? NSPopUpButton }.first { $0.identifier?.rawValue == "status.selection.0" },
+            "fixture: the selection field")
+        check(window.makeFirstResponder(selectionPopup), "fixture: the keyboard is on the selection field")
+        _ = document.editor.setSelectionAnchor(0, caret: 0)
+        controller.refreshStatusDetails()
+        check(
+            selectionPopup.superview == nil
+                && window.firstResponder
+                    === descendants(row).compactMap { $0 as? NSButton }.first {
+                        $0.identifier?.rawValue == "status.eol.0"
+                    },
+            "DS-73 when the selection field goes with the keyboard, the keyboard moves to the row's last field")
+        window.makeFirstResponder(controller.keyboardFocusView)
         // A second follow-up: a saved language that is gone offers the chooser.
         var presented = 0
         composition.languages.presentChooser = { panel, _ in
@@ -904,5 +957,44 @@ enum DesignStatusChecks {
             "SR-2 the menu's Choose Language… opens the same chooser")
         presented.last?.panel.form.close()
         check(languages.chooser == nil, "fixture: the chooser is closed")
+        // DS-21 in the new terms: the workspace window validates the untargeted item for its
+        // active tab, wherever in the window the keyboard is, and the command acts on that tab.
+        let host = controller.host
+        let window = try requireValue(controller.hostWindow, "fixture: window")
+        let chooseItem = try requireValue(languageMenu.items.first, "fixture: Choose Language… item")
+        let chooseAction = try requireValue(chooseItem.action, "fixture: its action")
+        @MainActor func chooseFromMenu(_ name: String, expecting id: String, where place: String) {
+            let opened = presented.count
+            check(
+                host.active === controller && host.validateMenuItem(chooseItem),
+                "DS-21 Choose Language… is enabled with the keyboard in \(place)")
+            _ = NSApp.sendAction(chooseAction, to: host.active, from: chooseItem)
+            guard presented.count == opened + 1, let panel = presented.last?.panel else {
+                check(false, "SR-2 Choose Language… opens the chooser with the keyboard in \(place)")
+                return
+            }
+            type(name, in: panel)
+            _ = pressReturn(in: panel)
+            check(
+                presented.last?.parent === window && document.languageIdentifier == id,
+                "SR-2 with the keyboard in \(place), Choose Language… acts on the active tab: \(document.languageIdentifier)")
+        }
+        if check(controller.setViewMode(.preview) && controller.viewMode == .preview, "fixture: the JSON tab shows Preview") {
+            window.makeFirstResponder(controller.keyboardFocusView)
+            check(
+                (window.firstResponder as? NSView)?.isDescendant(of: controller.split) != true,
+                "fixture: the keyboard is in the preview, not in the text")
+            chooseFromMenu("ruby", expecting: "ruby", where: "the tab's preview")
+        }
+        controller.setViewMode(.source)
+        if check(host.setSidebarShown(true, browser: composition.workspaceBrowser), "fixture: the sidebar is shown"),
+            let outline = host.sidebarFocusView
+        {
+            check(
+                window.makeFirstResponder(outline) && (window.firstResponder as? NSView)?.isDescendant(of: outline) == true,
+                "fixture: the keyboard is in the sidebar")
+            chooseFromMenu("python", expecting: "python", where: "the sidebar")
+            host.setSidebarShown(false)
+        }
     }
 }
