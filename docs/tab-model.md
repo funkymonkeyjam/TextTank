@@ -339,12 +339,15 @@ words behind them, never as a character in the title and never by colour alone (
   same action, so a click on the dot closes through the same Save / Don't Save / Cancel review as a
   click on the cross (DS-12), and an edited tab never looks as if it cannot be closed.
 - **Changed outside TextTank.** A warning triangle between the title and the close button. Its
-  tooltip and accessibility text give the document, the notice and what to do next (DS-70, DS-85).
+  tooltip gives the document, the notice and what to do next (DS-85).
 - **Selected for comparison.** A pair of opposed arrows in the same place, with its own tooltip.
 - **Pinned** remains the pin in place of the document icon; Source, Preview and Both remain the eye.
 
-A click on a state symbol is a click on its tab; a Control-click or secondary click opens the tab's
-menu. The symbols are 16 points wide with four points on either side, so the title, each symbol, the
+A press on a state symbol is a press on its tab's title: a click selects the tab, a drag reorders
+it, and a Control-click or secondary click opens the tab's menu. The symbols are not accessibility
+elements. The tab's own label says the same thing in words, so it is said once, and the strip's
+published children (each tab, its eye while shown, its close button, then the list of open tabs) are
+the whole of what is offered. The symbols are 16 points wide with four points on either side, so the title, each symbol, the
 eye and the close button never abut (DS-14, DS-74).
 
 The tab's own accessibility label is one whole string for each combination of what the tab shows,
@@ -376,7 +379,9 @@ on, anywhere on the tab, without selecting it first. It goes through the close b
 (`WorkspaceWindowController.closeTab`), so unsaved changes get the same review and Cancel leaves
 everything as it was (DS-12). Pressed on one tab and released on another, or on the empty strip, it
 does nothing. A double-click on the empty part of the strip focuses that group and runs the same
-action as File > New. A double-click on a tab is two clicks on that tab and nothing more. A tab's
+action as File > New. Both presses of the pair must land on the empty strip, within the double-click
+interval, with the same tabs in between: a first click that closed the last tab, ended a reorder or
+otherwise changed the tabs leaves the second with nothing to pair with. A double-click on a tab is two clicks on that tab and nothing more. A tab's
 controls take their own clicks, so the end of a reorder never counts as a click on the strip. The
 window's frame has first refusal over its inside edge (`FrameTextClick`): a point the frame claims is
 never treated as empty strip, so AppKit's own handling of a double-click there is untouched.
@@ -475,3 +480,10 @@ keyboard nor VoiceOver. At the least group size, 320 by 200 points, the four com
 recent file does. The buttons are keyboard stops of the group's area (see “Keyboard areas of the
 window”): the arrow keys or Tab move between them and Space or Return presses one.
 
+The strip remembers where the pointer is in its own coordinates. When it is laid out again or moved
+without the pointer moving (the sidebar or the group layout changed from the keyboard), it asks the
+window for the pointer again, so the cross and the eye are on the tab that is now under it. Every
+tab menu, from a secondary click, a Control-click or the accessibility Show Menu action, is shown
+through one of the strip's two presenters, which checks replace so that no menu is tracked on the
+desktop. A check likewise injects the close decision (`TabCommandController.decisionHandler`), which
+a single edited tab's close now honours in place of its review sheet, as a bulk close already did.

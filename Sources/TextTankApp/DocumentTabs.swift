@@ -206,7 +206,16 @@ private final class DocumentTabButton: NSButton {
     private var downPoint: NSPoint?
     private var downModifiers: NSEvent.ModifierFlags = []
     private var moving = false
+    /// The state symbol a press began on, when it did not begin on the title itself.
+    private weak var pressOrigin: NSView?
+    /// A press on one of the tab's state symbols: a click selects the tab and a drag reorders it,
+    /// exactly as on the title.
+    func mouseDown(with event: NSEvent, from symbol: NSView) {
+        mouseDown(with: event)
+        if downPoint != nil { pressOrigin = symbol }
+    }
     override func mouseDown(with event: NSEvent) {
+        pressOrigin = nil
         if event.modifierFlags.contains(.control) {
             rightMouseDown(with: event)
             return
@@ -231,12 +240,14 @@ private final class DocumentTabButton: NSButton {
             super.mouseUp(with: event)
             return
         }
+        let pressed: NSView = pressOrigin ?? self
         if moving {
             strip.finishReorder(at: strip.convert(event.locationInWindow, from: nil))
-        } else if bounds.contains(convert(event.locationInWindow, from: nil)) {
+        } else if pressed.bounds.contains(pressed.convert(event.locationInWindow, from: nil)) {
             strip.clickTab(id, modifiers: downModifiers)
         }
         downPoint = nil
+        pressOrigin = nil
         moving = false
     }
     override func accessibilityCustomActions() -> [NSAccessibilityCustomAction]? {
@@ -272,11 +283,11 @@ private final class DocumentTabButton: NSButton {
         setAccessibilityCustomActions(actions)
     }
     override func rightMouseDown(with event: NSEvent) {
-        if let menu = menu(for: event) { NSMenu.popUpContextMenu(menu, with: event, for: self) }
+        if let tabID { strip?.showContextMenu(for: tabID, event: event, from: self) }
     }
     override func accessibilityPerformShowMenu() -> Bool {
-        guard let tabID, let menu = strip?.contextMenu(for: tabID) else { return false }
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: bounds.maxY), in: self)
+        guard let tabID, let strip, let menu = strip.contextMenu(for: tabID) else { return false }
+        strip.presentAccessibilityMenu(menu, self)
         return true
     }
 }
@@ -301,19 +312,27 @@ private final class DocumentTabModeButton: NSButton {
 }
 /// A symbol beside a tab's title for a state the title used to carry as a character: the file
 /// changed outside TextTank, or the document is selected for comparison. It is a shape with a
-/// tooltip, so the state is not carried by colour (DS-62). A click on it is a click on its tab.
+/// tooltip, so the state is not carried by colour (DS-62). A press on it is a press on its tab's
+/// title: a click selects the tab and a drag reorders it. It is not an accessibility element:
+/// the tab's own label says the same thing in words (DS-14, DS-84).
 private final class DocumentTabStateMark: NSImageView {
     var tabID: TabID?
     weak var strip: DocumentTabStrip?
+    /// The tab's own button, which owns the click and the reorder gesture.
+    weak var title: DocumentTabButton?
+    private var forwarding = false
     override func menu(for event: NSEvent) -> NSMenu? { tabID.flatMap { strip?.contextMenu(for: $0) } }
     override func mouseDown(with event: NSEvent) {
-        if event.modifierFlags.contains(.control) { rightMouseDown(with: event) }
+        forwarding = !event.modifierFlags.contains(.control)
+        if forwarding { title?.mouseDown(with: event, from: self) } else { rightMouseDown(with: event) }
+    }
+    override func mouseDragged(with event: NSEvent) {
+        if forwarding { title?.mouseDragged(with: event) }
     }
     override func mouseUp(with event: NSEvent) {
-        guard !event.modifierFlags.contains(.control), let tabID,
-            bounds.contains(convert(event.locationInWindow, from: nil))
-        else { return }
-        strip?.clickTab(tabID, modifiers: event.modifierFlags)
+        guard forwarding else { return }
+        forwarding = false
+        title?.mouseUp(with: event)
     }
     override func rightMouseDown(with event: NSEvent) {
         if let tabID { strip?.showContextMenu(for: tabID, event: event, from: self) }
@@ -345,6 +364,15 @@ private final class TabDropIndicator: NSView {
         NSColor.labelColor.setFill()
         bounds.fill()
     }
+}
+/// Block observers are not removed when their owner goes; this removes them.
+private final class ObserverBag {
+    var tokens: [NSObjectProtocol] = []
+    func removeAll() {
+        tokens.forEach(NotificationCenter.default.removeObserver)
+        tokens = []
+    }
+    deinit { tokens.forEach(NotificationCenter.default.removeObserver) }
 }
 final class DocumentTabStrip: NSView {
     private let scroll = NSScrollView(), row = NSView()
@@ -380,13 +408,15 @@ final class DocumentTabStrip: NSView {
         let toolTip: String?
         let accessibilityLabel: String?
         let closeShowsEditedDot: Bool
-        let outsideChange: (frame: NSRect, toolTip: String?, accessibilityLabel: String?)?
-        let comparison: (frame: NSRect, toolTip: String?, accessibilityLabel: String?)?
+        let outsideChange: (frame: NSRect, toolTip: String?, isAccessibilityElement: Bool)?
+        let comparison: (frame: NSRect, toolTip: String?, isAccessibilityElement: Bool)?
     }
     func tabAppearance(_ id: TabID) -> TabAppearance? {
         guard let c = controls[id] else { return nil }
-        func mark(_ view: DocumentTabStateMark) -> (frame: NSRect, toolTip: String?, accessibilityLabel: String?)? {
-            view.isHidden ? nil : (view.frame, view.toolTip, view.accessibilityLabel())
+        func mark(_ view: DocumentTabStateMark) -> (frame: NSRect, toolTip: String?, isAccessibilityElement: Bool)? {
+            view.isHidden
+                ? nil
+                : (view.frame, view.toolTip, view.isAccessibilityElement() || view.cell?.isAccessibilityElement() == true)
         }
         return TabAppearance(
             title: c.select.title, toolTip: c.select.toolTip, accessibilityLabel: c.select.accessibilityLabel(),
@@ -406,12 +436,25 @@ final class DocumentTabStrip: NSView {
     /// the strip or the window is not in use. Kept so that the hovered tab can be worked out
     /// again when the tabs move under a pointer that does not.
     private var pointer: NSPoint?
-    private var hoverObservers: [NSObjectProtocol] = []
-    private var scrollObserver: NSObjectProtocol?
+    /// Notification observers that end with the strip, and those that end when it leaves its
+    /// window. Each bag removes what it holds when it is emptied and when it is released.
+    private let lifetimeObservers = ObserverBag(), windowObservers = ObserverBag()
+    /// How many notification observers the strip has registered, for checks.
+    var observerCount: Int { lifetimeObservers.tokens.count + windowObservers.tokens.count }
+    var observerBags: [AnyObject] { [lifetimeObservers, windowObservers] }
     /// Shows a tab's menu. Checks replace it so that no menu is tracked on the desktop.
     var presentContextMenu: (NSMenu, NSEvent, NSView) -> Void = { menu, event, view in
         NSMenu.popUpContextMenu(menu, with: event, for: view)
     }
+    /// Shows a tab's menu for the accessibility Show Menu action, below the tab. Checks replace
+    /// it for the same reason.
+    var presentAccessibilityMenu: (NSMenu, NSView) -> Void = { menu, view in
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: view.bounds.maxY), in: view)
+    }
+    /// Where the pointer is now, in the window's coordinates, or nil when it is not over this
+    /// window. Checks replace it; otherwise the window is asked while it is the key window of the
+    /// active application, the only time the strip tracks the pointer at all.
+    var pointerLocationInWindow: (() -> NSPoint?)?
     private var hoverArea: NSTrackingArea?
     /// A tab narrower than this has no room for a mark that only appears under the pointer: its
     /// title would fall below the 82 points a tab at the minimum width has always had. The mark
@@ -444,9 +487,10 @@ final class DocumentTabStrip: NSView {
         scroll.documentView = row
         addSubview(scroll)
         scroll.contentView.postsBoundsChangedNotifications = true
-        scrollObserver = NotificationCenter.default.addObserver(
-            forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main
-        ) { [weak self] _ in MainActor.assumeIsolated { self?.rehover() } }
+        lifetimeObservers.tokens.append(
+            NotificationCenter.default.addObserver(
+                forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: .main
+            ) { [weak self] _ in MainActor.assumeIsolated { self?.rehover() } })
         dropIndicator.isHidden = true
         dropIndicator.setAccessibilityElement(false)
         row.addSubview(dropIndicator)
@@ -476,8 +520,28 @@ final class DocumentTabStrip: NSView {
     override func layout() {
         super.layout()
         layoutTabs()
+        // The tabs moved or changed width under a pointer that did not.
+        repoint()
         // A narrower tab may have lost the mark it showed under the pointer.
         publishAccessibilityChildren()
+    }
+    override func setFrameOrigin(_ newOrigin: NSPoint) {
+        let moved = newOrigin != frame.origin
+        super.setFrameOrigin(newOrigin)
+        if moved { repoint() }
+    }
+    /// The strip moved or was laid out again without the pointer moving: the sidebar or the group
+    /// layout changed from the keyboard. The remembered position is in the strip's coordinates
+    /// and is now wrong, so the pointer is asked for again. A window that is not the key window
+    /// of the active application has no hover to correct.
+    private func repoint() {
+        if let location = pointerLocationInWindow {
+            pointerMoved(to: location().map { convert($0, from: nil) })
+        } else if let window, window.isKeyWindow, NSApp.isActive {
+            pointerMoved(to: convert(window.mouseLocationOutsideOfEventStream, from: nil))
+        } else {
+            rehover()
+        }
     }
     /// `revealingActive` is false for a change that is not about which tab is active (a tab's
     /// mode): the strip then keeps its scroll position.
@@ -492,6 +556,8 @@ final class DocumentTabStrip: NSView {
         }
         if let hoveredTab, !ids.contains(hoveredTab) { self.hoveredTab = nil }
         if let closeWithKeyboard, !ids.contains(closeWithKeyboard) { self.closeWithKeyboard = nil }
+        // A click pair that spans a change of tabs is not a double-click on the empty strip.
+        if order != tabs.map(\.id) { forgetEmptyPress() }
         order = tabs.map(\.id)
         for tab in tabs {
             guard let presentation = host.presentation(for: tab.id), let doc = presentation.document as? TextDocument
@@ -539,9 +605,12 @@ final class DocumentTabStrip: NSView {
                     mark.contentTintColor = .labelColor
                     mark.tabID = tab.id
                     mark.strip = self
+                    mark.title = c.select
                     mark.isHidden = true
-                    mark.setAccessibilityElement(true)
-                    mark.setAccessibilityRole(.image)
+                    // 2: not an element. The tab's own label carries the state, so it is said
+                    // once, and the strip's published children stay the whole of what is offered.
+                    mark.setAccessibilityElement(false)
+                    mark.cell?.setAccessibilityElement(false)
                 }
                 c.mode.isBordered = false
                 c.mode.imagePosition = .imageOnly
@@ -613,14 +682,12 @@ final class DocumentTabStrip: NSView {
                 format: Strings.text("tabs.mark.outsideChange", "%1$@: %2$@. Select this tab to choose what to do."),
                 name, notice ?? "")
             c.outsideChange.toolTip = notice == nil ? nil : outsideText
-            c.outsideChange.setAccessibilityLabel(notice == nil ? nil : outsideText)
             let comparedText = String(
                 format: Strings.text(
                     "tabs.mark.compared",
                     "%@ is selected for comparison. Choose Compare with Selected on another tab to compare them."),
                 name)
             c.comparison.toolTip = compared ? comparedText : nil
-            c.comparison.setAccessibilityLabel(compared ? comparedText : nil)
             // DS-70: the mark names the document and what a press will do; the tooltip says the same.
             let rendered = c.viewMode != nil && c.viewMode != .source
             let markLabel = String(
@@ -903,8 +970,16 @@ final class DocumentTabStrip: NSView {
         otherPress = nil
         if tab(at: convert(event.locationInWindow, from: nil)) == pressed { host?.closeTab(pressed, sender: self) }
     }
-    /// True after a press on the empty part of the strip, until its release.
-    private var emptyPress = false
+    /// When the first press of a click pair landed on the empty part of the strip; nil when the
+    /// last first press landed elsewhere or the tabs have changed since.
+    private var emptyFirstPress: TimeInterval?
+    /// True from the second press of a pair whose two presses were both on the empty strip, with
+    /// the same tabs, until its release.
+    private var emptyPair = false
+    private func forgetEmptyPress() {
+        emptyFirstPress = nil
+        emptyPair = false
+    }
     /// Whether `point` (in the strip's coordinates) is the empty part of the strip and a click
     /// there is the strip's to act on. The window's frame has first refusal over its inside edge,
     /// where a double-click belongs to AppKit's own handling (see `FrameTextClick`): a point the
@@ -918,7 +993,15 @@ final class DocumentTabStrip: NSView {
         return hit === self || hit === row || hit === scroll || hit === scroll.contentView
     }
     override func mouseDown(with event: NSEvent) {
-        emptyPress = isEmptyStrip(convert(event.locationInWindow, from: nil))
+        // The second press counts only if the first was also a press on the empty strip. The
+        // first click of a pair that closed the last tab (its close button, the other mouse
+        // button), ended a reorder or chose from the list of open tabs never reached this view,
+        // or changed the tabs, and so leaves nothing to pair with.
+        let empty = isEmptyStrip(convert(event.locationInWindow, from: nil))
+        emptyPair =
+            empty && event.clickCount == 2
+            && emptyFirstPress.map { event.timestamp >= $0 && event.timestamp - $0 <= NSEvent.doubleClickInterval } == true
+        emptyFirstPress = empty && event.clickCount == 1 ? event.timestamp : nil
         // The group still takes the click, which focuses it.
         super.mouseDown(with: event)
     }
@@ -926,8 +1009,8 @@ final class DocumentTabStrip: NSView {
     /// controls take their clicks themselves, so a double-click on a tab never arrives here, and
     /// a reorder ends on the tab it began on.
     override func mouseUp(with event: NSEvent) {
-        let pressed = emptyPress
-        emptyPress = false
+        let pressed = emptyPair
+        emptyPair = false
         guard pressed, event.clickCount == 2, allowsSelection, isEmptyStrip(convert(event.locationInWindow, from: nil))
         else {
             super.mouseUp(with: event)
@@ -952,14 +1035,13 @@ final class DocumentTabStrip: NSView {
     func pointerLeftWithWindow() { pointerMoved(to: nil) }
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        hoverObservers.forEach(NotificationCenter.default.removeObserver)
-        hoverObservers = []
+        windowObservers.removeAll()
         guard let window else {
             pointerMoved(to: nil)
             return
         }
         let center = NotificationCenter.default
-        hoverObservers = [
+        windowObservers.tokens = [
             center.addObserver(forName: NSWindow.didResignKeyNotification, object: window, queue: .main) {
                 [weak self] _ in MainActor.assumeIsolated { self?.pointerLeftWithWindow() }
             },

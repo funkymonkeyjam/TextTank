@@ -96,6 +96,24 @@ import UniformTypeIdentifiers
     func requestTabClose(_ sender: Any?) {
         guard isOpen, !tabClosePending else { return }
         tabClosePending = true
+        // An injected close decision stands in for the review sheet, as it does for a bulk close.
+        if isDocumentEdited, let commands = presentation?.host.tabCommands, let decide = commands.decisionHandler {
+            decide(TabClosePrompt(documentID: runtimeID, name: displayName, tabCount: 1)) { [weak self] decision in
+                guard let self else { return }
+                self.tabClosePending = false
+                guard self.isOpen else { return }
+                switch decision {
+                case .cancel: break
+                case .discard: self.close()
+                case .save:
+                    let saved: @MainActor (Error?) -> Void = { [weak self] error in
+                        if let self, error == nil, self.isOpen, !self.isDocumentEdited { self.close() }
+                    }
+                    if let save = commands.saveHandler { save(self, saved) } else { TabSaveReply.save(self, completion: saved) }
+                }
+            }
+            return
+        }
         if isDocumentEdited, let url = diskURL, let window = windowForSheet, window.attachedSheet == nil,
             EditorServices.current?.compare?.canCompareSaved(self) == true
         {
