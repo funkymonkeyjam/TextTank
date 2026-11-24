@@ -118,7 +118,8 @@ extension DocumentChecks {
             let window = try requireValue(FormPanel.frontWindow, "fixture: Settings modeless window")
             let views = descendants(try requireValue(window.contentView, "fixture: Settings content"))
             let field = try requireValue(
-                views.compactMap { $0 as? NSTextField }.first { $0.isEditable }, "fixture: tab width")
+                views.compactMap { $0 as? NSTextField }.first { $0.identifier?.rawValue == "settings.width" },
+                "fixture: tab width")
             window.makeFirstResponder(nil)
             field.stringValue = "7"
             var intervening = settings.value
@@ -991,8 +992,10 @@ extension DocumentChecks {
                     NSApp.abortModal()
                     return
                 }
-                guard let field = views.compactMap({ $0 as? NSTextField }).first(where: { $0.isEditable }),
-                    let action = field.action
+                guard
+                    let field = views.compactMap({ $0 as? NSTextField }).first(where: {
+                        $0.identifier?.rawValue == "settings.width"
+                    }), let action = field.action
                 else {
                     views.compactMap { $0 as? NSButton }.first?.performClick(nil)
                     return

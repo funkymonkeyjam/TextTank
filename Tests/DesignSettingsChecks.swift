@@ -126,13 +126,17 @@ import NativeSearch
             defaults.removePersistentDomain(forName: suite)
         }
         try maintenanceSheetChecks(root: root)
+        try settingsPaneChecks(root: root)
         let controller = SettingsController(url: root.appendingPathComponent("design-settings-frames.json"))
         controller.showSettings(nil)
         let form = try requireValue(FormPanel.visible.last, "DG fixture: Settings frame")
         form.window.setContentSize(form.window.contentMinSize)
         form.window.contentView!.layoutSubtreeIfNeeded()
         let content = form.window.contentView!
-        let controls = descendants(content).compactMap { $0 as? NSControl }.filter { !$0.isHidden }
+        // Only the chosen pane is shown; a control of another pane cannot be clipped.
+        let controls = descendants(content).compactMap { $0 as? NSControl }.filter {
+            !$0.isHiddenOrHasHiddenAncestor
+        }
         let clipped = controls.filter { control in
             let rect = control.convert(control.bounds, to: content)
             return rect.minX < -1 || rect.minY < -1 || rect.maxX > content.bounds.maxX + 1
@@ -227,6 +231,238 @@ import NativeSearch
         check(panel.isVisible, "the same shared Fonts panel can be reopened")
         live.close()
         check(!panel.isVisible, "closing Settings retires its reopened Fonts panel")
+    }
+    /// Chooses a pane the way a click on its toolbar item does.
+    static func choosePane(_ pane: String, in window: NSWindow) throws {
+        let item = try requireValue(
+            window.toolbar?.items.first { $0.itemIdentifier.rawValue == "settings.pane." + pane },
+            "DG fixture: Settings toolbar item \(pane)")
+        _ = NSApp.sendAction(try requireValue(item.action, "DG fixture: pane action"), to: item.target, from: item)
+        window.contentView?.layoutSubtreeIfNeeded()
+    }
+    /// The settings the window shows now, by the identifier of each one's first control.
+    static func shownSettings(_ window: NSWindow) -> [String] {
+        descendants(window.contentView!).compactMap { view in
+            guard let id = view.identifier?.rawValue, id.hasSuffix(".row"), !view.isHiddenOrHasHiddenAncestor
+            else { return nil }
+            return String(id.dropLast(4))
+        }
+    }
+    static func control<T: NSView>(_ id: String, _ window: NSWindow, as type: T.Type = T.self) throws -> T {
+        try requireValue(
+            descendants(window.contentView!).compactMap { $0 as? T }.first { $0.identifier?.rawValue == id },
+            "DG fixture: Settings control \(id)")
+    }
+    static func search(_ text: String, in window: NSWindow) throws {
+        let filter: NSSearchField = try control("settings.filter", window)
+        filter.stringValue = text
+        _ = NSApp.sendAction(try requireValue(filter.action, "DG fixture: search action"), to: filter.target, from: filter)
+        window.contentView?.layoutSubtreeIfNeeded()
+    }
+    /// V6: panes, the search field, Changed from default, Use Default and Reveal in Finder.
+    static func settingsPaneChecks(root: URL) throws {
+        let url = root.appendingPathComponent("settings-panes.json")
+        let controller = SettingsController(url: url)
+        let existing = Set(FormPanel.visible.map(ObjectIdentifier.init))
+        defer { for form in FormPanel.visible where !existing.contains(ObjectIdentifier(form)) { form.close() } }
+        controller.showSettings(nil)
+        let form = try requireValue(FormPanel.visible.last, "V6 fixture: Settings")
+        let window = form.window
+        let toolbar = try requireValue(window.toolbar, "V6 fixture: Settings toolbar")
+        check(
+            toolbar.items.map(\.label) == ["Editing", "Appearance", "Files", "Previews", "Shortcuts"]
+                && window.toolbarStyle == .preference && toolbar.selectedItemIdentifier?.rawValue == "settings.pane.editing"
+                && toolbar.items.allSatisfy { $0.image != nil },
+            "V6 Settings switches five panes from a preference-style toolbar and opens on Editing")
+        // Every setting of the flat window, and the stored toggles that had no control, by pane.
+        let expected: [(String, [String])] = [
+            ("editing", ["settings.width", "settings.tabs", "settings.autoIndent", "settings.autoPair", "settings.wrap"]),
+            (
+                "appearance",
+                [
+                    "settings.appearance", "settings.font.choose", "settings.font.size", "settings.font.zoom",
+                    "settings.indentGuides", "settings.currentLineHighlight", "settings.braceHighlight"
+                ]
+            ),
+            ("files", ["settings.atLaunch", "settings.externalChanges", "settings.reveal"]),
+            ("previews", ["settings.preview.openIn"]),
+            ("shortcuts", ["settings.shortcut.command", "settings.shortcut.key"])
+        ]
+        var heights: [String: CGFloat] = [:]
+        for (pane, settings) in expected {
+            try choosePane(pane, in: window)
+            let content = try requireValue(window.contentView, "V6 fixture: content")
+            heights[pane] = content.bounds.height
+            check(
+                shownSettings(window) == settings && toolbar.selectedItemIdentifier?.rawValue == "settings.pane." + pane,
+                "V6 the \(pane) pane lists exactly its settings: \(shownSettings(window))")
+            check(
+                abs(content.bounds.height - content.fittingSize.height) <= 1
+                    && abs(content.bounds.width - 620) <= 1,
+                "V6 the \(pane) pane is as tall as its content: \(content.bounds.size) fits \(content.fittingSize)")
+        }
+        check(
+            Set(heights.values.map { Int($0) }).count >= 3,
+            "V6 panes with different content have different heights: \(heights)")
+        for id in [
+            "settings.width", "settings.tabs", "settings.wrap", "settings.appearance", "settings.atLaunch",
+            "settings.externalChanges", "settings.preview.format", "settings.preview.openIn", "settings.font.choose",
+            "settings.font.size", "settings.font.zoom", "settings.reset", "settings.close"
+        ] {
+            let found = descendants(window.contentView!).first { $0.identifier?.rawValue == id }
+            check(
+                found != nil && !(found?.accessibilityLabel() ?? "").isEmpty,
+                "V6 the control \(id) of the flat window is still there, with its accessibility label")
+        }
+        let unnamed = descendants(window.contentView!).compactMap { $0 as? NSControl }.filter {
+            // A label's text is its own name; every control a person operates needs one.
+            ($0.identifier?.rawValue ?? "").hasPrefix("settings.") && ($0 as? NSTextField)?.isEditable != false
+                && ($0.accessibilityLabel() ?? "").isEmpty
+        }
+        check(unnamed.isEmpty, "V6 DS-70 every Settings control has an accessibility label: \(unnamed.map { $0.identifier!.rawValue })")
+
+        // Short number fields with steppers, saved when stepped.
+        try choosePane("editing", in: window)
+        let width = try field("settings.width", window)
+        let stepper: NSStepper = try control("settings.width.stepper", window)
+        check(width.frame.width <= 60, "V6 a one- or two-digit number has a short field, not one \(width.frame.width) points wide")
+        stepper.integerValue = 5
+        _ = NSApp.sendAction(try requireValue(stepper.action, "V6 fixture: stepper action"), to: stepper.target, from: stepper)
+        check(
+            controller.value.tabWidth == 5 && width.stringValue == "5" && SettingsStore(url: url).value.tabWidth == 5
+                && stepper.minValue == 1 && stepper.maxValue == 32,
+            "V6 the tab width stepper saves at once, within 1 to 32")
+
+        // The search field.
+        try search("wrap", in: window)
+        check(
+            shownSettings(window) == ["settings.wrap"] && toolbar.selectedItemIdentifier == nil,
+            "V6 typing “wrap” shows only the matching setting: \(shownSettings(window))")
+        let content = try requireValue(window.contentView, "V6 fixture: content")
+        check(
+            abs(content.bounds.height - content.fittingSize.height) <= 1,
+            "V6 the window is as tall as the search results")
+        try search("THEME", in: window)
+        check(shownSettings(window) == ["settings.appearance"], "V6 a synonym finds a setting in another pane, in any case")
+        try search("startup", in: window)
+        check(shownSettings(window) == ["settings.atLaunch"], "V6 “startup” finds At launch")
+        try search("file ask", in: window)
+        check(
+            shownSettings(window) == ["settings.externalChanges"],
+            "V6 every word typed must match, in the label or a synonym: \(shownSettings(window))")
+        try search("indent", in: window)
+        check(
+            shownSettings(window) == ["settings.width", "settings.tabs", "settings.autoIndent", "settings.indentGuides"],
+            "V6 one word lists matching settings across panes, in pane order: \(shownSettings(window))")
+        NativeFixtureEnvironment.announcements = []
+        try search("zzzz", in: window)
+        let empty = try field("settings.filter.empty", window)
+        check(
+            shownSettings(window).isEmpty && !empty.isHidden && empty.stringValue.contains("zzzz")
+                && NativeFixtureEnvironment.announcements.contains(empty.stringValue),
+            "V6 DS-36 a search that finds nothing says so in words and is announced")
+        try search("", in: window)
+        check(
+            shownSettings(window) == expected[0].1 && empty.isHidden
+                && toolbar.selectedItemIdentifier?.rawValue == "settings.pane.editing",
+            "V6 clearing the search returns to the pane that was chosen")
+        let find = try requireValue(
+            NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, characters: "f", charactersIgnoringModifiers: "f",
+                isARepeat: false, keyCode: 3), "V6 fixture: Command-F")
+        let filter: NSSearchField = try control("settings.filter", window)
+        check(
+            window.performKeyEquivalent(with: find) && window.firstResponder === filter.currentEditor(),
+            "V6 DS-73 Command-F moves to the search field from the keyboard")
+        window.makeFirstResponder(nil)
+        try search("wrap", in: window)
+        try choosePane("files", in: window)
+        check(
+            filter.stringValue.isEmpty && shownSettings(window) == expected[2].1,
+            "V6 choosing a pane leaves the search and shows that pane")
+
+        // Changed from default.
+        let changed: NSButton = try control("settings.filter.changed", window)
+        var custom = EditorSettings()
+        custom.tabWidth = 9
+        custom.wrap = true
+        custom.appearance = "dark"
+        custom.autoPair = true
+        custom.currentLineHighlight = true  // stored, but the default value: not a change
+        try controller.save(custom)
+        changed.performClick(nil)
+        check(
+            shownSettings(window) == ["settings.width", "settings.autoPair", "settings.wrap", "settings.appearance"],
+            "V6 Changed from default lists exactly the settings that differ: \(shownSettings(window))")
+        let defaults = descendants(window.contentView!).compactMap { $0 as? NSButton }.filter {
+            ($0.identifier?.rawValue ?? "").hasSuffix(".default") && !$0.isHiddenOrHasHiddenAncestor
+        }
+        check(
+            defaults.map { $0.identifier!.rawValue } == [
+                "settings.width.default", "settings.autoPair.default", "settings.wrap.default",
+                "settings.appearance.default"
+            ] && defaults.allSatisfy { $0.title == "Use Default" && $0.accessibilityLabel()?.hasPrefix("Use the default for ") == true },
+            "V6 each changed setting has its own named way back to its default")
+        let wrapDefault: NSButton = try control("settings.wrap.default", window)
+        wrapDefault.performClick(nil)
+        check(
+            !controller.value.wrap && controller.value.tabWidth == 9 && !SettingsStore(url: url).value.wrap
+                && shownSettings(window) == ["settings.width", "settings.autoPair", "settings.appearance"],
+            "V6 Use Default returns one setting to its default, saves at once and leaves the others")
+        try control("settings.width.default", window, as: NSButton.self).performClick(nil)
+        check(
+            controller.value.tabWidth == 4 && width.stringValue == "4",
+            "V6 Use Default on a number field shows and saves the default")
+        try control("settings.autoPair.default", window, as: NSButton.self).performClick(nil)
+        try control("settings.appearance.default", window, as: NSButton.self).performClick(nil)
+        var cleared = EditorSettings()
+        cleared.currentLineHighlight = true
+        check(
+            controller.value == cleared && shownSettings(window).isEmpty && !empty.isHidden
+                && empty.stringValue.contains("default"),
+            "V6 with nothing changed the list is empty and says why: \(empty.stringValue)")
+        try search("wrap", in: window)
+        check(shownSettings(window).isEmpty, "V6 the search narrows Changed from default; it does not widen it")
+        try search("", in: window)
+        changed.performClick(nil)
+        check(shownSettings(window) == expected[2].1, "V6 turning the filter off returns to the chosen pane")
+
+        // Stored view toggles: one helper lists each of them (the row extension point).
+        try choosePane("editing", in: window)
+        let autoIndent: NSButton = try control("settings.autoIndent", window)
+        check(autoIndent.state == .on, "V6 fixture: Auto-indent starts on")
+        autoIndent.performClick(nil)
+        check(
+            !controller.value.autoIndentEnabled && SettingsStore(url: url).value.autoIndent == false,
+            "V6 a checkbox for a stored toggle saves when clicked")
+        controller.toggleAutoIndent(nil)
+        check(
+            controller.value.autoIndentEnabled && autoIndent.state == .on,
+            "V6 the checkbox follows the same setting changed from its menu command")
+
+        // Reveal Settings File in Finder never reaches Finder from a check.
+        let reveal = StoreRecovery.reveal
+        defer { StoreRecovery.reveal = reveal }
+        var revealed: [URL] = []
+        StoreRecovery.reveal = { revealed.append($0) }
+        try choosePane("files", in: window)
+        let revealButton: NSButton = try control("settings.reveal", window)
+        check(
+            revealButton.title == "Reveal Settings File in Finder" && !(revealButton.accessibilityLabel() ?? "").isEmpty,
+            "V6 the Files pane has Reveal Settings File in Finder")
+        revealButton.performClick(nil)
+        check(revealed == [url], "V6 it shows the settings file itself")
+        form.close()
+        let fresh = SettingsController(url: root.appendingPathComponent("settings-panes-absent.json"))
+        fresh.showSettings(nil)
+        let freshForm = try requireValue(FormPanel.visible.last, "V6 fixture: Settings before any save")
+        revealed = []
+        try control("settings.reveal", freshForm.window, as: NSButton.self).performClick(nil)
+        check(
+            revealed.map(\.path) == [root.path] && !FileManager.default.fileExists(atPath: fresh.url.path),
+            "V6 before any setting is saved it shows the folder, and creates no file")
+        freshForm.close()
     }
     static func maintenanceSheetChecks(root: URL) throws {
         let url = root.appendingPathComponent("maintenance-settings.json")
@@ -631,13 +867,31 @@ extension DesignSettingsChecks {
         }
         let settings = SettingsController(url: isolated.url.appendingPathComponent("Settings.json"))
         settings.showSettings(nil)
+        // Each pane is checked while it is the one shown; a hidden pane is not in the tree.
         let settingsForm = try checkInputs(
             "TextTank.Settings",
             [
-                ("Tab width", "AXTextField"), ("Appearance", "AXPopUpButton"),
-                ("Command shortcut to assign", "AXPopUpButton"), ("Shortcut key", "AXTextField"),
-                ("Indent with tabs", "AXCheckBox"), ("Wrap lines", "AXCheckBox")
+                ("Tab width", "AXTextField"), ("Indent with tabs", "AXCheckBox"), ("Wrap lines", "AXCheckBox"),
+                ("Auto-indent on Return", "AXCheckBox"), ("Search settings by name", "AXTextField"),
+                ("Show only settings changed from their defaults", "AXCheckBox")
             ], focus: true)
+        try choosePane("appearance", in: settingsForm.window)
+        _ = try checkInputs(
+            "TextTank.Settings",
+            [("Appearance", "AXPopUpButton"), ("Font size (points)", "AXTextField"), ("Default zoom", "AXTextField")],
+            focus: true)
+        try choosePane("files", in: settingsForm.window)
+        _ = try checkInputs(
+            "TextTank.Settings", [("At launch", "AXPopUpButton"), ("External file changes", "AXPopUpButton")],
+            focus: true)
+        try choosePane("previews", in: settingsForm.window)
+        _ = try checkInputs(
+            "TextTank.Settings", [("Preview format", "AXPopUpButton"), ("Open Markdown documents in", "AXPopUpButton")],
+            focus: true)
+        try choosePane("shortcuts", in: settingsForm.window)
+        _ = try checkInputs(
+            "TextTank.Settings", [("Command shortcut to assign", "AXPopUpButton"), ("Shortcut key", "AXTextField")],
+            focus: true)
         let shortcut = try field("settings.shortcut.key", settingsForm.window)
         let commands = try requireValue(
             descendants(settingsForm.window.contentView!).compactMap { $0 as? NSPopUpButton }.first {

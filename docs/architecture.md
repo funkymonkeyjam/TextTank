@@ -179,8 +179,16 @@ The user's `LanguageProfiles.json` is the one store that is not a whole value: i
 
 ## Library codecs and advanced JSON editing
 
-Settings uses an owned, resizable `FormPanel`, opened by Command-comma and titled
-“Settings”. Committed controls validate and persist their own fields before applying them. A pending text draft retains its original field value for conflict detection, while unrelated preferences merge from the current store. A changed file on disk requires reopening Settings. External file changes defaults to Ask. Reload if unmodified refreshes a clean document after verifying its disk contents. Ignore suppresses notices while in-place saves still check for conflicting bytes. Close and Escape end the session. Accepted changes persist across close. The Reset Defaults and Repair Settings actions each require confirmation.
+Settings uses an owned `FormPanel`, opened by Command-comma and titled “Settings”. A
+preference-style `NSToolbar` switches five panes (Editing, Appearance, Files, Previews,
+Shortcuts); every pane stays in the window and only the chosen one is shown, so the window is
+as tall as that pane and a control is found by its identifier whichever pane is showing. Each
+setting is a `SettingRow`: its pane, visible label, synonyms, whether its value differs from
+`EditorSettings()` and how to return it to that default. The search field lists the matching
+rows of every pane under their pane's name, Changed from default lists the rows that differ,
+and a row that differs has a Use Default button. A stored `Bool?` member gets its row from
+`toggleRow` and a command from `actionRow` (marked `SETTINGS-ROW-EXTENSION` in
+`SettingsController.swift`). Reveal Settings File in Finder goes through `StoreRecovery.reveal`. Committed controls validate and persist their own fields before applying them. A pending text draft retains its original field value for conflict detection, while unrelated preferences merge from the current store. A changed file on disk requires reopening Settings. External file changes defaults to Ask. Reload if unmodified refreshes a clean document after verifying its disk contents. Ignore suppresses notices while in-place saves still check for conflicting bytes. Close and Escape end the session. Accepted changes persist across close. The Reset Defaults and Repair Settings actions each require confirmation.
 
 The Font button owns a session on the shared AppKit Font panel. A fixed-pitch descriptor collection is visible only in this process. The modern panel opens this collection through its native collection picker. Older layouts use the panel's family filter. The user can choose all fonts. Closing the session releases its collection and restores the prior panel target, delegate, selection and accessory.
 Frames use the existing `WindowFrames` policy, including isolated test defaults.
