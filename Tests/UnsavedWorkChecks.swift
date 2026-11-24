@@ -190,22 +190,22 @@ import EditorBridge
             r1.isOpen && r1.quitCloseDeferred && !controller.documents.contains(r1)
                 && second.workspaceWindow.presentations.contains { $0.document === r1 }
                 && places(second.workspaceWindow, names) == placed,
-            "F1 a close during a quit that can still be cancelled leaves the held tab where it is")
+            "quit fix 1: a close during a quit that can still be cancelled leaves the held tab where it is")
         second.reviewed(controller, didReviewAll: false, contextInfo: nil)
         check(
             replies == [false, false] && controller.documents.contains(r1) && controller.documents.count == 3
                 && r1.isDocumentEdited && !r1.isHeldForQuit && !r1.quitCloseDeferred
                 && r1.editor.checkedUTF8Data == bytes[0] && r1.editor.revision == revisionBefore
                 && places(second.workspaceWindow, names) == placed,
-            "F1 the cancelled quit leaves that document open, registered and edited, with nothing changed")
-        check(second.applicationShouldTerminate(app) == .terminateLater, "F1 fixture: the quit is asked for again")
-        guard spinUntil("F1 the second review request", { requests == 3 }) else { return }
+            "quit fix 1: the cancelled quit leaves that document open, registered and edited, with nothing changed")
+        check(second.applicationShouldTerminate(app) == .terminateLater, "quit fix 1: fixture: the quit is asked for again")
+        guard spinUntil("quit fix 1: the second review request", { requests == 3 }) else { return }
         r1.close()
-        check(r1.isOpen && r1.isHeldForQuit, "F1 the held document is still open until the quit is certain")
+        check(r1.isOpen && r1.isHeldForQuit, "quit fix 1: the held document is still open until the quit is certain")
         // As if the person chose Don't Save for the file.
         second.reviewed(controller, didReviewAll: true, contextInfo: nil)
         let afterReview = try required(LastSessionLayout.read(metadata))
-        check(!r1.isOpen, "F1 once the quit is certain the noted close is carried out")
+        check(!r1.isOpen, "quit fix 1: once the quit is certain the noted close is carried out")
         check(
             replies == [false, false, true] && controller.documents.isEmpty && afterReview.untitled?.count == 2
                 && afterReview.files.count == 1,
@@ -301,15 +301,15 @@ import EditorBridge
         let late = try required(c2.editor.checkedUTF8Data)
         // Fix round 1, finding 5: a held document that is saved under a name before it closes is
         // a file. Its recovery copy must not bring it back as a second, untitled tab.
-        let named = try requireValue(document(extraID), "F5 fixture: the third untitled document")
-        check(named.isHeldForQuit && (try? store.load(id: extraID)) != nil, "F5 fixture: it is held, with a verified copy")
+        let named = try requireValue(document(extraID), "quit fix 5: fixture: the third untitled document")
+        check(named.isHeldForQuit && (try? store.load(id: extraID)) != nil, "quit fix 5: fixture: it is held, with a verified copy")
         named.fileURL = root.appendingPathComponent("became-a-file.txt")
         fourth.reviewed(controller, didReviewAll: true, contextInfo: nil)
         let afterNaming = try required(LastSessionLayout.read(metadata))
         check(
             (try? store.load(id: extraID)) == nil && Set(afterNaming.untitled?.map(\.id.rawValue) ?? []) == Set(ids)
                 && afterNaming.files.contains { $0.url.lastPathComponent == "became-a-file.txt" },
-            "F5 a held document that became a file leaves no recovery copy and is not named as untitled")
+            "quit fix 5: a held document that became a file leaves no recovery copy and is not named as untitled")
         check(
             try controller.documents.isEmpty && Data(store.load(id: ids[1]).text.utf8) == late,
             "V9 an edit made during the review is in the kept copy")

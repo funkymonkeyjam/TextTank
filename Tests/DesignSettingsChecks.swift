@@ -999,6 +999,8 @@ import NativeSearch
         try choosePane("files", in: form.window)
         let row: NSButton = try control("settings.clearLocalHistory", form.window)
         row.performClick(nil)
+        // The command counts the kept versions off the main thread before it asks.
+        _ = spinUntil("V10 the Settings row's confirmation is asked") { prompts.count == 1 }
         check(
             prompts.count == 1 && prompts.first?.buttons.first?.choice == .cancel
                 && prompts.first?.buttons.last?.choice == .everything
@@ -1010,6 +1012,8 @@ import NativeSearch
             "V10 Cancel from the Settings row deletes nothing")
         answer = .everything
         row.performClick(nil)
+        _ = spinUntil("V10 the Settings row's confirmation is asked again") { prompts.count == 2 }
+        _ = spinUntil("V10 the confirmed clear finished") { store.usage().versions == 0 }
         store.waitUntilIdle()
         check(
             prompts.count == 2 && store.usage().versions == 0,

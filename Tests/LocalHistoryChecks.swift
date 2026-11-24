@@ -312,7 +312,7 @@ import EditorBridge
         try await write(String(repeating: "L", count: 95) + "\n", to: neighbour, large, .saveAsOperation)
         check(
             try store.versions(forPath: key(small)).isEmpty && store.versions(forPath: key(large)).count == 1,
-            "F4 fixture: another file's save evicted this file's only version")
+            "history fix 4: fixture: another file's save evicted this file's only version")
         clock.advance(10)
         try FileManager.default.removeItem(at: large)
         try store.clear(path: key(large))
@@ -321,23 +321,23 @@ import EditorBridge
         check(
             try afterEviction.map(\.kind) == [.saved, .replaced]
                 && store.data(forPath: key(small), version: afterEviction[1].id) == Data("small one\n".utf8),
-            "F4 after its newest version was evicted, the next save again keeps what it replaced")
+            "history fix 4: after its newest version was evicted, the next save again keeps what it replaced")
         clock.advance(10)
         try await write("small three\n", to: doc, small)
         check(
             try store.versions(forPath: key(small)).map(\.kind) == [.saved, .saved, .replaced],
-            "F4 an ordinary next save keeps only what it wrote: history already ends with what it replaced")
+            "history fix 4: an ordinary next save keeps only what it wrote: history already ends with what it replaced")
         // A record that fails leaves the newest version unknown, so the next save reads again.
         let manifestFolder = try requireValue(
             try FileManager.default.contentsOfDirectory(at: home, includingPropertiesForKeys: nil).first,
-            "F4 the file's history folder")
+            "history fix 4: the file's history folder")
         // The folder is moved aside and a plain file put in its place: nothing can be written there.
         let aside = home.appendingPathComponent("aside")
         try FileManager.default.moveItem(at: manifestFolder, to: aside)
         try Data().write(to: manifestFolder)
         clock.advance(10)
         try await write("small four\n", to: doc, small)
-        _ = await waitUntil("F4 the status line to report the version that was not kept") {
+        _ = await waitUntil("history fix 4: the status line to report the version that was not kept") {
             let status = doc.presentation?.status
             return ((status?.stringValue ?? "") + (status?.toolTip ?? "")).contains("An earlier version could not be kept")
         }
@@ -347,14 +347,14 @@ import EditorBridge
         check(
             try store.versions(forPath: key(small)).count == 3 && Data(contentsOf: small) == Data("small four\n".utf8)
                 && ((status?.stringValue ?? "") + (status?.toolTip ?? "")).contains("An earlier version could not be kept"),
-            "F4 fixture: a version that cannot be written does not fail the save, and the status line says so")
+            "history fix 4: fixture: a version that cannot be written does not fail the save, and the status line says so")
         clock.advance(10)
         try await write("small five\n", to: doc, small)
         let afterFailure = try store.versions(forPath: key(small))
         check(
             try afterFailure.prefix(2).map(\.kind) == [.saved, .replaced]
                 && store.data(forPath: key(small), version: afterFailure[1].id) == Data("small four\n".utf8),
-            "F4 after a failed record, the next save keeps the content that record missed")
+            "history fix 4: after a failed record, the next save keeps the content that record missed")
 
         // Finding 6: a save, and the Clear command, never wait for the store's queue.
         let gate = DispatchSemaphore(value: 0)
@@ -365,7 +365,7 @@ import EditorBridge
         LocalHistory.forgetNewest()
         var finished = false
         doc.save(to: small, ofType: TextDocument.plainTextType, for: .saveOperation) { _ in finished = true }
-        let saved = await waitUntil(timeout: 5, "F6 the save to finish while the store's queue is blocked") { finished }
+        let saved = await waitUntil(timeout: 5, "history fix 6: the save to finish while the store's queue is blocked") { finished }
         var busyPrompts = 0
         let priorConfirm = LocalHistory.confirmClear
         LocalHistory.confirmClear = { _, _, reply in
@@ -376,24 +376,24 @@ import EditorBridge
         check(
             try saved && !doc.isDocumentEdited && Data(contentsOf: small).starts(with: Data("while the store".utf8))
                 && busyPrompts == 0,
-            "F6 a save completes, and Clear returns, while the history queue is blocked")
+            "history fix 6: a save completes, and Clear returns, while the history queue is blocked")
         gate.signal()
         await settle()
-        _ = await waitUntil("F6 the clear confirmation once the store answers") { busyPrompts == 1 }
+        _ = await waitUntil("history fix 6: the clear confirmation once the store answers") { busyPrompts == 1 }
         LocalHistory.confirmClear = priorConfirm
         check(
             try store.versions(forPath: key(small)).first?.kind == .saved,
-            "F6 the version handed over during the wait is kept once the queue is free")
+            "history fix 6: the version handed over during the wait is kept once the queue is free")
 
         // A rename that only changes case keeps the history, whatever the volume does with case.
         let cased = folder.appendingPathComponent("SMALL.txt")
         let kept = try store.versions(forPath: key(small)).map(\.id)
-        try require(rename(small.path, cased.path) == 0, "F7 fixture: the file is renamed by case alone")
+        try require(rename(small.path, cased.path) == 0, "history fix 7: fixture: the file is renamed by case alone")
         doc.fileURL = cased
         await settle()
         check(
             try store.versions(forPath: key(cased)).map(\.id) == kept,
-            "F7 a rename that changes only the case of the name keeps the history")
+            "history fix 7: a rename that changes only the case of the name keeps the history")
         // Bytes another program wrote are not labelled with the document's own format.
         clock.advance(10)
         try Data([0xFF, 0xFE, 0x68, 0x00, 0x69, 0x00]).write(to: cased, options: .atomic)
@@ -406,24 +406,24 @@ import EditorBridge
         check(
             outside.prefix(2).map(\.kind) == [.saved, .replaced] && outside[1].format == nil
                 && outside[0].format == FileFormat(encoding: .utf8, bom: false),
-            "F7 bytes that another program wrote are kept without the document's format, to be detected on reading")
+            "history fix 7: bytes that another program wrote are kept without the document's format, to be detected on reading")
         check(
             try LocalHistory.snapshot(
                 store.data(forPath: key(cased), version: outside[1].id), of: outside[1], name: "x"
             ).bytes == Data("hi".utf8),
-            "F7 and they are decoded by detection when compared")
+            "history fix 7: and they are decoded by detection when compared")
 
         // Finding 2: versions expire while the switch is off.
         var options = delegate.settings.value
         options.keepLocalHistory = false
         _ = try delegate.settings.save(options)
         clock.advance(31 * 24 * 60 * 60)
-        check(try store.versions(forPath: key(cased)).count >= 2, "F2 fixture: versions older than thirty days are still there")
+        check(try store.versions(forPath: key(cased)).count >= 2, "history fix 2: fixture: versions older than thirty days are still there")
         LocalHistory.pruneAtLaunch()
         await settle()
         check(
             store.usage() == LocalHistoryUsage(files: 0, versions: 0, bytes: 0),
-            "F2 with the switch off the launch prune still expires old versions")
+            "history fix 2: with the switch off the launch prune still expires old versions")
         options.keepLocalHistory = nil
         _ = try delegate.settings.save(options)
 
@@ -438,11 +438,11 @@ import EditorBridge
             try? good.write(to: settingsURL)
             delegate.installEditorServices()
         }
-        try require(unreadable.settings.loadFailureMessage != nil, "F7 fixture: the settings file cannot be read")
+        try require(unreadable.settings.loadFailureMessage != nil, "history fix 7: fixture: the settings file cannot be read")
         let before = try store.versions(forPath: key(cased)).map(\.id)
         check(
             !LocalHistory.isEnabled && !doc.validateUserInterfaceItem(command),
-            "F7 with unreadable settings local history is off, not silently on")
+            "history fix 7: with unreadable settings local history is off, not silently on")
         clock.advance(10)
         try await write("saved while settings are unreadable\n", to: doc, cased)
         clock.advance(31 * 24 * 60 * 60)
@@ -450,6 +450,6 @@ import EditorBridge
         await settle()
         check(
             try store.versions(forPath: key(cased)).map(\.id) == before && !before.isEmpty,
-            "F7 with unreadable settings a save keeps no version and nothing kept is expired or deleted")
+            "history fix 7: with unreadable settings a save keeps no version and nothing kept is expired or deleted")
     }
 }
