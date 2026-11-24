@@ -228,6 +228,7 @@ import AppKit
     }
     func applicationDidBecomeActive(_ notification: Notification) {
         startForegroundInterfaceIfNeeded()
+        (NSDocumentController.shared as? TextDocumentController)?.endStalledReview()
         let front = currentDocument
         front?.externalFile.setApplicationActive(true)
         front?.externalFile.check(prioritized: true)
@@ -689,9 +690,28 @@ import AppKit
         }
         return true
     }
+    static let unkeptTextNotice =
+        "TextTank did not quit: an untitled document's unsaved text could not be kept. Save it, then quit again."
+    private func refuseQuitForUnkeptText() {
+        automaticSession?.cancelReview()
+        releaseQuitHolds()
+        launchReviewSuspended = false
+        knownWorkspace?.showTabMessage(Self.unkeptTextNotice)
+        DispatchQueue.main.async { [weak self] in self?.deliverLaunchInventory() }
+    }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         launchReviewSuspended = true
-        if !reviewingTermination { holdUntitledForQuit() }
+        if !reviewingTermination {
+            holdUntitledForQuit()
+            // AppKit's own review may already have been accepted, with every close noted. A held
+            // document whose text changed since and cannot be written and verified again must not
+            // be closed on the strength of its earlier copy: the quit is refused, everything is
+            // open again, and that earlier copy is still on disk.
+            if !confirmQuitHolds() {
+                refuseQuitForUnkeptText()
+                return .terminateCancel
+            }
+        }
         if NSDocumentController.shared.documents.allSatisfy({ !$0.isDocumentEdited }) {
             commitSession()
             closeAllForTermination()
@@ -721,8 +741,7 @@ import AppKit
         if didReviewAll, !confirmQuitHolds() {
             // Text changed during the review and its copy could not be verified again: stay open.
             didReviewAll = false
-            knownWorkspace?.showTabMessage(
-                "TextTank did not quit: an untitled document's unsaved text could not be kept. Save it, then quit again.")
+            knownWorkspace?.showTabMessage(Self.unkeptTextNotice)
         }
         if didReviewAll {
             commitSession()

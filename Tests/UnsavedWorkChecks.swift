@@ -340,7 +340,69 @@ import EditorBridge
             try FileManager.default.removeItem(at: file)
         }
         try? FileManager.default.removeItem(at: metadata)
-        withExtendedLifetime([first, second, third, fourth, fifth]) {}
+        // Fix round 2. AppKit's own review was accepted, so the held document's close is noted
+        // and it has left the list of open documents. Its text then changes, and the second
+        // hold cannot write the newer copy. The quit is refused; the earlier copy is still there.
+        let sixth = delegate()
+        let keep = DocumentFactory.makeUntitled()
+        _ = keep.editor.replaceSelection("first text")
+        let keepID = keep.recoveryID
+        controller.willReviewOpenDocuments?()
+        try require(keep.isHeldForQuit, "R2 fixture: the review's start held the untitled document")
+        keep.close()
+        controller.didReviewOpenDocuments?(true)
+        try require(
+            keep.quitCloseDeferred && !controller.documents.contains(keep),
+            "R2 fixture: the accepted review left the close noted")
+        _ = keep.editor.replaceSelection(" changed")
+        keep.dependencies.beforeQuitHold = { throw POSIXError(.ENOSPC) }
+        let refused = sixth.applicationShouldTerminate(app)
+        check(
+            refused == .terminateCancel && keep.isOpen && controller.documents.contains(keep),
+            "R2 a newer copy that cannot be verified refuses the quit and leaves the document open")
+        check(
+            try store.load(id: keepID).text == "first text" && keep.editor.text == "first text changed"
+                && keep.isDocumentEdited && !keep.isHeldForQuit && !keep.quitCloseDeferred
+                && sixth.workspaceWindow.lastTabMessage == AppDelegate.unkeptTextNotice,
+            "R2 the earlier verified copy still exists, the newer text is in the open tab, and the status line says why")
+        keep.dependencies.beforeQuitHold = nil
+        check(
+            try sixth.applicationShouldTerminate(app) == .terminateNow && !keep.isOpen
+                && store.load(id: keepID).text == "first text changed",
+            "R2 once the copy can be written the same quit goes ahead and keeps the newer text")
+        for file in try FileManager.default.contentsOfDirectory(at: store.directory, includingPropertiesForKeys: nil)
+        where file.lastPathComponent.hasPrefix(keepID.uuidString) { try FileManager.default.removeItem(at: file) }
+        try? FileManager.default.removeItem(at: metadata)
+
+        // A file whose close is only noted is still found when it is opened again.
+        let seventh = delegate()
+        let again = try DocumentFactory.openCaptured(WorkspaceStore.captureRegularFile(fileURL), from: fileURL)
+        controller.nativeReviewDepth = 1
+        again.close()
+        try require(
+            again.isOpen && again.quitCloseDeferred && !controller.documents.contains(again),
+            "R2 fixture: a file's close is noted while a quit review is pending")
+        var link = URLComponents()
+        link.scheme = "texttank"
+        link.host = "open"
+        link.queryItems = [URLQueryItem(name: "path", value: fileURL.path)]
+        let tabs = seventh.workspaceWindow.presentations.count
+        let reopened = try TextOpenRequest(try required(link.string)).open()
+        check(
+            controller.document(for: fileURL) === again && reopened === again
+                && seventh.workspaceWindow.presentations.count == tabs && !controller.documents.contains(again),
+            "R2 opening a noted file again selects its tab instead of making a second document")
+        // A review that AppKit never finished is ended as cancelled once nothing can answer it.
+        controller.endStalledReview(after: 0)
+        check(
+            controller.nativeReviewDepth == 0 && !controller.isReviewingOpenDocuments
+                && controller.documents.contains(again) && !again.quitCloseDeferred && again.isOpen,
+            "R2 a stalled review is ended and every noted document is registered again")
+        again.close()
+        check(!again.isOpen && !controller.documents.contains(again), "R2 after that a close is a close again")
+        controller.endStalledReview(after: 0)
+        check(controller.nativeReviewDepth == 0, "R2 with no review pending there is nothing to end")
+        withExtendedLifetime([first, second, third, fourth, fifth, sixth, seventh]) {}
     }
     private static func rfEdit(_ controller: TextDocumentController) -> TextDocument? {
         controller.documents.compactMap { $0 as? TextDocument }.first { $0.fileURL != nil }

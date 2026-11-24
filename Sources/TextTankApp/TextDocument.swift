@@ -312,8 +312,12 @@ import UniformTypeIdentifiers
     /// False leaves the document edited and unheld, so the ordinary review asks.
     @discardableResult func holdForQuit() -> Bool {
         if let quitHold, quitHold == recoveryRevision { return true }
-        releaseQuitHold()
-        guard isEditedUntitled, !recoveryClosed, !automaticRecoveryPaused else { return false }
+        // An earlier hold stays in force until a newer copy is verified: its copy is the only
+        // one known to be good, and nothing may remove it while this attempt can still fail.
+        let earlier = quitHold
+        guard isOpen, fileURL == nil, super.isDocumentEdited, !recoveryClosed, !automaticRecoveryPaused else {
+            return false
+        }
         cancelRecoveryTimers()
         recoveryGeneration += 1
         preparingRecoveryGeneration = nil
@@ -335,7 +339,13 @@ import UniformTypeIdentifiers
             quitHoldFlag.set(true)
             return true
         } catch {
-            // No sheet here: the review that follows asks about this document by name.
+            // No sheet here: the review that follows asks about this document by name. With an
+            // earlier hold the document stays held at that revision; the caller sees false and
+            // must not let the quit go on.
+            if let earlier {
+                quitHold = earlier
+                quitHoldFlag.set(true)
+            }
             lastRecoveryError = error
             recoveryCopyKept = false
             showRecoveryFailure(error)
@@ -850,13 +860,7 @@ import UniformTypeIdentifiers
             }
         }
         // Text typed after the copy was verified: write it again, or keep the earlier copy.
-        if let quitHold, quitHold != recoveryRevision {
-            let earlier = quitHold
-            if !holdForQuit() {
-                self.quitHold = earlier
-                quitHoldFlag.set(true)
-            }
-        }
+        if let quitHold, quitHold != recoveryRevision { holdForQuit() }
         presentation?.host.tabCommands.willClose(self)
         isClosed = true
         bulkReceipt = nil
