@@ -553,6 +553,103 @@ extension DocumentChecks {
             document.close()
         }
 
+        // V4: Show Line Numbers, Show Whitespace and Show Line Endings are one stored choice.
+        section("stored view choices reach every editor view", #line) {
+            let delegate = AppDelegate()
+            delegate.installEditorServices()
+            let legacyURL = TestPaths.fixtures.appendingPathComponent("persistence/Settings.json")
+            let legacy = try JSONDecoder().decode(EditorSettings.self, from: Data(contentsOf: legacyURL))
+            check(
+                legacy.lineNumbers == nil && legacy.lineNumbersEnabled && legacy.showWhitespace == nil
+                    && !legacy.showWhitespaceEnabled && legacy.showLineEndings == nil
+                    && !legacy.showLineEndingsEnabled,
+                "V4 settings written before the three view choices show line numbers and hide both kinds of mark")
+            try delegate.settings.save(legacy)
+            defer { _ = try? delegate.settings.save(EditorSettings()) }
+            let (document, controller, window) = try opened("view-choice-a.txt", "one\n\ttwo\n")
+            let (other, otherController, _) = try opened("view-choice-b.txt", "three\n")
+            var later: TextDocument?
+            // Closed on every exit, so a failed requirement leaves no tab behind for later sections.
+            defer {
+                later?.close()
+                other.close()
+                document.close()
+            }
+            delegate.workspaceWindow.activate(controller)
+            delegate.noteActive(controller)
+            _ = window.makeFirstResponder(document.editor)
+            controller.clone(nil)
+            let clone = try requireValue(controller.secondary, "fixture: clone view")
+            @MainActor func views() -> [TTEditor] { [document.editor, clone, other.editor] }
+            @MainActor func item(_ id: String) -> NSMenuItem {
+                let item = NSMenuItem(
+                    title: "", action: #selector(EditorWindowController.command(_:)), keyEquivalent: "")
+                item.representedObject = id
+                return item
+            }
+            @MainActor func stored() throws -> EditorSettings {
+                try JSONDecoder().decode(EditorSettings.self, from: Data(contentsOf: delegate.settings.url))
+            }
+            let numbers = item("toggleLineNumbers")
+            check(
+                views().allSatisfy { $0.lineNumbersVisible && !$0.whitespaceVisible && !$0.lineEndingsVisible }
+                    && controller.validateMenuItem(numbers) && numbers.state == .on,
+                "V4 every view starts from the stored choices and Show Line Numbers is checked")
+            try controller.perform(command: "toggleLineNumbers")
+            check(
+                try stored().lineNumbers == false && delegate.settings.value.lineNumbers == false
+                    && views().allSatisfy { !$0.lineNumbersVisible },
+                "V4 Show Line Numbers off is saved and reaches the source pane, its clone and another tab at once")
+            check(
+                controller.validateMenuItem(numbers) && numbers.state == .off
+                    && otherController.validateMenuItem(numbers) && numbers.state == .off,
+                "V4 the Show Line Numbers checkmark is the stored value in every tab")
+            // A view changed on its own (a catalog toggle sent straight to it) does not move the checkmark.
+            clone.executeCommand(TTEditorCommandIdentifier(rawValue: "toggleLineNumbers"))
+            _ = window.makeFirstResponder(clone)
+            check(
+                controller.validateMenuItem(numbers) && numbers.state == .off,
+                "V4 the checkmark stays the stored value whichever pane has the keyboard")
+            // Any later settings write puts every view back on the stored choices.
+            delegate.settings.toggleAutoIndent(nil)
+            check(
+                views().allSatisfy { !$0.lineNumbersVisible },
+                "V4 another settings change leaves line numbers off in every view")
+            // Round trip: a second reader of the file, a rebuilt view and a new tab.
+            let reread = SettingsController(url: delegate.settings.url)
+            let rebuilt = TTEditor(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+            reread.apply(to: rebuilt)
+            let (third, laterController, _) = try opened("view-choice-c.txt", "four\n")
+            later = third
+            laterController.clone(nil)
+            check(
+                reread.value.lineNumbers == false && !rebuilt.lineNumbersVisible && !third.editor.lineNumbersVisible
+                    && laterController.secondary?.lineNumbersVisible == false,
+                "V4 line numbers stay off after settings are read again, in a rebuilt view, a new tab and its clone")
+            for (id, shown) in [
+                ("showWhitespace", \TTEditor.whitespaceVisible), ("toggleEOL", \TTEditor.lineEndingsVisible)
+            ] {
+                let mark = item(id)
+                try require(controller.validateMenuItem(mark) && mark.state == .off, "fixture: \(id) starts off")
+                try controller.perform(command: id)
+                let saved = try stored()
+                check(
+                    (id == "showWhitespace" ? saved.showWhitespace : saved.showLineEndings) == true
+                        && saved.lineNumbers == false
+                        && (views() + [third.editor]).allSatisfy { $0[keyPath: shown] }
+                        && controller.validateMenuItem(mark) && mark.state == .on,
+                    "V4 \(id) is saved, reaches every open view and checks its menu item")
+            }
+            try controller.perform(command: "toggleLineNumbers")
+            check(
+                try stored().lineNumbers == true && (views() + [third.editor]).allSatisfy(\.lineNumbersVisible)
+                    && controller.validateMenuItem(numbers) && numbers.state == .on,
+                "V4 Show Line Numbers on again is saved and reaches every open view")
+            check(
+                !document.isDocumentEdited && !other.isDocumentEdited,
+                "V4 a view choice does not edit any document")
+        }
+
         // G338, G342
         section("results captured through a clone survive Close Split View", #line) {
             let delegate = AppDelegate()

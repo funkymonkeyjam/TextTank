@@ -116,6 +116,9 @@ extension EditorSettings {
         editor.braceHighlightEnabled = value.braceHighlightEnabled
         editor.currentLineHighlightEnabled = value.currentLineHighlightEnabled
         editor.indentGuidesEnabled = value.indentGuidesEnabled
+        editor.lineNumbersVisible = value.lineNumbersEnabled
+        editor.whitespaceVisible = value.showWhitespaceEnabled
+        editor.lineEndingsVisible = value.showLineEndingsEnabled
         editor.wrap = value.wrap
     }
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
@@ -139,6 +142,12 @@ extension EditorSettings {
         updateViewPreference(.currentLineHighlight, sender: sender)
     }
     @objc func toggleIndentGuides(_ sender: Any?) { updateViewPreference(.indentGuides, sender: sender) }
+    /// Show Line Numbers, Show Whitespace and Show Line Endings stay catalog commands in the View
+    /// menu; the active tab routes them here so that one stored choice reaches every editor view.
+    func isEnabled(_ preference: EditorViewPreference) -> Bool { preference.enabled(in: value) }
+    func toggle(_ preference: EditorViewPreference, sender: Any? = nil) {
+        updateViewPreference(preference, sender: sender)
+    }
     private func updateViewPreference(_ preference: EditorViewPreference, sender: Any?) {
         guard loadError == nil, ignoredShortcutBindings.isEmpty else {
             showSettings(sender)

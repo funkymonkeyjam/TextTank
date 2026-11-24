@@ -38,6 +38,14 @@ package struct EditorSettings: Codable, Equatable {
     package var autoPairEnabled: Bool { autoPair ?? false }
     package var autoIndent: Bool?
     package var autoIndentEnabled: Bool { autoIndent ?? true }
+    /// View > Show Line Numbers, Show Whitespace and Show Line Endings, for every editor view.
+    /// A file without these members shows line numbers and hides both kinds of mark.
+    package var lineNumbers: Bool?
+    package var lineNumbersEnabled: Bool { lineNumbers ?? true }
+    package var showWhitespace: Bool?
+    package var showWhitespaceEnabled: Bool { showWhitespace ?? false }
+    package var showLineEndings: Bool?
+    package var showLineEndingsEnabled: Bool { showLineEndings ?? false }
     package var reopenLastSession: Bool?
     package var reopensLastSession: Bool { reopenLastSession ?? true }
     package var wrap: Bool
@@ -291,7 +299,8 @@ package enum EditorViewPreference: String {
     case autoIndent, autoPair, braceHighlight, currentLineHighlight, indentGuides
     /// Not a View command yet: the stored switch for scroll sync in Both (docs/preview-model.md).
     case syncPreviewScrolling
-    fileprivate func enabled(in settings: EditorSettings) -> Bool {
+    case lineNumbers, showWhitespace, showLineEndings
+    package func enabled(in settings: EditorSettings) -> Bool {
         switch self {
         case .autoIndent: return settings.autoIndentEnabled
         case .autoPair: return settings.autoPairEnabled
@@ -299,6 +308,21 @@ package enum EditorViewPreference: String {
         case .currentLineHighlight: return settings.currentLineHighlightEnabled
         case .indentGuides: return settings.indentGuidesEnabled
         case .syncPreviewScrolling: return settings.syncsPreviewScrolling
+        case .lineNumbers: return settings.lineNumbersEnabled
+        case .showWhitespace: return settings.showWhitespaceEnabled
+        case .showLineEndings: return settings.showLineEndingsEnabled
+        }
+    }
+}
+extension EditorCommand {
+    /// The stored choice behind a View command that applies to every editor view, not just the
+    /// focused one. Nil for every other command, zoom and folding included.
+    package var viewPreference: EditorViewPreference? {
+        switch self {
+        case .toggleLineNumbers: return .lineNumbers
+        case .showWhitespace: return .showWhitespace
+        case .toggleEOL: return .showLineEndings
+        default: return nil
         }
     }
 }

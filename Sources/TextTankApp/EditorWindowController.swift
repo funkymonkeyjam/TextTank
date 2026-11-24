@@ -589,7 +589,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                     : command.defaultMenuShortcut
                 item.isEnabled =
                     enabled && (!TTEditor.commandModifiesText(command.nativeIdentifier) || !editor.readOnly)
-                if command.isToggle { item.state = editor.commandIsChecked(command.nativeIdentifier) ? .on : .off }
+                if command.isToggle { item.state = isChecked(command, in: editor) ? .on : .off }
             }
         }
         func command(_ value: EditorCommand) { add(value.title, #selector(statusOption(_:)), self, value.rawValue) }
@@ -915,6 +915,12 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         guard let command = EditorCommand(rawValue: id) else { throw EditorCommandFailure.unsupported }
         if TTEditor.commandModifiesText(command.nativeIdentifier) { try editor.requireWritable() }
         let recorder = EditorServices.current?.macros
+        if let preference = command.viewPreference, let settings = EditorServices.current?.settings {
+            // One stored choice for every editor view; the settings write applies it to all of them.
+            recorder?.willExecuteCommand(id, on: editor)
+            settings.toggle(preference)
+            return
+        }
         let finishing: ((Bool) -> Void)?
         if command == .bookmarkCutLines || command == .bookmarkDeleteLines {
             finishing = recorder?.prepareUnrecordedChange(
@@ -932,6 +938,14 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         _ = editor.exchangeNextUndoName(priorName)
         finishing?(accepted && editor.revision != before)
         guard accepted else { throw EditorCommandFailure.unsupported }
+    }
+    /// A toggle's checkmark. The three stored View choices show the Editor Settings value, which
+    /// every view has; the other toggles show the given view's own state.
+    private func isChecked(_ command: EditorCommand, in editor: TTEditor) -> Bool {
+        if let preference = command.viewPreference, let settings = EditorServices.current?.settings {
+            return settings.isEnabled(preference)
+        }
+        return editor.commandIsChecked(command.nativeIdentifier)
     }
     deinit {
         precondition(Thread.isMainThread)
@@ -1503,6 +1517,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 pending.caretByte = savedActive.selectionCaret
                 geometry.otherAnchorByte = savedOther.selectionAnchor
                 geometry.otherCaretByte = savedOther.selectionCaret
+                pending.zoom = sessionZoom(of: savedActive)
+                geometry.otherZoom = sessionZoom(of: savedOther)
                 pending.split = geometry
                 return recordingViewMode(in: pending)
             }
@@ -1514,8 +1530,17 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 primaryFraction: min(1, max(0, fraction)))
             state.split?.activeWrapping = wrapping(of: active)
             state.split?.otherWrapping = wrapping(of: other)
+            state.split?.otherZoom = sessionZoom(of: other)
         }
+        state.zoom = sessionZoom(of: active)
         return recordingViewMode(in: state)
+    }
+    /// A pane still at the Editor Settings default zoom records nothing and follows that default
+    /// when the session is restored; only a zoom the person chose for the pane is kept.
+    private func sessionZoom(of editor: TTEditor) -> Int? { editor.followsDefaultZoom ? nil : editor.zoomLevel }
+    private func restoreSessionZoom(_ zoom: Int?, in editor: TTEditor) {
+        editor.resetZoomLevel()
+        if let zoom { editor.zoomLevel = zoom }
     }
     private func wrapping(of editor: TTEditor) -> WorkspaceLayoutState.PaneWrapping {
         editor.wrap ? .wrapped(documentLine: editor.sessionTopDocumentLine, subline: editor.sessionTopSubline)
@@ -1528,6 +1553,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             let clone = secondary ?? addClone()
             active = state.secondaryActive ? clone : primaryEditor
             let other = state.secondaryActive ? primaryEditor : clone
+            // Zoom first: the rows and offsets restored below are measured at the restored size.
+            restoreSessionZoom(state.otherZoom, in: other)
+            restoreSessionZoom(tab.zoom, in: active)
             // Establish live, byte-clamped selections immediately, even when the
             // tab is hidden. Only geometry waits for the split's mounted width.
             other.restoreClosedTabView(anchor: state.otherAnchorByte, caret: state.otherCaretByte, firstVisibleLine: 0)
@@ -1536,6 +1564,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             applyRestoredSplitIfMounted()
         } else {
             if let clone = secondary { removeClone(clone) }
+            restoreSessionZoom(tab.zoom, in: active)
             active.restoreClosedTabView(anchor: tab.anchorByte, caret: tab.caretByte, firstVisibleLine: tab.firstVisibleLine)
         }
         lastEditor = active
@@ -1628,7 +1657,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 guard activeEditor.hasBookmarks else { return false }
             default: break
             }
-            item.state = command.isToggle && activeEditor.commandIsChecked(command.nativeIdentifier) ? .on : .off
+            item.state = command.isToggle && isChecked(command, in: activeEditor) ? .on : .off
             return !TTEditor.commandModifiesText(command.nativeIdentifier) || !activeEditor.readOnly
         case #selector(toggleWrap(_:)):
             // Wrapping belongs to the view, as the status bar's Wrap field shows it.

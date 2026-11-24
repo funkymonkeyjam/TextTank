@@ -132,7 +132,9 @@ import EditorBridge
         var docs = [TextDocument](), urls = [URL](), expectedBytes = [Data]()
         for i in 0..<8 {
             let url = root.appendingPathComponent("original-\(i).txt")
-            let text = "original content SALMON-\(i) 🦊\n" + String(repeating: "second line\n", count: 400)
+            // Wider than a pane, so the horizontal offsets recorded below are real scroll positions.
+            let wideLine = "second line " + String(repeating: "wide ", count: 120) + "\n"
+            let text = "original content SALMON-\(i) 🦊\n" + String(repeating: wideLine, count: 400)
             let bytes = i == 5 ? try required(text.data(using: .utf16LittleEndian)) : Data(text.utf8)
             try bytes.write(to: url)
             let read = try WorkspaceStore.captureRegularFile(url)
@@ -162,6 +164,12 @@ import EditorBridge
         for presentation in [backgroundSplit, foregroundSplit] {
             presentation.clone(nil)
             let clone = try required(presentation.secondary)
+            // V4: one pane of each split has its own zoom, set before its viewport is placed.
+            if presentation === backgroundSplit {
+                presentation.primaryEditor.zoomLevel = 6
+            } else {
+                clone.zoomLevel = -2
+            }
             presentation.split.setPosition(presentation.split.bounds.width * 0.63, ofDividerAt: 0)
             presentation.primaryEditor.restoreClosedTabView(anchor: 43, caret: 32, firstVisibleLine: 3)
             clone.restoreClosedTabView(anchor: 83, caret: 74, firstVisibleLine: 8)
@@ -169,11 +177,26 @@ import EditorBridge
             clone.horizontalScrollOffset = 41
             if presentation === backgroundSplit { host.window?.makeFirstResponder(presentation.primaryEditor) }
         }
+        // V4: a zoom chosen for one tab or pane is part of its session record; the default is not.
+        // The two splits above each have one zoomed pane.
+        let zoomed = try required(docs[4].presentation)
+        zoomed.primaryEditor.zoomLevel = 4
         // Return to the original group-active tabs without changing their last-focused panes.
         host.activate(try required(docs[1].presentation))
         host.activate(foregroundSplit)
         check(foregroundSplit.activeEditor === foregroundSplit.secondary, "setup focuses the clone in the active tab")
         let expected = host.captureSessionLayout()
+        let expectedTabs = Dictionary(
+            uniqueKeysWithValues: expected.groups.flatMap(\.tabs).map { ($0.documentID, $0) })
+        check(
+            expectedTabs[ids[4]]?.zoom == 4 && expectedTabs[ids[3]]?.split?.secondaryActive == false
+                && expectedTabs[ids[3]]?.zoom == 6 && expectedTabs[ids[3]]?.split?.otherZoom == nil
+                && expectedTabs[ids[6]]?.split?.secondaryActive == true && expectedTabs[ids[6]]?.zoom == -2
+                && expectedTabs[ids[6]]?.split?.otherZoom == nil,
+            "V4 the session records each zoomed pane's level against the pane that has it")
+        check(
+            [0, 1, 2, 5, 7].allSatisfy { expectedTabs[ids[$0]]?.zoom == nil && expectedTabs[ids[$0]]?.split == nil },
+            "V4 a tab at the default zoom records no zoom")
         first.checkpointSession()
         let stop = Date().addingTimeInterval(5)
         while !FileManager.default.fileExists(atPath: metadata.path) && Date() < stop {
@@ -315,6 +338,45 @@ import EditorBridge
                     && presentation.primaryEditor.horizontalScrollOffset == 17 && clone.horizontalScrollOffset == 41,
                 "mounted split restores its divider and both native viewports " + name)
         }
+        // V4: the zoomed panes come back zoomed, every other pane follows the Settings default.
+        let rezoomed = try required(savedDocs[urls[4]]?.presentation)
+        check(
+            rezoomed.primaryEditor.zoomLevel == 4 && !rezoomed.primaryEditor.followsDefaultZoom
+                && hidden.primaryEditor.zoomLevel == 6 && hiddenClone.zoomLevel == 0 && hiddenClone.followsDefaultZoom
+                && shownClone.zoomLevel == -2 && shown.primaryEditor.zoomLevel == 0
+                && shown.primaryEditor.followsDefaultZoom,
+            "V4 relaunch restores the zoom of a single tab and of one pane of each split, and no other pane's")
+        check(
+            [0, 1, 5, 7].allSatisfy { index in
+                guard let editor = savedDocs[urls[index]]?.presentation?.primaryEditor else { return false }
+                return editor.zoomLevel == 0 && editor.followsDefaultZoom
+            }, "V4 tabs saved at the default zoom reopen at the default zoom")
+        @MainActor func textSize(_ presentation: EditorWindowController) -> [String] {
+            (presentation.statusOptionsMenu("position")?.items.map(\.title) ?? []).filter {
+                $0.hasPrefix("Text size ") && $0.hasSuffix(" pt")
+            }
+        }
+        second.workspaceWindow.activate(rezoomed)
+        check(
+            spinUntil("the restored tab's text-size readout", { textSize(rezoomed) == ["Text size 18 pt"] }),
+            "V4 the status text-size readout shows a restored tab's zoomed size")
+        second.workspaceWindow.activate(shown)
+        _ = second.workspaceWindow.window?.makeFirstResponder(shownClone)
+        check(
+            spinUntil("the restored clone's text-size readout", { textSize(shown) == ["Text size 12 pt"] }),
+            "V4 the status text-size readout follows the restored zoom of the focused pane")
+        let restoredDefault = try required(savedDocs[urls[7]]?.presentation)
+        second.workspaceWindow.activate(restoredDefault)
+        check(
+            spinUntil("an unzoomed tab's text-size readout", { textSize(restoredDefault) == ["Text size 14 pt"] }),
+            "V4 the status text-size readout of a tab restored at the default zoom is the Settings size")
+        rezoomed.primaryEditor.resetZoomLevel()
+        check(
+            rezoomed.primaryEditor.zoomLevel == 0
+                && rezoomed.sessionTab(documentID: DocumentID(UUID()), pinned: false).zoom == nil,
+            "V4 Actual Size returns a restored zoomed tab to the Settings default and its record drops the zoom")
+        second.workspaceWindow.activate(shown)
+        _ = second.workspaceWindow.window?.makeFirstResponder(shownClone)
         // A local file may become shorter, or an old byte position may now lie inside a scalar.
         let originalState = shown.sessionTab(documentID: DocumentID(u6.recoveryID), pinned: false)
         var stale = originalState

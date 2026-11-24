@@ -362,6 +362,9 @@ struct CommandRecents: Equatable {
         default: break
         }
         if selector == "command:", let raw = item.representedObject as? String {
+            if let value = EditorCommand(rawValue: raw), value.viewPreference != nil {
+                return ("Reads view settings • Changes them for every editor", nil)
+            }
             if let value = EditorCommand(rawValue: raw), value.isViewOnly { return ("Changes active editor view", nil) }
             if raw == EditorCommand.bookmarkCopyLines.rawValue {
                 return ("Reads bookmarked lines • Writes clipboard", nil)
