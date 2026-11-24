@@ -19,15 +19,62 @@ import AppKit
     static func shortcut(for action: Selector, in menu: NSMenu?) -> String? {
         guard let menu else { return nil }
         for item in menu.items {
-            if item.action == action, !item.keyEquivalent.isEmpty {
-                let modifiers = item.keyEquivalentModifierMask
-                return (modifiers.contains(.control) ? "⌃" : "") + (modifiers.contains(.option) ? "⌥" : "")
-                    + (modifiers.contains(.shift) ? "⇧" : "") + (modifiers.contains(.command) ? "⌘" : "")
-                    + item.keyEquivalent.uppercased()
-            }
+            if item.action == action, let text = shortcut(of: item) { return text }
             if let found = shortcut(for: action, in: item.submenu) { return found }
         }
         return nil
+    }
+    /// The key equivalent a menu item has now, written the way the menu bar draws it, or nil
+    /// when it has none. It reads the item itself, so a shortcut assigned in Settings, a default
+    /// that gave way to one and a macro's own key are all shown as they currently are (DS-20).
+    static func shortcut(of item: NSMenuItem) -> String? {
+        var key = item.keyEquivalent
+        guard !key.isEmpty else { return nil }
+        var modifiers = item.keyEquivalentModifierMask.intersection([.control, .option, .shift, .command])
+        // AppKit reads an uppercase letter as that letter with Shift.
+        if key.count == 1, key != key.lowercased() { modifiers.insert(.shift) }
+        if let scalar = key.unicodeScalars.first, key.unicodeScalars.count == 1 {
+            switch scalar.value {
+            case 0xF704...0xF726: key = "F\(scalar.value - 0xF703)"
+            case 0xF700: key = "↑"
+            case 0xF701: key = "↓"
+            case 0xF702: key = "←"
+            case 0xF703: key = "→"
+            case 0xF729: key = "↖"
+            case 0xF72B: key = "↘"
+            case 0xF72C: key = "⇞"
+            case 0xF72D: key = "⇟"
+            case 0xF728: key = "⌦"
+            case 0x09: key = "⇥"
+            case 0x19:
+                key = "⇥"
+                modifiers.insert(.shift)
+            case 0x0D, 0x03: key = "↩"
+            case 0x08, 0x7F: key = "⌫"
+            case 0x1B: key = "⎋"
+            case 0x20: key = "Space"
+            default: key = key.uppercased()
+            }
+        } else {
+            key = key.uppercased()
+        }
+        return (modifiers.contains(.control) ? "⌃" : "") + (modifiers.contains(.option) ? "⌥" : "")
+            + (modifiers.contains(.shift) ? "⇧" : "") + (modifiers.contains(.command) ? "⌘" : "") + key
+    }
+    /// The same key equivalent in words, for assistive technology (DS-70).
+    static func spokenShortcut(of item: NSMenuItem) -> String? {
+        guard let text = shortcut(of: item) else { return nil }
+        let names: [Character: String] = [
+            "⌃": "Control", "⌥": "Option", "⇧": "Shift", "⌘": "Command", "↑": "Up Arrow", "↓": "Down Arrow",
+            "←": "Left Arrow", "→": "Right Arrow", "↖": "Home", "↘": "End", "⇞": "Page Up", "⇟": "Page Down",
+            "⌦": "Forward Delete", "⇥": "Tab", "↩": "Return", "⌫": "Delete", "⎋": "Escape"
+        ]
+        var parts: [String] = [], rest = ""
+        for character in text {
+            if rest.isEmpty, let name = names[character] { parts.append(name) } else { rest.append(character) }
+        }
+        if !rest.isEmpty { parts.append(rest) }
+        return parts.joined(separator: "-")
     }
     static func selectedID(_ popup: NSPopUpButton) -> String? { popup.selectedItem?.representedObject as? String }
     static func label(_ title: String, control: NSView, caption: NSTextField? = nil) {

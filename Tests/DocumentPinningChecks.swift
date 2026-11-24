@@ -1108,9 +1108,17 @@ extension DocumentChecks {
                     "target": "responder",
                 ]
             ]
-            var accounted = identities(formerCommands + deliberatelyAdded + togglePreviewAdded)
+            // Given a key on 23 November 2026: File > Quick Open… is the same command with a default
+            // shortcut, Shift-Command-O. Its row without a key is replaced by its row with one.
+            let quickOpenWithoutKey: [[String: String]] = [
+                ["action": "quickOpen:", "object": "", "key": "", "modifiers": "1048576", "target": "explicit"]
+            ]
+            let quickOpenWithKey: [[String: String]] = [
+                ["action": "quickOpen:", "object": "", "key": "O", "modifiers": "1048576", "target": "explicit"]
+            ]
+            var accounted = identities(formerCommands + deliberatelyAdded + togglePreviewAdded + quickOpenWithKey)
             var removedRowsInFixture = 0
-            for removed in identities(deliberatelyRemoved) {
+            for removed in identities(deliberatelyRemoved + quickOpenWithoutKey) {
                 if let index = accounted.firstIndex(of: removed) {
                     accounted.remove(at: index)
                     removedRowsInFixture += 1
@@ -1118,7 +1126,8 @@ extension DocumentChecks {
             }
             let current = identities(menuSnapshot)
             check(
-                formerCommands.count == 338 && removedRowsInFixture == deliberatelyRemoved.count,
+                formerCommands.count == 338
+                    && removedRowsInFixture == deliberatelyRemoved.count + quickOpenWithoutKey.count,
                 "DS-D4 the fixture lists all 338 commands of the fourteen-menu bar, the two rows of the retired recipe automation among them")
             if !check(
                 current == accounted.sorted(),
