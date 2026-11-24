@@ -74,6 +74,8 @@ import EditorBridge
         }
         try stateSymbols(root: root, app: app, host: host)
         closeAll(host)
+        try mouseAndToolTip(root: root, app: app, host: host)
+        closeAll(host)
     }
 
     // MARK: The edited dot and the state symbols
@@ -244,6 +246,163 @@ import EditorBridge
             check(false, "fixture: the outside-change symbol of the plain tab")
         }
         _ = (other, fillers)
+    }
+    // MARK: Tooltip, the other mouse button and a double-click on the empty strip
+
+    private static func mouse(
+        _ type: NSEvent.EventType, at point: NSPoint, clicks: Int = 1, in window: NSWindow
+    ) throws -> NSEvent {
+        try requireValue(
+            NSEvent.mouseEvent(
+                with: type, location: point, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: clicks, pressure: 1), "fixture: a mouse event")
+    }
+    /// The view a press at `point` (in the strip's coordinates) reaches, as AppKit would find it.
+    private static func target(at point: NSPoint, in strip: DocumentTabStrip) throws -> NSView {
+        try requireValue(
+            strip.hitTest(strip.superview?.convert(point, from: strip) ?? point), "fixture: a view under the pointer")
+    }
+    private static func otherClick(down: NSPoint, up: NSPoint, in strip: DocumentTabStrip, window: NSWindow) throws {
+        let view = try target(at: down, in: strip)
+        view.otherMouseDown(with: try mouse(.otherMouseDown, at: strip.convert(down, to: nil), in: window))
+        view.otherMouseUp(with: try mouse(.otherMouseUp, at: strip.convert(up, to: nil), in: window))
+    }
+    private static func click(_ count: Int, at point: NSPoint, in strip: DocumentTabStrip, window: NSWindow) throws {
+        let view = try target(at: point, in: strip)
+        view.mouseDown(with: try mouse(.leftMouseDown, at: strip.convert(point, to: nil), clicks: count, in: window))
+        view.mouseUp(with: try mouse(.leftMouseUp, at: strip.convert(point, to: nil), clicks: count, in: window))
+    }
+    private static func middle(of tab: EditorWindowController, in strip: DocumentTabStrip) throws -> NSPoint {
+        let button = try tabButton(tab, in: strip)
+        return strip.convert(NSPoint(x: button.bounds.midX, y: button.bounds.midY), from: button)
+    }
+
+    private static func mouseAndToolTip(root: URL, app: AppDelegate, host: WorkspaceWindowController) throws {
+        // The rule, with a made-up home folder.
+        let home = "/home/person"
+        check(
+            DocumentTabStrip.tabToolTip(name: "a.txt", path: "/home/person/Notes/a.txt", notice: nil, home: home)
+                == "~/Notes/a.txt",
+            "a saved file's tooltip is its full path with the home folder written as ~")
+        check(
+            DocumentTabStrip.tabToolTip(name: "a.txt", path: "/home/personal/a.txt", notice: nil, home: home)
+                == "/home/personal/a.txt"
+                && DocumentTabStrip.tabToolTip(name: "a.txt", path: "/srv/a.txt", notice: nil, home: home + "/")
+                    == "/srv/a.txt"
+                && DocumentTabStrip.tabToolTip(name: "person", path: home, notice: nil, home: home) == "~",
+            "only the home folder itself is abbreviated: a folder whose name merely starts the same is not")
+        check(
+            DocumentTabStrip.tabToolTip(name: "Untitled", path: nil, notice: nil, home: home) == "Untitled",
+            "a document with no file shows its name")
+        check(
+            DocumentTabStrip.tabToolTip(name: "a.txt", path: "/home/person/a.txt", notice: "Changed on disk", home: home)
+                == "~/a.txt\nChanged on disk",
+            "a notice follows the path on its own line")
+
+        let folder = root.appendingPathComponent("tab-mouse")
+        let (first, firstTab) = try open("first.txt", "first\n", in: folder)
+        let (second, secondTab) = try open("second.txt", "second\n", in: folder)
+        let (third, thirdTab) = try open("third.txt", "third\n", in: folder)
+        let strip = try requireValue(host.tabStrips.first, "fixture: the focused group's tab strip")
+        let window = try requireValue(host.window, "workspace window")
+        try resize(host, to: 1000, strip: strip)
+        try hover(nil, in: strip)
+        let path = try requireValue(first.fileURL?.path, "fixture: saved path")
+        let expected = DocumentTabStrip.tabToolTip(name: "first.txt", path: path, notice: nil)
+        let userHome = NSHomeDirectory()
+        check(
+            try tabButton(firstTab, in: strip).toolTip == expected && expected.hasSuffix("/tab-mouse/first.txt")
+                && (path.hasPrefix(userHome + "/") ? expected.hasPrefix("~/") : expected == path),
+            "the tab of a saved file shows that path as its tooltip")
+        let untitled = DocumentFactory.makeUntitled()
+        let untitledTab = try requireValue(untitled.presentation, "fixture: untitled tab")
+        check(
+            try tabButton(untitledTab, in: strip).toolTip == untitled.displayName,
+            "the tab of an untitled document shows its name as its tooltip")
+        _ = thirdTab.primaryEditor.replaceSelection("mine ")
+        try Data("changed elsewhere\n".utf8).write(to: try requireValue(third.fileURL, "fixture: saved file"), options: .atomic)
+        third.externalFile.check(prioritized: true)
+        spinUntil("the outside change") { third.externalFile.notice != nil }
+        check(
+            try tabButton(thirdTab, in: strip).toolTip
+                == DocumentTabStrip.tabToolTip(name: "third.txt", path: third.fileURL?.path, notice: "Changed on disk")
+                && tabButton(thirdTab, in: strip).toolTip?.hasSuffix("/third.txt\nChanged on disk") == true,
+            "with an outside change the tooltip gives the path and then the notice")
+
+        // The other mouse button closes the tab it is pressed and released on.
+        host.activate(firstTab)
+        func documents() -> Int { NSDocumentController.shared.documents.count }
+        var count = documents()
+        try otherClick(down: try middle(of: secondTab, in: strip), up: try middle(of: firstTab, in: strip), in: strip, window: window)
+        settle()
+        check(
+            documents() == count && second.isOpen && first.isOpen,
+            "an other-button press on one tab released on another closes nothing")
+        let empty = NSPoint(x: strip.bounds.maxX - 60, y: strip.bounds.midY)
+        check(
+            strip.tabLayout(try requireValue(untitledTab.tabID, "fixture: untitled tab")).map { $0.close.maxX + 8 < empty.x }
+                == true, "fixture: the strip has an empty part after its last tab")
+        try otherClick(down: empty, up: empty, in: strip, window: window)
+        settle()
+        check(documents() == count, "an other-button click on the empty strip closes nothing")
+        try otherClick(down: try middle(of: secondTab, in: strip), up: try middle(of: secondTab, in: strip), in: strip, window: window)
+        spinUntil("the other-button close") { !second.isOpen }
+        check(
+            !second.isOpen && documents() == count - 1 && first.isOpen && third.isOpen && host.active === firstTab,
+            "an other-button click on a tab closes that tab, and only that one, without selecting it first")
+        let closeOfFirst = try closeButton(first, in: strip)
+        let onClose = strip.convert(NSPoint(x: closeOfFirst.bounds.midX, y: closeOfFirst.bounds.midY), from: closeOfFirst)
+        host.activate(thirdTab)
+        count = documents()
+        try otherClick(down: onClose, up: onClose, in: strip, window: window)
+        spinUntil("the other-button close on the close button") { !first.isOpen }
+        check(
+            !first.isOpen && documents() == count - 1,
+            "the other button closes from anywhere on the tab, its close button included")
+
+        // A double-click on the empty strip is File > New; on a tab it is nothing new.
+        count = documents()
+        try click(1, at: empty, in: strip, window: window)
+        check(documents() == count, "a single click on the empty strip opens nothing")
+        try click(2, at: empty, in: strip, window: window)
+        let created = NSDocumentController.shared.documents.compactMap { $0 as? TextDocument }.filter {
+            $0 !== untitled && $0 !== third && $0.fileURL == nil
+        }
+        check(
+            documents() == count + 1 && created.count == 1 && host.active === created.first?.presentation
+                && host.model.focusedGroup == strip.groupSlot,
+            "a double-click on the empty part of the strip opens one new untitled tab and shows it")
+        count = documents()
+        let onThird = try middle(of: thirdTab, in: strip)
+        try click(1, at: onThird, in: strip, window: window)
+        try click(2, at: onThird, in: strip, window: window)
+        check(
+            documents() == count && host.active === thirdTab && third.isOpen,
+            "a double-click on a tab selects it and opens nothing")
+        // A release that did not begin on the empty strip, such as the end of a reorder, opens nothing.
+        let thirdID = try requireValue(thirdTab.tabID, "fixture: third tab")
+        check(strip.beginReorder(thirdID), "fixture: a reorder begins")
+        strip.updateReorder(at: empty)
+        strip.finishReorder(at: empty)
+        strip.mouseUp(with: try mouse(.leftMouseUp, at: strip.convert(empty, to: nil), clicks: 2, in: window))
+        check(documents() == count && !strip.isReordering, "the end of a reorder on the empty strip opens nothing")
+        // The window's frame keeps its own double-click on its inside edge.
+        if let border = window.contentView?.superview {
+            let claimed = stride(from: strip.bounds.maxX - 0.5, to: strip.bounds.maxX - 12, by: -0.5).map {
+                NSPoint(x: $0, y: strip.bounds.midY)
+            }.first { border.hitTest(border.convert(strip.convert($0, to: nil), from: nil)) === border }
+            if let claimed {
+                strip.mouseDown(with: try mouse(.leftMouseDown, at: strip.convert(claimed, to: nil), clicks: 2, in: window))
+                strip.mouseUp(with: try mouse(.leftMouseUp, at: strip.convert(claimed, to: nil), clicks: 2, in: window))
+                check(documents() == count, "a double-click where the window frame takes the pointer is left to the frame")
+            } else {
+                print("NOTE the window frame claims no point of the tab strip in this window; nothing to leave to it")
+            }
+        }
+    }
+    private static func settle() {
+        let end = Date().addingTimeInterval(0.2)
+        while Date() < end { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
     }
     private static func descendantImageViews(of view: NSView) -> [NSImageView] {
         view.subviews.flatMap { ($0 as? NSImageView).map { [$0] } ?? descendantImageViews(of: $0) }

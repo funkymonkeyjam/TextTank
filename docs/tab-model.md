@@ -338,3 +338,17 @@ So a 130-point tab shows close, and at most one of the two symbols, the outside 
 130-point tab in Preview or Both shows close, the eye and the outside change, and its title keeps 30
 points. Whatever is not drawn is still in the tab's tooltip, its accessibility label and the list of
 open tabs.
+
+**Tooltip.** A tab's tooltip is the file's full path with the home folder written as `~`; a document
+with no file shows its name. When the file changed outside TextTank the notice follows on a second
+line. Only the home folder itself is abbreviated, not a sibling whose name starts the same.
+
+**Mouse.** A click with the other (middle) mouse button closes the tab it is pressed and released
+on, anywhere on the tab, without selecting it first. It goes through the close button's route
+(`WorkspaceWindowController.closeTab`), so unsaved changes get the same review and Cancel leaves
+everything as it was (DS-12). Pressed on one tab and released on another, or on the empty strip, it
+does nothing. A double-click on the empty part of the strip focuses that group and runs the same
+action as File > New. A double-click on a tab is two clicks on that tab and nothing more. A tab's
+controls take their own clicks, so the end of a reorder never counts as a click on the strip. The
+window's frame has first refusal over its inside edge (`FrameTextClick`): a point the frame claims is
+never treated as empty strip, so AppKit's own handling of a double-click there is untouched.

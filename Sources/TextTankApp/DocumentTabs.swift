@@ -551,7 +551,7 @@ final class DocumentTabStrip: NSView {
             c.compared = compared
             c.select.title = name
             c.select.font = .systemFont(ofSize: NSFont.systemFontSize, weight: active ? .semibold : .regular)
-            c.select.toolTip = notice.map { name + " — " + $0 } ?? name
+            c.select.toolTip = Self.tabToolTip(name: name, path: doc.fileURL?.path, notice: notice)
             c.select.setAccessibilityValue(NSNumber(value: selected))
             c.select.setAccessibilitySelected(selected)
             c.select.image = NSImage(
@@ -787,10 +787,81 @@ final class DocumentTabStrip: NSView {
         pointer = point.flatMap { bounds.contains($0) ? $0 : nil }
         rehover()
     }
-    private func tabUnderPointer() -> TabID? {
-        guard let pointer else { return nil }
-        let p = row.convert(pointer, from: self)
+    private func tabUnderPointer() -> TabID? { pointer.flatMap { tab(at: $0) } }
+    /// The tab at `point`, in the strip's coordinates; nil for the empty part of the strip.
+    private func tab(at point: NSPoint) -> TabID? {
+        guard scroll.frame.contains(point) else { return nil }
+        let p = row.convert(point, from: self)
         return order.first { controls[$0]?.background.frame.contains(p) == true }
+    }
+
+    // MARK: Tooltip, the other mouse button and a double-click on the empty strip
+
+    /// A tab's tooltip: the file's full path with the home folder written as "~", or the name of
+    /// a document that has no file yet; then, on its own line, the notice when there is one.
+    static func tabToolTip(name: String, path: String?, notice: String?, home: String = NSHomeDirectory()) -> String {
+        var shown = name
+        if let path {
+            let home = home.count > 1 && home.hasSuffix("/") ? String(home.dropLast()) : home
+            if path == home {
+                shown = "~"
+            } else if home.count > 1, path.hasPrefix(home + "/") {
+                shown = "~" + path.dropFirst(home.count)
+            } else {
+                shown = path
+            }
+        }
+        return notice.map { shown + "\n" + $0 } ?? shown
+    }
+    /// The tab the other mouse button went down on. A tab's own controls do not handle that
+    /// button, so its events arrive here from whichever of them was under the pointer.
+    private var otherPress: TabID?
+    override func otherMouseDown(with event: NSEvent) {
+        otherPress = tab(at: convert(event.locationInWindow, from: nil))
+        if otherPress == nil { super.otherMouseDown(with: event) }
+    }
+    /// A click with the other (middle) mouse button closes the tab it was pressed and released on,
+    /// through the close button's own route, so unsaved changes get the same review (DS-12).
+    override func otherMouseUp(with event: NSEvent) {
+        guard let pressed = otherPress else {
+            super.otherMouseUp(with: event)
+            return
+        }
+        otherPress = nil
+        if tab(at: convert(event.locationInWindow, from: nil)) == pressed { host?.closeTab(pressed, sender: self) }
+    }
+    /// True after a press on the empty part of the strip, until its release.
+    private var emptyPress = false
+    /// Whether `point` (in the strip's coordinates) is the empty part of the strip and a click
+    /// there is the strip's to act on. The window's frame has first refusal over its inside edge,
+    /// where a double-click belongs to AppKit's own handling (see `FrameTextClick`): a point the
+    /// frame claims is never treated as empty strip.
+    private func isEmptyStrip(_ point: NSPoint) -> Bool {
+        guard bounds.contains(point), tab(at: point) == nil, !isReordering else { return false }
+        if let border = window?.contentView?.superview {
+            if border.hitTest(border.convert(convert(point, to: nil), from: nil)) === border { return false }
+        }
+        guard let hit = hitTest(superview?.convert(point, from: self) ?? point) else { return false }
+        return hit === self || hit === row || hit === scroll || hit === scroll.contentView
+    }
+    override func mouseDown(with event: NSEvent) {
+        emptyPress = isEmptyStrip(convert(event.locationInWindow, from: nil))
+        // The group still takes the click, which focuses it.
+        super.mouseDown(with: event)
+    }
+    /// A double-click on the empty part of the strip is File > New, in this group. A tab's own
+    /// controls take their clicks themselves, so a double-click on a tab never arrives here, and
+    /// a reorder ends on the tab it began on.
+    override func mouseUp(with event: NSEvent) {
+        let pressed = emptyPress
+        emptyPress = false
+        guard pressed, event.clickCount == 2, allowsSelection, isEmptyStrip(convert(event.locationInWindow, from: nil))
+        else {
+            super.mouseUp(with: event)
+            return
+        }
+        if host?.model.focusedGroup != groupSlot { host?.focusGroup(groupSlot) }
+        EditorServices.current?.newDocument(self)
     }
     /// Works out the hovered tab again from where the pointer was last seen. Called when the
     /// pointer moves and when the tabs move under it: a tab closed, tabs were reordered or the
