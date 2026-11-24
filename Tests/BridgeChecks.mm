@@ -1614,6 +1614,37 @@ int main(int argc, char **argv) {
         check(ed.revision==revision && !ed.modified && [ed.text isEqualToString:text] && [sv message:SCI_GETANCHOR]==2 && [sv message:SCI_GETCURRENTPOS]==5 && ![sv message:SCI_CANUNDO],
               "None of it touched the text, the selection, the revision, the save point or Undo");
         });
+        ttchecks::section("text area beside the gutter and scroll bars", [&] {
+        // The text area runs from the gutter to the pane's edge, or to a scroll bar that takes
+        // space (always shown, as on a Mac with a mouse); never a gutter's width short, and never under the bar.
+        NSMutableString *lines=[NSMutableString string]; for(int i=0;i<200;++i)[lines appendString:@"a line of text\n"];
+        for(NSNumber *choice in @[@(NSScrollerStyleOverlay),@(NSScrollerStyleLegacy)]) {
+            const NSScrollerStyle style=(NSScrollerStyle)choice.integerValue; const char *name=style==NSScrollerStyleLegacy?"always-shown":"overlay";
+            TTEditor *ed=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,900,500)];
+            ScintillaView *sv=(ScintillaView *)ed.subviews.firstObject; NSScrollView *scroll=sv.scrollView;
+            scroll.scrollerStyle=style; [ed loadDocumentText:lines]; ed.changeBarsVisible=YES; ed.centeredColumnCharacters=60;
+            auto paint=[&]{ [ed layoutSubtreeIfNeeded]; NSBitmapImageRep *rep=[ed bitmapImageRepForCachingDisplayInRect:ed.bounds]; [ed cacheDisplayInRect:ed.bounds toBitmapImageRep:rep]; [ed cacheDisplayInRect:ed.bounds toBitmapImageRep:rep]; };
+            auto sound=[&]{
+                paint();
+                const CGFloat gutter=NSWidth(scroll.verticalRulerView.frame);
+                const BOOL bar=style==NSScrollerStyleLegacy && scroll.hasVerticalScroller && !scroll.verticalScroller.hidden;
+                const CGFloat right=NSWidth(scroll.bounds)-(bar?NSWidth(scroll.verticalScroller.frame):0);
+                const NSInteger spare=ed.textAreaWidth-[ed textWidthOfColumns:60];
+                return fabs(NSMinX(scroll.contentView.frame)-gutter)<0.5 && fabs(NSMaxX(scroll.contentView.frame)-right)<0.5
+                    && (!bar || NSMinX(scroll.verticalScroller.frame)>=NSMaxX(scroll.contentView.frame)-0.5)
+                    && ed.textAreaWidth==(NSInteger)floor(right-gutter) && (spare>8 ? ed.textMarginLeft==spare/2 : ed.textMarginLeft<8);
+            };
+            check(sound(), [[NSString stringWithFormat:@"With %s scroll bars the text area is the pane less the gutter and a bar that takes space, and the column is centred in it",name] UTF8String]);
+            BOOL every=YES; NSInteger first=ed.textAreaWidth; BOOL sameWidth=YES;
+            // Heights at which the text scrolls, just fits and has room to spare, and back.
+            for(NSNumber *height in @[@300,@3300,@3214,@3230,@700,@500]) { [ed setFrameSize:NSMakeSize(900,height.doubleValue)]; every=every && sound(); sameWidth=sameWidth && ed.textAreaWidth==first; }
+            check(every && sameWidth, [[NSString stringWithFormat:@"With %s scroll bars a change of height alone never changes the text area's width or the column's margins",name] UTF8String]);
+            ed.lineNumbersVisible=NO; const BOOL withoutNumbers=sound(); ed.changeBarsVisible=NO; const BOOL withoutBars=sound(); ed.lineNumbersVisible=YES; ed.changeBarsVisible=YES;
+            check(withoutNumbers && withoutBars && sound(), [[NSString stringWithFormat:@"With %s scroll bars the text area follows the gutter as line numbers and change bars come and go",name] UTF8String]);
+            [ed setFrameSize:NSMakeSize(1300,500)]; const BOOL wider=sound() && ed.textAreaWidth>first; [ed setFrameSize:NSMakeSize(520,500)];
+            check(wider && sound() && ed.textMarginLeft<8, [[NSString stringWithFormat:@"With %s scroll bars it follows the pane's width, down to a pane narrower than the column",name] UTF8String]);
+        }
+        });
         ttchecks::section("line-ending mode", [&] {
         // F126: the line-ending mode is metadata only and governs later insertions.
         TTEditor *eol=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,400,300)];
