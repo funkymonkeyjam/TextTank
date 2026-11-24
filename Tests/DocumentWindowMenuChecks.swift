@@ -118,7 +118,8 @@ extension DocumentChecks {
             let window = try requireValue(FormPanel.frontWindow, "fixture: Settings modeless window")
             let views = descendants(try requireValue(window.contentView, "fixture: Settings content"))
             let field = try requireValue(
-                views.compactMap { $0 as? NSTextField }.first { $0.isEditable }, "fixture: tab width")
+                views.compactMap { $0 as? NSTextField }.first { $0.identifier?.rawValue == "settings.width" },
+                "fixture: tab width")
             window.makeFirstResponder(nil)
             field.stringValue = "7"
             var intervening = settings.value
@@ -885,12 +886,14 @@ extension DocumentChecks {
             check(
                 edited.shortcuts["duplicateLine"] == nil,
                 "G396 assigning the built-in default never pollutes persisted overrides")
-            var draft = SettingsShortcutDraft(EditorSettings())
-            _ = draft.select("upper", committing: "")
-            _ = draft.select("deleteLine", committing: "u")
+            // V8: the pop-up and its drafts are gone; each assignment is saved when it is recorded.
+            var several = EditorSettings()
+            several.setShortcut("u", for: "upper")
+            several.setShortcut("k", for: "deleteLine")
+            several.setShortcut("u", for: "upper")
             check(
-                draft.select("upper", committing: "k") == "u" && draft.settings.shortcuts["deleteLine"] == "k",
-                "G396 changing popup commands commits and retains every previous draft")
+                several.shortcuts == ["upper": "u", "deleteLine": "k"] && several.shortcut(for: "upper") == "u",
+                "G396 a later assignment keeps every earlier one")
             var collision = EditorSettings()
             collision.setShortcut("j", for: "duplicateLine")
             collision.setShortcut("d", for: "upper")
@@ -944,50 +947,11 @@ extension DocumentChecks {
                     && unchangedMenuBytes == changedBytes,
                 "G362 a newly reserved menu key drops only its conflicting binding after startup and preserves original bytes"
             )
-            let dialog = SettingsController(url: root.appendingPathComponent("audit25-shortcuts-dialog.json"))
-            var observed = false, readable = false, current = false
-            let deadline = Date().addingTimeInterval(10)
-            let timerAction: @MainActor @Sendable () -> Void = {
-                guard let content = presentedFormWindow?.contentView else { return }
-                if Date() > deadline {
-                    NSApp.abortModal()
-                    return
-                }
-                let views = descendants(content)
-                guard
-                    let popup = views.compactMap({ $0 as? NSPopUpButton }).first(where: {
-                        $0.accessibilityLabel() == "Command shortcut to assign"
-                    }),
-                    let key = views.compactMap({ $0 as? NSTextField }).first(where: {
-                        $0.accessibilityLabel() == "Shortcut key"
-                    })
-                else { return }
-                observed = true
-                readable = popup.itemArray.contains {
-                    $0.title == "Duplicate Line" && $0.representedObject as? String == "duplicateLine"
-                }
-                if let entry = popup.itemArray.first(where: {
-                    $0.representedObject as? String == "duplicateLine" || $0.title == "duplicateLine"
-                }) {
-                    popup.select(entry)
-                    if let action = popup.action { _ = NSApp.sendAction(action, to: popup.target, from: popup) }
-                    current = key.stringValue == "d"
-                }
-                views.compactMap { $0 as? NSButton }.first { $0.title == "Close" }?.performClick(nil)
-            }
-            let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
-                MainActor.assumeIsolated { timerAction() }
-            }
-            RunLoop.main.add(timer, forMode: .modalPanel)
-            dialog.showSettings(nil)
-            waitForModelessForms()
-            timer.invalidate()
-            check(
-                observed && readable && current,
-                "G396 Settings shows readable command names and the selected current shortcut")
-            check(
-                !FileManager.default.fileExists(atPath: dialog.url.path),
-                "G396 Cancel after reading a shortcut leaves settings absent")
+            // V8: the pop-up that listed twelve commands is now the Shortcuts list. That it shows
+            // readable command names and the selected command's current shortcut, and that reading
+            // one saves nothing, is checked through the real window as "G396 Settings shows readable
+            // command names…" in DesignSettingsChecks.shortcutPaneChecks, in the
+            // design-settings-input-checks process of this suite.
         }
 
         section("audit25 actual shortcut drafts and menu updates", #line) {
@@ -1015,68 +979,10 @@ extension DocumentChecks {
                     delete.keyEquivalent.isEmpty && duplicate.keyEquivalent == "d",
                     "G396 clearing a custom shortcut removes its menu key and keeps Command-D")
             }
-            var acted = false, kept = false, cleared = false, defaultRestored = false
-            let deadline = Date().addingTimeInterval(10)
-            let timerAction: @MainActor @Sendable () -> Void = {
-                guard let content = presentedFormWindow?.contentView else { return }
-                if Date() > deadline {
-                    NSApp.abortModal()
-                    return
-                }
-                let views = descendants(content)
-                guard !acted,
-                    let popup = views.compactMap({ $0 as? NSPopUpButton }).first(where: {
-                        $0.identifier?.rawValue == "settings.shortcut.command"
-                    }),
-                    let key = views.compactMap({ $0 as? NSTextField }).first(where: {
-                        $0.identifier?.rawValue == "settings.shortcut.key"
-                    }),
-                    let clear = views.compactMap({ $0 as? NSButton }).first(where: {
-                        $0.identifier?.rawValue == "settings.shortcut.clear"
-                    }),
-                    let save = views.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Apply Shortcuts" })
-                else { return }
-                @MainActor func select(_ id: String) {
-                    guard let entry = popup.itemArray.first(where: { $0.representedObject as? String == id }) else {
-                        return
-                    }
-                    popup.select(entry)
-                    if let action = popup.action { _ = NSApp.sendAction(action, to: popup.target, from: popup) }
-                }
-                select("upper")
-                key.stringValue = "u"
-                select("deleteLine")
-                key.stringValue = "k"
-                select("upper")
-                kept = key.stringValue == "u"
-                clear.performClick(nil)
-                cleared = key.stringValue.isEmpty
-                select("duplicateLine")
-                key.stringValue = "j"
-                select("deleteLine")
-                kept = kept && key.stringValue == "k"
-                select("duplicateLine")
-                clear.performClick(nil)
-                defaultRestored = key.stringValue == "d"
-                acted = true
-                save.performClick(nil)
-                views.compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "settings.close" }?
-                    .performClick(nil)
-            }
-            let timer = Timer(timeInterval: 0.02, repeats: true) { _ in
-                MainActor.assumeIsolated { timerAction() }
-            }
-            RunLoop.main.add(timer, forMode: .modalPanel)
-            settings.showSettings(nil)
-            waitForModelessForms()
-            timer.invalidate()
-            check(
-                acted && kept && cleared && defaultRestored,
-                "G396 the real Settings popup retains multiple drafts and Clear restores each command's default")
-            check(
-                settings.value.shortcuts == ["deleteLine": "k"]
-                    && SettingsController(url: settings.url).value == settings.value,
-                "G396 one explicit Save persists all popup edits without adding default or empty overrides")
+            // V8: the pop-up's drafts and Apply Shortcuts are gone; an assignment is saved when it is
+            // recorded. Several assignments through the real list, Use Default and the saved file are
+            // checked as "G396 the real Settings list keeps several assignments…" and "G396 Use Default
+            // restores…" in DesignSettingsChecks.shortcutPaneChecks (design-settings-input-checks).
             try settings.save(EditorSettings())
         }
 
@@ -1199,8 +1105,10 @@ extension DocumentChecks {
                     NSApp.abortModal()
                     return
                 }
-                guard let field = views.compactMap({ $0 as? NSTextField }).first(where: { $0.isEditable }),
-                    let action = field.action
+                guard
+                    let field = views.compactMap({ $0 as? NSTextField }).first(where: {
+                        $0.identifier?.rawValue == "settings.width"
+                    }), let action = field.action
                 else {
                     views.compactMap { $0 as? NSButton }.first?.performClick(nil)
                     return

@@ -5,59 +5,6 @@ import NativeSearch
 import AppKit
 import os
 
-@MainActor private final class SettingsShortcutEditor: NSObject {
-    var draft: SettingsShortcutDraft
-    let popup = NSPopUpButton()
-    let key = NSTextField(string: "")
-    init(_ settings: EditorSettings) {
-        draft = .init(settings)
-        super.init()
-        for command in EditorCommand.allCases.filter(\.isShortcutAssignable).sorted(by: { $0.title < $1.title }) {
-            popup.addItem(withTitle: command.title)
-            popup.lastItem?.representedObject = command.rawValue
-        }
-        popup.target = self
-        popup.action = #selector(selectCommand(_:))
-        ControlPresentation.label("Command shortcut to assign", control: popup)
-        popup.identifier = NSUserInterfaceItemIdentifier("settings.shortcut.command")
-        key.stringValue = settings.shortcut(for: draft.selected)
-        key.placeholderString = "No custom shortcut"
-        ControlPresentation.label("Shortcut key", control: key)
-        key.identifier = NSUserInterfaceItemIdentifier("settings.shortcut.key")
-    }
-    @objc func selectCommand(_ sender: NSPopUpButton) {
-        guard let id = sender.selectedItem?.representedObject as? String else { return }
-        let pending = key.currentEditor()?.string ?? key.stringValue
-        sender.window?.makeFirstResponder(sender)
-        if draft.selected != id {
-            key.setAccessibilityHelp(nil)
-            key.toolTip = nil
-        }
-        key.stringValue = draft.select(id, committing: pending)
-    }
-    @objc func clearShortcut(_ sender: Any?) {
-        key.window?.makeFirstResponder(popup)
-        key.stringValue = draft.clear()
-    }
-    func revealValidation(_ failure: ShortcutValidationFailure) -> NSView? {
-        guard let item = popup.itemArray.first(where: { $0.representedObject as? String == failure.command }) else {
-            return nil
-        }
-        popup.select(item)
-        key.stringValue = draft.select(failure.command, committing: key.stringValue)
-        return key
-    }
-    func rebase(_ value: EditorSettings) {
-        let selected = draft.selected
-        draft = SettingsShortcutDraft(value)
-        key.stringValue = draft.select(selected, committing: value.shortcut(for: draft.selected))
-    }
-    func settings() -> EditorSettings {
-        draft.commit(key.stringValue)
-        return draft.settings
-    }
-}
-
 extension EditorSettings {
     @MainActor var resolvedBaseFont: NSFont {
         NSFont(name: fontName ?? "Menlo", size: basePointSize)
@@ -72,27 +19,65 @@ extension EditorSettings {
 }
 
 @MainActor final class SettingsController: NSObject, NSMenuItemValidation {
-    fileprivate var store: SettingsStore
-    var value: EditorSettings { store.value }
-    var ignoredShortcutBindings: [ShortcutLoadIssue] { store.ignoredShortcutBindings }
-    var shortcutLoadNotice: String? { store.shortcutLoadNotice }
-    var loadState: StoreLoadState { store.loadState }
-    var loadError: Error? { store.loadError }
-    var url: URL { store.url }
-    var loadFailureMessage: String? { store.loadFailureMessage }
+    private var backing: SettingsStore
+    /// The store, told which commands the menu bar has now before it checks or writes anything.
+    /// Reading a value does not need that and goes to `backing`.
+    fileprivate var store: SettingsStore {
+        backing.shortcutContext = NSApp?.mainMenu.map { ShortcutCatalog.context(in: $0) }
+        return backing
+    }
+    /// What saved shortcuts are checked against: the menu bar's commands, once it exists.
+    var shortcutContext: ShortcutContext { ShortcutCatalog.context(in: NSApp?.mainMenu) }
+    var value: EditorSettings { backing.value }
+    var ignoredShortcutBindings: [ShortcutLoadIssue] { backing.ignoredShortcutBindings }
+    var shortcutLoadNotice: String? { backing.shortcutLoadNotice }
+    var loadState: StoreLoadState { backing.loadState }
+    var loadError: Error? { backing.loadError }
+    var url: URL { backing.url }
+    var loadFailureMessage: String? { backing.loadFailureMessage }
     private let onApply: @MainActor (EditorSettings, EditorSettings?) -> Void
     fileprivate let onStatus: @MainActor (String) -> Void
     init(
         url: URL? = nil, onApply: @escaping @MainActor (EditorSettings, EditorSettings?) -> Void = { _, _ in },
         onStatus: @escaping @MainActor (String) -> Void = { _ in }
     ) {
-        store = SettingsStore(url: url, reservedKeys: Self.reservedShortcuts(in: NSApp?.mainMenu))
+        backing = SettingsStore(
+            url: url, reservedKeys: Self.reservedShortcuts(in: NSApp?.mainMenu),
+            context: NSApp?.mainMenu.map { ShortcutCatalog.context(in: $0) })
         self.onApply = onApply
         self.onStatus = onStatus
         super.init()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(menuItemAdded(_:)), name: NSMenu.didAddItemNotification, object: nil)
     }
     func reconcileShortcuts(with menu: NSMenu) {
-        store.reconcileShortcuts(reservedKeys: Self.reservedShortcuts(in: menu))
+        backing.shortcutContext = ShortcutCatalog.context(in: menu)
+        backing.reconcileShortcuts(reservedKeys: Self.reservedShortcuts(in: menu))
+    }
+    private var reapplyPending = false
+    /// A menu its owner rebuilds (Run Commands) gets new items with their default keys. The
+    /// saved shortcuts are put back on the next turn of the run loop, once for any number of
+    /// items, and only by the application's own settings.
+    @objc private func menuItemAdded(_ note: Notification) {
+        guard !reapplyPending, !value.shortcuts.isEmpty, EditorServices.current?.settings === self,
+            let bar = NSApp?.mainMenu, var menu = note.object as? NSMenu
+        else { return }
+        while let parent = menu.supermenu { menu = parent }
+        guard menu === bar else { return }
+        reapplyPending = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.reapplyPending = false
+            if let bar = NSApp?.mainMenu { ShortcutCatalog.apply(self.value, to: bar) }
+        }
+    }
+    /// The key the menu bar shows for an editor command now, for a menu that repeats the
+    /// command elsewhere (DS-20). Nil when the menu bar does not list the command.
+    func menuShortcut(for command: EditorCommand) -> (key: String, modifiers: NSEvent.ModifierFlags)? {
+        let context = shortcutContext
+        guard context.commands[command.rawValue] != nil else { return nil }
+        let shortcut = value.effectiveShortcut(for: command.rawValue, in: context)
+        return (shortcut?.key ?? "", shortcut?.appKitModifiers ?? [.command])
     }
     @discardableResult func save(
         _ settings: EditorSettings, replacingUnreadable: Bool = false, requiringCurrent: Bool = false
@@ -218,34 +203,140 @@ extension EditorSettings {
         }
         // Reopening is the recovery path after an external change, including an unreadable file.
         let previous = value
-        store = SettingsStore(url: url, reservedKeys: Self.reservedShortcuts(in: NSApp?.mainMenu))
+        backing = SettingsStore(
+            url: url, reservedKeys: Self.reservedShortcuts(in: NSApp?.mainMenu),
+            context: NSApp?.mainMenu.map { ShortcutCatalog.context(in: $0) })
         if value != previous { apply(replacing: previous) }
         let live = LiveSettingsForm(owner: self)
         liveForm = live
         live.form.onClose = { [weak self, weak live] in
             live?.releaseFontPanel()
+            live?.retireShortcuts()
             self?.liveForm = nil
         }
         live.form.show()
     }
 }
 
-@MainActor private final class LiveSettingsForm: NSObject, NSTextFieldDelegate, NSWindowDelegate, NSFontChanging {
+/// The panes of the Settings window, in toolbar order. A Mac settings window switches panes
+/// from a real toolbar in the preference style (DS-11), and each pane is as tall as its content.
+enum SettingsPane: String, CaseIterable {
+    case editing, appearance, files, previews, shortcuts
+    var title: String {
+        switch self {
+        case .editing: return "Editing"
+        case .appearance: return "Appearance"
+        case .files: return "Files"
+        case .previews: return "Previews"
+        case .shortcuts: return "Shortcuts"
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .editing: return "text.cursor"
+        case .appearance: return "paintpalette"
+        case .files: return "folder"
+        case .previews: return "eye"
+        case .shortcuts: return "keyboard"
+        }
+    }
+    var toolbarItem: NSToolbarItem.Identifier { .init("settings.pane." + rawValue) }
+}
+
+/// One setting as the window lists it: the pane it lives in, the words that find it, whether
+/// its value differs from the default, and the way back to that default.
+@MainActor final class SettingRow {
+    let id: String, pane: SettingsPane, label: String, keywords: [String]
+    let view = NSStackView()
+    fileprivate(set) var useDefault: NSButton?
+    fileprivate let differs: (EditorSettings) -> Bool
+    fileprivate let reset: (() throws -> Void)?
+    fileprivate init(
+        id: String, pane: SettingsPane, label: String, keywords: [String],
+        differs: @escaping (EditorSettings) -> Bool, reset: (() throws -> Void)?
+    ) {
+        self.id = id
+        self.pane = pane
+        self.label = label
+        self.keywords = keywords
+        self.differs = differs
+        self.reset = reset
+    }
+    /// Every word typed must be in the visible label, the pane's name or a synonym, in any order.
+    nonisolated static func matches(_ query: String, label: String, pane: String, keywords: [String]) -> Bool {
+        let text = ([label, pane] + keywords).joined(separator: "\n")
+        return query.split(whereSeparator: \.isWhitespace).allSatisfy {
+            text.range(of: $0, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+        }
+    }
+    func matches(_ query: String) -> Bool {
+        Self.matches(query, label: label, pane: pane.title, keywords: keywords)
+    }
+}
+
+/// Views in the key window are offered a key equivalent before the menu bar. This one gives
+/// Command-F its usual meaning inside Settings: it moves to the search field (DS-25, DS-73).
+private final class SettingsKeyEquivalents: NSView {
+    var find: (() -> Void)?
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        // A key that is being recorded as a shortcut belongs to the recorder, which refuses this one.
+        guard flags == .command, event.charactersIgnoringModifiers == "f", let find,
+            (window?.firstResponder as? ShortcutRecorder)?.isRecording != true
+        else { return super.performKeyEquivalent(with: event) }
+        find()
+        return true
+    }
+}
+
+@MainActor private final class LiveSettingsForm: NSObject, NSTextFieldDelegate, NSWindowDelegate, NSFontChanging,
+    NSToolbarDelegate, NSSearchFieldDelegate
+{
+    /// Every pane has this content width; only the Shortcuts list can be made larger.
+    static let contentWidth: CGFloat = 620
     let owner: SettingsController
-    let form = FormPanel(title: "Settings", identifier: "TextTank.Settings", size: NSSize(width: 600, height: 550))
+    let form = FormPanel(
+        title: "Settings", identifier: "TextTank.Settings", size: NSSize(width: contentWidth, height: 360))
+    @MainActor private final class Section {
+        let pane: SettingsPane
+        let stack = NSStackView()
+        let heading: NSTextField
+        var rows: [SettingRow] = []
+        var notes: [NSView] = []
+        init(_ pane: SettingsPane) {
+            self.pane = pane
+            heading = NSTextField(labelWithString: pane.title)
+            heading.font = .preferredFont(forTextStyle: .headline)
+            stack.orientation = .vertical
+            stack.alignment = .leading
+            stack.spacing = 10
+            stack.addArrangedSubview(heading)
+        }
+    }
+    private let sections: [Section] = SettingsPane.allCases.map { Section($0) }
+    /// Every row in the order it was listed; a Use Default button's tag is its index here.
+    private var rows: [SettingRow] = []
+    private var pane = SettingsPane.editing
+    private let filter = NSSearchField()
+    private let changedOnly = NSButton(checkboxWithTitle: "Changed from default", target: nil, action: nil)
+    private let noMatches = AnnouncingLabel(wrappingLabelWithString: "")
     private let width = NSTextField(), size = NSTextField(), zoom = NSTextField()
+    private let widthStepper = NSStepper(), sizeStepper = NSStepper(), zoomStepper = NSStepper()
     private let tabs = NSButton(checkboxWithTitle: "Indent with tabs", target: nil, action: nil)
     private let wrap = NSButton(checkboxWithTitle: "Wrap lines", target: nil, action: nil)
+    /// Checkboxes made by `toggleRow`, with the stored member each one edits.
+    private var memberToggles: [(button: NSButton, member: WritableKeyPath<EditorSettings, Bool?>, standard: Bool)] = []
+    private var rowActions: [() -> Void] = []
     private let launchBehavior = NSPopUpButton()
     private let appearance = NSPopUpButton()
     private let diskChanges = NSPopUpButton()
-    /// One pair of pop-ups for the five preview formats, as the shortcut rows are one pair for
-    /// the assignable commands: five more rows would not fit a small screen (DS-67).
+    /// One pair of pop-ups for the five preview formats: the second shows the choice of the
+    /// format the first one names.
     private let previewFormat = NSPopUpButton()
     private let previewOpenMode = NSPopUpButton()
     private let face = NSTextField(labelWithString: "")
     private let fontButton = NSButton(title: "Font…", target: nil, action: nil)
-    private let shortcuts: SettingsShortcutEditor
+    private var shortcuts: ShortcutsPane!
     private var maintenancePending = false
     private var presentingError = false
     private var displayed: EditorSettings
@@ -265,32 +356,162 @@ extension EditorSettings {
     init(owner: SettingsController) {
         self.owner = owner
         displayed = owner.value
-        shortcuts = SettingsShortcutEditor(owner.value)
         super.init()
         build()
     }
+
+    // MARK: Rows
+
+    private func note(_ text: String) -> NSTextField {
+        let label = NSTextField(wrappingLabelWithString: text)
+        // A wrapping label's height depends on its width; the panes have one width.
+        label.preferredMaxLayoutWidth = Self.contentWidth - 40
+        return label
+    }
+    private func section(_ pane: SettingsPane) -> Section { sections.first { $0.pane == pane }! }
+    private func addNote(_ text: String, to pane: SettingsPane) {
+        let label = note(text)
+        label.textColor = .secondaryLabelColor
+        let owner = section(pane)
+        owner.notes.append(label)
+        owner.stack.addArrangedSubview(label)
+    }
+    /// Lists one setting. `views` are its controls in reading order; a control keeps the
+    /// identifier and accessibility label its caller gave it (DS-70). `differs` and `reset`
+    /// drive the Changed from default filter and the row's Use Default button.
+    @discardableResult private func addRow(
+        _ id: String, _ pane: SettingsPane, _ label: String, keywords: [String], views: [NSView],
+        differs: @escaping (EditorSettings) -> Bool = { _ in false }, reset: (() throws -> Void)? = nil
+    ) -> SettingRow {
+        let row = SettingRow(id: id, pane: pane, label: label, keywords: keywords, differs: differs, reset: reset)
+        row.view.orientation = .horizontal
+        row.view.alignment = .centerY
+        row.view.spacing = 8
+        row.view.identifier = .init(id + ".row")
+        views.forEach(row.view.addArrangedSubview)
+        let space = NSView()
+        space.setContentHuggingPriority(.init(1), for: .horizontal)
+        row.view.addArrangedSubview(space)
+        if reset != nil {
+            // One setting, and choosing its previous value again undoes it (DS-91), so this is
+            // not a destructive action and needs no confirmation.
+            let button = NSButton(title: "Use Default", target: self, action: #selector(useDefault(_:)))
+            button.bezelStyle = .rounded
+            button.identifier = .init(id + ".default")
+            button.tag = rows.count
+            ControlPresentation.label("Use the default for " + label, control: button)
+            button.isHidden = true
+            row.view.addArrangedSubview(button)
+            row.useDefault = button
+        }
+        let owner = section(pane)
+        rows.append(row)
+        owner.rows.append(row)
+        owner.stack.addArrangedSubview(row.view)
+        row.view.widthAnchor.constraint(equalTo: owner.stack.widthAnchor).isActive = true
+        return row
+    }
+    private func caption(_ label: String, for control: NSControl, identifier: String) -> NSTextField {
+        let caption = NSTextField(labelWithString: label)
+        ControlPresentation.label(label, control: control, caption: caption)
+        caption.widthAnchor.constraint(equalToConstant: 160).isActive = true
+        control.identifier = NSUserInterfaceItemIdentifier(identifier)
+        return caption
+    }
+    /// A short number field with a stepper beside it. The stepper commits through the field's
+    /// own action, so both validate and save the same way.
+    private func numberViews(
+        _ label: String, _ field: NSTextField, _ stepper: NSStepper, identifier: String, range: ClosedRange<Double>
+    ) -> [NSView] {
+        field.widthAnchor.constraint(equalToConstant: 56).isActive = true
+        field.alignment = .right
+        stepper.minValue = range.lowerBound
+        stepper.maxValue = range.upperBound
+        stepper.increment = 1
+        stepper.valueWraps = false
+        stepper.target = self
+        stepper.action = #selector(step(_:))
+        stepper.identifier = .init(identifier + ".stepper")
+        ControlPresentation.label(label + ", stepper", control: stepper)
+        return [caption(label, for: field, identifier: identifier), field, stepper]
+    }
+    // SETTINGS-ROW-EXTENSION: how another slice lists a setting it stores.
+    //
+    // A stored `Bool?` member of `EditorSettings` whose missing value has a default becomes a
+    // checkbox with one call in `build()`, in the pane it belongs to:
+    //
+    //     toggleRow("settings.lineNumbers", .appearance, "Show line numbers",
+    //               keywords: ["gutter", "margin"], \.lineNumbers, default: true)
+    //
+    // The row saves when clicked, follows a change made from a menu, is found by the search
+    // field, is listed by Changed from default and gets a Use Default button. A command that is
+    // not a stored value (Clear History…) becomes a button with `actionRow`.
+    @discardableResult private func toggleRow(
+        _ id: String, _ pane: SettingsPane, _ title: String, keywords: [String],
+        _ member: WritableKeyPath<EditorSettings, Bool?>, default standard: Bool
+    ) -> SettingRow {
+        let button = NSButton(checkboxWithTitle: title, target: self, action: #selector(toggleMember(_:)))
+        button.identifier = .init(id)
+        button.tag = memberToggles.count
+        ControlPresentation.label(title, control: button)
+        memberToggles.append((button, member, standard))
+        return addRow(
+            id, pane, title, keywords: keywords, views: [button],
+            differs: { ($0[keyPath: member] ?? standard) != standard },
+            reset: { [unowned self] in try self.write { $0[keyPath: member] = nil } })
+    }
+    @discardableResult private func actionRow(
+        _ id: String, _ pane: SettingsPane, _ label: String, button title: String, keywords: [String],
+        action: @escaping () -> Void
+    ) -> SettingRow {
+        let button = NSButton(title: title, target: self, action: #selector(performRowAction(_:)))
+        button.bezelStyle = .rounded
+        button.tag = rowActions.count
+        rowActions.append(action)
+        return addRow(id, pane, label, keywords: keywords, views: [caption(label, for: button, identifier: id), button])
+    }
+
+    // MARK: Building
+
     private func build() {
-        form.note(
-            "Changes apply when you finish editing a control. Shortcut keys use Command. An uppercase shortcut adds Shift."
-        )
-        if let notice = owner.value.unavailableFontNotice { form.note(notice) }
-        if let notice = owner.shortcutLoadNotice { form.note(notice) }
+        let window = form.window
+        // Where the restored frame put the title bar, before the toolbar or any pane changes it.
+        let anchor = NSPoint(x: window.frame.minX, y: window.frame.maxY)
+        form.validation.preferredMaxLayoutWidth = Self.contentWidth - 40
+        let keys = SettingsKeyEquivalents()
+        keys.find = { [weak self] in
+            guard let self else { return }
+            self.form.window.makeFirstResponder(self.filter)
+        }
+        window.contentView?.addSubview(keys)
+        filter.placeholderString = "Search settings"
+        filter.identifier = .init("settings.filter")
+        filter.sendsSearchStringImmediately = true
+        filter.target = self
+        filter.action = #selector(filterChanged(_:))
+        filter.delegate = self
+        ControlPresentation.label("Search settings by name", control: filter)
+        changedOnly.identifier = .init("settings.filter.changed")
+        changedOnly.target = self
+        changedOnly.action = #selector(filterChanged(_:))
+        ControlPresentation.label("Show only settings changed from their defaults", control: changedOnly)
+        changedOnly.setContentHuggingPriority(.required, for: .horizontal)
+        let filterBar = NSStackView(views: [filter, changedOnly])
+        filterBar.spacing = 12
+        form.add(filterBar)
+        if let notice = owner.shortcutLoadNotice { form.add(note(notice)) }
         if owner.loadError != nil {
-            form.note("The saved settings could not be read. Repair Settings keeps a backup of the original file.")
+            form.add(note("The saved settings could not be read. Repair Settings keeps a backup of the original file."))
         }
-        func row(_ label: String, _ control: NSControl, _ identifier: String) -> NSStackView {
-            let caption = NSTextField(labelWithString: label)
-            ControlPresentation.label(label, control: control, caption: caption)
-            caption.widthAnchor.constraint(equalToConstant: 160).isActive = true
-            control.identifier = NSUserInterfaceItemIdentifier(identifier)
-            let group = NSStackView(views: [caption, control])
-            group.alignment = .firstBaseline
-            return group
-        }
+        noMatches.preferredMaxLayoutWidth = Self.contentWidth - 40
+        noMatches.identifier = .init("settings.filter.empty")
+        noMatches.isHidden = true
+        form.add(noMatches)
+
         NumericInput.configure(width)
         NumericInput.configure(size, fractional: true)
         NumericInput.configure(zoom)
-        for field in [width, size, zoom, shortcuts.key] {
+        for field in [width, size, zoom] {
             field.target = self
             field.action = #selector(commitField(_:))
             field.delegate = self
@@ -298,28 +519,111 @@ extension EditorSettings {
         width.stringValue = String(displayed.tabWidth)
         size.stringValue = NumericInput.editable(displayed.basePointSize)
         zoom.stringValue = String(displayed.initialZoom)
-        form.add(row("Tab width", width, "settings.width"))
-        tabs.identifier = .init("settings.tabs")
-        wrap.identifier = .init("settings.wrap")
-        tabs.target = self
-        tabs.action = #selector(toggle(_:))
-        wrap.target = self
-        wrap.action = #selector(toggle(_:))
-        ControlPresentation.label("Indent with tabs", control: tabs)
-        ControlPresentation.label("Wrap lines", control: wrap)
-        form.add(NSStackView(views: [tabs, wrap]))
+        let standard = EditorSettings()
+
+        // Editing
+        addRow(
+            "settings.width", .editing, "Tab width", keywords: ["indent", "indentation", "spaces", "columns", "tab size"],
+            views: numberViews("Tab width", width, widthStepper, identifier: "settings.width", range: 1...32),
+            differs: { $0.tabWidth != standard.tabWidth },
+            reset: { [unowned self] in
+                try self.write { $0.tabWidth = standard.tabWidth }
+                self.adoptField(self.width)
+            })
+        for (button, id) in [(tabs, "settings.tabs"), (wrap, "settings.wrap")] {
+            button.identifier = .init(id)
+            button.target = self
+            button.action = #selector(toggle(_:))
+            ControlPresentation.label(button.title, control: button)
+        }
+        addRow(
+            "settings.tabs", .editing, "Indent with tabs", keywords: ["spaces", "indentation", "soft tabs", "tab key"],
+            views: [tabs], differs: { $0.useTabs != standard.useTabs },
+            reset: { [unowned self] in try self.write { $0.useTabs = standard.useTabs } })
+        toggleRow(
+            "settings.autoIndent", .editing, "Auto-indent on Return", keywords: ["indentation", "new line", "enter"],
+            \.autoIndent, default: standard.autoIndentEnabled)
+        toggleRow(
+            "settings.autoPair", .editing, "Auto-pair brackets and quotes",
+            keywords: ["braces", "parentheses", "closing", "match"], \.autoPair, default: standard.autoPairEnabled)
+        addRow(
+            "settings.wrap", .editing, "Wrap lines", keywords: ["word wrap", "soft wrap", "long lines"],
+            views: [wrap], differs: { $0.wrap != standard.wrap },
+            reset: { [unowned self] in try self.write { $0.wrap = standard.wrap } })
+
+        // Appearance
         ControlPresentation.populate(
             appearance, choices: [("system", "System"), ("light", "Light"), ("dark", "Dark")],
             selected: displayed.appearance)
         appearance.target = self
         appearance.action = #selector(selectAppearance(_:))
-        form.add(row("Appearance", appearance, "settings.appearance"))
+        addRow(
+            "settings.appearance", .appearance, "Appearance",
+            keywords: ["theme", "dark mode", "light mode", "colour scheme", "color scheme"],
+            views: [caption("Appearance", for: appearance, identifier: "settings.appearance"), appearance],
+            differs: { $0.appearance != standard.appearance },
+            reset: { [unowned self] in try self.write { $0.appearance = standard.appearance } })
+        fontButton.target = self
+        fontButton.action = #selector(openFontPanel(_:))
+        fontButton.bezelStyle = .rounded
+        let fontCaption = caption("Editor font", for: fontButton, identifier: "settings.font.choose")
+        ControlPresentation.label("Choose editor font in Settings", control: fontButton)
+        addRow(
+            "settings.font.choose", .appearance, "Editor font", keywords: ["typeface", "family", "monospace", "text"],
+            views: [fontCaption, fontButton, face],
+            differs: { $0.resolvedBaseFont.fontName != standard.resolvedBaseFont.fontName },
+            reset: { [unowned self] in try self.write { $0.fontName = nil } })
+        if let notice = owner.value.unavailableFontNotice { addNote(notice, to: .appearance) }
+        addRow(
+            "settings.font.size", .appearance, "Font size (points)", keywords: ["text size", "typeface", "larger", "smaller"],
+            views: numberViews("Font size (points)", size, sizeStepper, identifier: "settings.font.size", range: 6...72),
+            differs: { $0.basePointSize != standard.basePointSize },
+            reset: { [unowned self] in
+                try self.write { $0.fontSize = nil }
+                self.adoptField(self.size)
+            })
+        addRow(
+            "settings.font.zoom", .appearance, "Default zoom", keywords: ["magnification", "scale", "text size"],
+            views: numberViews("Default zoom", zoom, zoomStepper, identifier: "settings.font.zoom", range: -10...60),
+            differs: { $0.initialZoom != standard.initialZoom },
+            reset: { [unowned self] in
+                try self.write { $0.defaultZoom = nil }
+                self.adoptField(self.zoom)
+            })
+        toggleRow(
+            "settings.indentGuides", .appearance, "Show indentation guides", keywords: ["indent", "vertical lines"],
+            \.indentGuides, default: standard.indentGuidesEnabled)
+        toggleRow(
+            "settings.currentLineHighlight", .appearance, "Highlight current line", keywords: ["caret", "cursor", "row"],
+            \.currentLineHighlight, default: standard.currentLineHighlightEnabled)
+        toggleRow(
+            "settings.braceHighlight", .appearance, "Highlight matching braces",
+            keywords: ["brackets", "parentheses", "pair"], \.braceHighlight, default: standard.braceHighlightEnabled)
+        // SETTINGS-ROW-EXTENSION (Appearance): the three View toggles that are one stored choice
+        // for every editor view.
+        toggleRow(
+            "settings.lineNumbers", .appearance, "Show line numbers", keywords: ["gutter", "margin"],
+            \.lineNumbers, default: standard.lineNumbersEnabled)
+        toggleRow(
+            "settings.showWhitespace", .appearance, "Show whitespace",
+            keywords: ["spaces", "invisibles", "invisible characters", "dots"], \.showWhitespace,
+            default: standard.showWhitespaceEnabled)
+        toggleRow(
+            "settings.showLineEndings", .appearance, "Show line endings",
+            keywords: ["eol", "crlf", "newline", "invisibles", "carriage return"], \.showLineEndings,
+            default: standard.showLineEndingsEnabled)
+
+        // Files
         ControlPresentation.populate(
             launchBehavior, choices: [("restore", "Reopen last session"), ("new", "New document")],
             selected: displayed.reopensLastSession ? "restore" : "new")
         launchBehavior.target = self
         launchBehavior.action = #selector(selectLaunchBehavior(_:))
-        form.add(row("At launch", launchBehavior, "settings.atLaunch"))
+        addRow(
+            "settings.atLaunch", .files, "At launch", keywords: ["startup", "session", "restore", "reopen", "open"],
+            views: [caption("At launch", for: launchBehavior, identifier: "settings.atLaunch"), launchBehavior],
+            differs: { $0.reopensLastSession != standard.reopensLastSession },
+            reset: { [unowned self] in try self.write { $0.reopenLastSession = nil } })
         ControlPresentation.populate(
             diskChanges,
             choices: [
@@ -329,14 +633,44 @@ extension EditorSettings {
             ], selected: displayed.diskChangeBehavior.rawValue)
         diskChanges.target = self
         diskChanges.action = #selector(selectDiskChangePolicy(_:))
-        form.add(row("External file changes", diskChanges, "settings.externalChanges"))
+        addRow(
+            "settings.externalChanges", .files, "External file changes",
+            keywords: ["reload", "disk", "modified", "another application", "outside", "ask", "ignore"],
+            views: [
+                caption("External file changes", for: diskChanges, identifier: "settings.externalChanges"), diskChanges
+            ],
+            differs: { $0.diskChangeBehavior != standard.diskChangeBehavior },
+            reset: { [unowned self] in try self.write { $0.externalChangePolicy = nil } })
+        // SETTINGS-ROW-EXTENSION (Files): unsaved work and local history.
+        toggleRow(
+            "settings.keepUntitledOnQuit", .files, "Keep unsaved untitled documents when quitting",
+            keywords: ["quit", "unsaved", "drafts", "scratch", "close"], \.keepUntitledOnQuit,
+            default: standard.keepsUntitledOnQuit)
+        toggleRow(
+            "settings.keepLocalHistory", .files, "Keep earlier versions when saving",
+            keywords: ["local history", "versions", "backup", "previous"], \.keepLocalHistory,
+            default: standard.keepsLocalHistory)
+        // The same command as Compare › Clear Local History…, with its own confirmation.
+        actionRow(
+            "settings.clearLocalHistory", .files, "Local history", button: "Clear Local History…",
+            keywords: ["earlier versions", "delete", "remove", "erase"]
+        ) { [weak self] in
+            guard let self else { return }
+            _ = NSApp.sendAction(
+                #selector(AppDelegate.clearLocalHistory(_:)), to: NSApp.delegate,
+                from: self.form.window)
+        }
+        actionRow(
+            "settings.reveal", .files, "Settings file", button: "Reveal Settings File in Finder",
+            keywords: ["json", "location", "folder", "path", "backup", "show"]
+        ) { [weak self] in self?.revealSettingsFile() }
+
+        // Previews
         ControlPresentation.populate(
             previewFormat, choices: PreviewFormat.allCases.map { ($0.rawValue, Self.title($0)) },
             selected: PreviewFormat.markdown.rawValue)
         previewFormat.target = self
         previewFormat.action = #selector(selectPreviewFormat(_:))
-        form.add(
-            row(Strings.text("settings.preview.format", "Preview format"), previewFormat, "settings.preview.format"))
         ControlPresentation.populate(
             previewOpenMode, choices: DocumentViewMode.allCases.map { ($0.rawValue, DocumentViewCommands.title($0)) },
             selected: displayed.previewOpenMode(for: .markdown).rawValue)
@@ -345,33 +679,223 @@ extension EditorSettings {
         previewOpenMode.toolTip = Strings.text(
             "settings.preview.openIn.help",
             "What a document of this format shows when you open it. Tabs that are already open, and tabs reopened from the last session, keep what they show.")
-        form.add(row(Strings.text("settings.preview.openIn", "Open in"), previewOpenMode, "settings.preview.openIn"))
-        fontButton.target = self
-        fontButton.action = #selector(openFontPanel(_:))
-        fontButton.identifier = .init("settings.font.choose")
-        ControlPresentation.label("Choose editor font in Settings", control: fontButton)
-        form.add(NSStackView(views: [fontButton, face]))
-        form.add(row("Font size (points)", size, "settings.font.size"))
-        form.add(row("Default zoom", zoom, "settings.font.zoom"))
-        form.add(row("Command shortcut to assign", shortcuts.popup, "settings.shortcut.command"))
-        form.add(row("Shortcut key", shortcuts.key, "settings.shortcut.key"))
-        let clear = NSButton(title: "Clear Custom Shortcut", target: self, action: #selector(clearShortcut(_:)))
-        clear.identifier = .init("settings.shortcut.clear")
-        ControlPresentation.label("Clear the selected command's custom shortcut", control: clear)
-        form.add(clear)
+        let formatTitle = Strings.text("settings.preview.format", "Preview format")
+        let openTitle = Strings.text("settings.preview.openIn", "Open in")
+        let openCaption = caption(openTitle, for: previewOpenMode, identifier: "settings.preview.openIn")
+        openCaption.constraints.forEach { $0.isActive = false }
+        addRow(
+            "settings.preview.openIn", .previews, formatTitle,
+            keywords: [openTitle, "markdown", "html", "csv", "tsv", "svg", "json", "render", "source", "both", "open"],
+            views: [
+                caption(formatTitle, for: previewFormat, identifier: "settings.preview.format"), previewFormat,
+                openCaption, previewOpenMode
+            ],
+            differs: { settings in PreviewFormat.allCases.contains { settings.previewOpenMode(for: $0) != .source } },
+            reset: { [unowned self] in try self.write { $0.previewOpenModes = nil } })
+        // SETTINGS-ROW-EXTENSION (Previews)
+        toggleRow(
+            "settings.syncPreviewScrolling", .previews, "Sync scrolling in Both",
+            keywords: ["scroll", "synchronize", "follow", "side by side"], \.syncPreviewScrolling,
+            default: standard.syncsPreviewScrolling)
+
+        // Shortcuts: one row that is the whole list. Changed from default narrows the list to
+        // the commands whose shortcut was changed, and each has Use Default there.
+        shortcuts = ShortcutsPane(
+            width: Self.contentWidth - 40, settings: { [unowned self] in self.owner.value },
+            write: { [unowned self] update in try self.write(update) },
+            confirmResetAll: { [unowned self] in self.confirmMaintenance(.resetShortcuts) },
+            layoutChanged: { [unowned self] in self.resizeToContent() })
+        let list = addRow(
+            "settings.shortcuts", .shortcuts, "Keyboard shortcuts",
+            keywords: ["shortcut", "key", "hotkey", "key binding", "key equivalent", "command"],
+            views: [shortcuts.view], differs: { !$0.shortcuts.isEmpty })
+        // The list is as wide as the pane; nothing follows it in its row.
+        list.view.setCustomSpacing(0, after: shortcuts.view)
+
+        for section in sections { form.add(section.stack) }
+        form.add(note("Changes apply when you finish editing a control."))
         if owner.loadError != nil || !owner.ignoredShortcutBindings.isEmpty {
             form.button("Repair Settings…", identifier: "settings.repair") { [weak self] in
                 self?.confirmMaintenance(.repair)
             }
         }
-        form.button("Apply Shortcuts", identifier: "settings.shortcuts.apply") { [weak self] in self?.commitShortcuts()
-        }
         form.button("Reset Defaults…", identifier: "settings.reset") { [weak self] in self?.confirmMaintenance(.reset) }
         form.button("Close", identifier: "settings.close", cancel: true) { [weak self] in self?.form.close() }
-        form.window.initialFirstResponder = width
-        form.window.contentMinSize = NSSize(width: 560, height: max(490, form.body.fittingSize.height + 140))
+
+        let toolbar = NSToolbar(identifier: "TextTank.Settings.Panes")
+        toolbar.delegate = self
+        toolbar.displayMode = .iconAndLabel
+        // A pane switcher is not a set of commands to rearrange (DS-30 is about the document toolbar).
+        toolbar.allowsUserCustomization = false
+        window.toolbar = toolbar
+        window.toolbarStyle = .preference
+        window.autorecalculatesKeyViewLoop = true
+        window.initialFirstResponder = width
         valuesChanged()
+        resizeToContent(anchor: anchor)
     }
+
+    // MARK: Panes and the filter
+
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        SettingsPane.allCases.map(\.toolbarItem)
+    }
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        SettingsPane.allCases.map(\.toolbarItem)
+    }
+    func toolbarSelectableItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        SettingsPane.allCases.map(\.toolbarItem)
+    }
+    func toolbar(
+        _ toolbar: NSToolbar, itemForItemIdentifier identifier: NSToolbarItem.Identifier,
+        willBeInsertedIntoToolbar flag: Bool
+    ) -> NSToolbarItem? {
+        guard let pane = SettingsPane.allCases.first(where: { $0.toolbarItem == identifier }) else { return nil }
+        let item = NSToolbarItem(itemIdentifier: identifier)
+        item.label = pane.title
+        item.toolTip = pane.title + " settings"
+        item.image = NSImage(systemSymbolName: pane.symbol, accessibilityDescription: pane.title)
+        item.target = self
+        item.action = #selector(choosePane(_:))
+        return item
+    }
+    /// Choosing a pane leaves the filter: the pane shows all of its own settings.
+    @objc private func choosePane(_ sender: NSToolbarItem) {
+        guard let chosen = SettingsPane.allCases.first(where: { $0.toolbarItem == sender.itemIdentifier }) else {
+            return
+        }
+        show(chosen)
+    }
+    private func show(_ chosen: SettingsPane) {
+        pane = chosen
+        filter.stringValue = ""
+        changedOnly.state = .off
+        // Menus that list saved items may have changed since the list was last read.
+        if chosen == .shortcuts { shortcuts.reload() }
+        refreshRows()
+    }
+    @objc private func filterChanged(_ sender: Any?) { refreshRows() }
+    private var isFiltering: Bool {
+        changedOnly.state == .on || !filter.stringValue.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+    /// Shows the chosen pane, or, while the search field or Changed from default is in use,
+    /// the matching settings of every pane under their pane's name.
+    private func refreshRows() {
+        let query = filter.stringValue, onlyChanged = changedOnly.state == .on, filtering = isFiltering
+        let latest = owner.value
+        var shown = 0
+        for section in sections {
+            var visible = 0
+            for row in section.rows {
+                let differs = row.differs(latest)
+                row.useDefault?.isHidden = !differs
+                let show = filtering ? row.matches(query) && (!onlyChanged || differs) : section.pane == pane
+                row.view.isHidden = !show
+                if show { visible += 1 }
+            }
+            for view in section.notes { view.isHidden = filtering || section.pane != pane }
+            if section.pane == .shortcuts { shortcuts.changedOnly = onlyChanged }
+            section.heading.isHidden = !filtering
+            section.stack.isHidden = visible == 0
+            shown += visible
+        }
+        let message: String
+        if !filtering || shown > 0 {
+            message = ""
+        } else if query.trimmingCharacters(in: .whitespaces).isEmpty {
+            message = "Every setting has its default value. Turn off Changed from default to see all settings."
+        } else if onlyChanged {
+            message = "No changed setting matches “\(query)”. Clear the search to see every changed setting."
+        } else {
+            message = "No setting matches “\(query)”. Clear the search to see every setting."
+        }
+        noMatches.isHidden = message.isEmpty
+        if noMatches.stringValue != message { noMatches.stringValue = message }
+        form.window.toolbar?.selectedItemIdentifier = filtering ? nil : pane.toolbarItem
+        resizeToContent()
+    }
+    /// Makes the window as tall as what it shows, keeping its title bar where it is.
+    private func resizeToContent(anchor: NSPoint? = nil) {
+        let window = form.window
+        guard let content = window.contentView else { return }
+        content.layoutSubtreeIfNeeded()
+        let size = NSSize(width: Self.contentWidth, height: ceil(content.fittingSize.height))
+        window.contentMinSize = size
+        window.contentMaxSize = size
+        let top = anchor ?? NSPoint(x: window.frame.minX, y: window.frame.maxY)
+        var frame = window.frameRect(forContentRect: NSRect(origin: .zero, size: size))
+        frame.origin = NSPoint(x: top.x, y: top.y - frame.height)
+        if frame != window.frame { window.setFrame(frame, display: window.isVisible) }
+    }
+    /// Brings a control into view before it is marked or focused: its pane, outside any filter.
+    private func reveal(_ view: NSView) {
+        guard view.isHiddenOrHasHiddenAncestor,
+            let owner = sections.first(where: { view.isDescendant(of: $0.stack) })
+        else { return }
+        show(owner.pane)
+    }
+    @objc private func useDefault(_ sender: NSButton) {
+        guard form.acceptsActions, rows.indices.contains(sender.tag), let reset = rows[sender.tag].reset else {
+            return
+        }
+        do {
+            try reset()
+            valuesChanged()
+            Announce.say("“\(rows[sender.tag].label)” uses its default.", from: form.window)
+        } catch {
+            valuesChanged()
+            showError(error, field: sender)
+        }
+    }
+    @objc private func performRowAction(_ sender: NSButton) {
+        guard form.acceptsActions, rowActions.indices.contains(sender.tag) else { return }
+        rowActions[sender.tag]()
+    }
+    @objc private func toggleMember(_ sender: NSButton) {
+        guard memberToggles.indices.contains(sender.tag) else { return }
+        let member = memberToggles[sender.tag].member
+        do { try write { $0[keyPath: member] = sender.state == .on } } catch {
+            valuesChanged()
+            showError(error, field: sender)
+        }
+    }
+    @objc private func step(_ sender: NSStepper) {
+        guard let field = [widthStepper: width, sizeStepper: size, zoomStepper: zoom][sender] else { return }
+        // The stepper replaces whatever was being typed; it does not commit that draft first.
+        field.abortEditing()
+        field.stringValue =
+            field === size ? NumericInput.editable(sender.doubleValue) : String(Int(sender.doubleValue))
+        commitField(field)
+    }
+    /// A field takes the saved value after its row's Use Default, whatever was typed in it.
+    private func adoptField(_ field: NSTextField) {
+        field.abortEditing()
+        if field === width {
+            displayed.tabWidth = owner.value.tabWidth
+            width.stringValue = String(displayed.tabWidth)
+        } else if field === size {
+            displayed.fontSize = owner.value.fontSize
+            size.stringValue = NumericInput.editable(displayed.basePointSize)
+        } else if field === zoom {
+            displayed.defaultZoom = owner.value.defaultZoom
+            zoom.stringValue = String(displayed.initialZoom)
+        }
+    }
+    /// Shows the file itself, or the folder it will be written to before any setting is changed.
+    private func revealSettingsFile() {
+        let url = owner.url, folder = url.deletingLastPathComponent()
+        if FileManager.default.fileExists(atPath: url.path) {
+            StoreRecovery.reveal(url)
+        } else if FileManager.default.fileExists(atPath: folder.path) {
+            StoreRecovery.reveal(folder)
+            let message = "TextTank has not saved a settings file yet. Its folder is shown in Finder."
+            owner.onStatus(message)
+            Announce.say(message, from: form.window)
+        } else {
+            showError(LiveError.noFile)
+        }
+    }
+    func retireShortcuts() { shortcuts.retire() }
     /// Preserve partial field-editor input and compare it with its own last displayed setting.
     func valuesChanged() {
         let latest = owner.value
@@ -388,8 +912,14 @@ extension EditorSettings {
         sync(width, \.tabWidth) { String($0.tabWidth) }
         sync(size, \.fontSize) { NumericInput.editable($0.basePointSize) }
         sync(zoom, \.defaultZoom) { String($0.initialZoom) }
+        widthStepper.integerValue = latest.tabWidth
+        sizeStepper.doubleValue = latest.basePointSize
+        zoomStepper.integerValue = latest.initialZoom
         tabs.state = latest.useTabs ? .on : .off
         wrap.state = latest.wrap ? .on : .off
+        for toggle in memberToggles {
+            toggle.button.state = (latest[keyPath: toggle.member] ?? toggle.standard) ? .on : .off
+        }
         appearance.select(appearance.itemArray.first { ($0.representedObject as? String) == latest.appearance })
         diskChanges.select(
             diskChanges.itemArray.first { ($0.representedObject as? String) == latest.diskChangeBehavior.rawValue })
@@ -400,19 +930,22 @@ extension EditorSettings {
         displayed.externalChangePolicy = latest.externalChangePolicy
         face.stringValue =
             latest.unavailableFontNotice ?? (latest.resolvedBaseFont.displayName ?? latest.resolvedBaseFont.fontName)
-        if shortcuts.key.currentEditor() == nil,
-            shortcuts.key.stringValue == shortcuts.draft.settings.shortcut(for: shortcuts.draft.selected),
-            shortcuts.draft.settings.shortcuts == displayed.shortcuts
-        {
-            shortcuts.rebase(latest)
-            displayed.shortcuts = latest.shortcuts
-        }
+        displayed.shortcuts = latest.shortcuts
+        shortcuts.reload()
+        refreshRows()
     }
     func showViewPreferenceError(_ error: Error) { showError(error) }
     private func showError(_ error: Error, field: NSView? = nil) {
         presentingError = true
         defer { presentingError = false }
+        if let field { reveal(field) }
         form.showValidation(error, field: field)
+        resizeToContent()
+    }
+    private func clearError() {
+        guard !form.validation.isHidden else { return }
+        form.clearValidation()
+        resizeToContent()
     }
     private func write(_ update: (inout EditorSettings) throws -> Void) throws {
         guard owner.loadError == nil && owner.ignoredShortcutBindings.isEmpty else { throw LiveError.repair }
@@ -420,7 +953,7 @@ extension EditorSettings {
         var latest = owner.value
         try update(&latest)
         if latest != owner.value { try owner.save(latest, requiringCurrent: true) }
-        form.clearValidation()
+        clearError()
     }
     private func merge<T: Equatable>(
         _ value: T, key: WritableKeyPath<EditorSettings, T>, baseline: T,
@@ -431,10 +964,6 @@ extension EditorSettings {
     }
     @objc private func commitField(_ field: NSTextField) {
         guard form.acceptsActions else { return }
-        if field === shortcuts.key {
-            commitShortcuts()
-            return
-        }
         do {
             try write { latest in
                 if field === width {
@@ -472,14 +1001,23 @@ extension EditorSettings {
     }
     func controlTextDidEndEditing(_ notification: Notification) {
         guard form.acceptsActions, !maintenancePending, !presentingError,
-            let field = notification.object as? NSTextField,
+            let field = notification.object as? NSTextField, field !== filter,
             notification.userInfo?["NSTextMovement"] as? Int != NSTextMovement.cancel.rawValue
         else { return }
-        if field === shortcuts.key { commitShortcuts(reveal: false) } else { commitField(field) }
+        commitField(field)
+    }
+    func controlTextDidChange(_ notification: Notification) {
+        if notification.object as? NSTextField === filter { refreshRows() }
     }
     func control(_ control: NSControl, textView: NSTextView, doCommandBy command: Selector) -> Bool {
         if command == #selector(NSResponder.cancelOperation(_:)) {
-            form.close()
+            // Escape first clears a search, as it does in any search field; then it closes.
+            if control === filter, !filter.stringValue.isEmpty {
+                filter.stringValue = ""
+                refreshRows()
+            } else {
+                form.close()
+            }
             return true
         }
         return false
@@ -507,7 +1045,7 @@ extension EditorSettings {
                 reservedKeys: SettingsController.reservedShortcuts(in: NSApp.mainMenu))
             owner.apply(replacing: previous)
             valuesChanged()
-            form.clearValidation()
+            clearError()
         } catch {
             valuesChanged()
             showError(error, field: sender)
@@ -524,7 +1062,7 @@ extension EditorSettings {
                 reservedKeys: SettingsController.reservedShortcuts(in: NSApp.mainMenu))
             owner.apply(replacing: previous)
             valuesChanged()
-            form.clearValidation()
+            clearError()
         } catch {
             valuesChanged()
             showError(error, field: sender)
@@ -564,41 +1102,13 @@ extension EditorSettings {
                 reservedKeys: SettingsController.reservedShortcuts(in: NSApp.mainMenu))
             owner.apply(replacing: previous)
             valuesChanged()
-            form.clearValidation()
+            clearError()
         } catch {
             valuesChanged()
             showError(error, field: sender)
         }
     }
-    @objc private func clearShortcut(_ sender: Any?) {
-        shortcuts.clearShortcut(sender)
-        commitShortcuts(reveal: false)
-    }
-    private func commitShortcuts(reveal: Bool = true) {
-        let candidate = shortcuts.settings(), initial = displayed.shortcuts
-        do {
-            try write { latest in
-                for command in Set(candidate.shortcuts.keys).union(initial.keys)
-                where candidate.shortcuts[command] != initial[command] {
-                    guard
-                        latest.shortcuts[command] == initial[command]
-                            || latest.shortcuts[command] == candidate.shortcuts[command]
-                    else { throw LiveError.changed }
-                    latest.shortcuts[command] = candidate.shortcuts[command]
-                }
-                if let failure = latest.shortcutValidationFailure(
-                    reservedKeys: SettingsController.reservedShortcuts(in: NSApp.mainMenu))
-                {
-                    throw failure
-                }
-            }
-            displayed.shortcuts = owner.value.shortcuts
-            shortcuts.rebase(owner.value)
-        } catch let failure as ShortcutValidationFailure {
-            showError(failure, field: reveal ? shortcuts.revealValidation(failure) : nil)
-        } catch { showError(error, field: shortcuts.key) }
-    }
-    private enum Maintenance { case repair, reset }
+    private enum Maintenance { case repair, reset, resetShortcuts }
     private func confirmMaintenance(_ action: Maintenance) {
         guard form.acceptsActions, !maintenancePending, form.window.attachedSheet == nil else { return }
         let prior = owner.value
@@ -625,6 +1135,14 @@ extension EditorSettings {
             alert.informativeText =
                 "This resets font, zoom, indentation, view preferences, how documents with a preview open, launch behavior, appearance and assigned shortcuts."
             title = "Reset Defaults"
+        case .resetShortcuts:
+            let count = prior.shortcuts.count
+            alert.messageText = "Reset all shortcuts to their defaults?"
+            alert.informativeText =
+                count == 1
+                ? "This removes the 1 shortcut you changed. Other settings stay as they are. Undo does not bring it back."
+                : "This removes the \(Strings.number(count)) shortcuts you changed. Other settings stay as they are. Undo does not bring them back."
+            title = "Reset Shortcuts"
         }
         alert.addButton(withTitle: "Cancel", role: .cancel)
         alert.addButton(withTitle: title).hasDestructiveAction = true
@@ -645,6 +1163,13 @@ extension EditorSettings {
                     }
                 case .reset:
                     try self.write { $0 = EditorSettings() }
+                case .resetShortcuts:
+                    try self.write {
+                        $0.shortcuts = [:]
+                        $0.version = $0.requiredVersion
+                    }
+                    self.shortcuts.didResetAll()
+                    return
                 }
                 guard self.form.acceptsActions else { return }
                 self.form.close()
@@ -809,9 +1334,12 @@ extension EditorSettings {
         previousFont = nil
     }
     private enum LiveError: LocalizedError {
-        case repair, changed
+        case repair, changed, noFile
         var errorDescription: String? {
             switch self {
+            case .noFile:
+                return
+                    "TextTank has not saved a settings file yet, so there is nothing to show in Finder. The file is created when you change a setting."
             case .repair: return "Use Repair Settings to back up the original file before changing these settings."
             case .changed:
                 return

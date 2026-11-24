@@ -583,10 +583,13 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 title: title, action: action, target: target, representedObject: value,
                 isEnabled: enabled, state: checked ? .on : .off)
             if let value, let command = EditorCommand(rawValue: value) {
-                item.keyEquivalent =
-                    command.isShortcutAssignable
-                    ? app?.settings?.value.shortcut(for: value) ?? command.defaultMenuShortcut
-                    : command.defaultMenuShortcut
+                // The key the menu bar shows for the command now, whoever assigned it (DS-20).
+                if let shortcut = app?.settings?.menuShortcut(for: command) {
+                    item.keyEquivalent = shortcut.key
+                    item.keyEquivalentModifierMask = shortcut.modifiers
+                } else {
+                    item.keyEquivalent = command.defaultMenuShortcut
+                }
                 item.isEnabled =
                     enabled && (!TTEditor.commandModifiesText(command.nativeIdentifier) || !editor.readOnly)
                 if command.isToggle { item.state = isChecked(command, in: editor) ? .on : .off }
