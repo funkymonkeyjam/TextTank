@@ -1528,14 +1528,15 @@ import NativeSearch
                 }
                 let controller = visible.windowControllers[0] as! EditorWindowController
                 let hiddenController = hidden.windowControllers[0] as! EditorWindowController
-                let buttons = { descendants(controller.hostWindow!.contentView!).compactMap { $0 as? NSPopUpButton } }
+                // Every status field is a native button: a pull-down, or a plain button for the
+                // position and the language, which run one command.
+                let buttons = { descendants(controller.hostWindow!.contentView!).compactMap { $0 as? NSButton } }
                 let badges = {
-                    // DB-R3: totals, wrap and access state moved to the position menu. These
-                    // retain the original asynchronous metrics/state assertions at that surface.
+                    // DB-R3: totals, wrap and access state are the position field's statistics,
+                    // shown in its tooltip. These retain the original asynchronous metrics/state
+                    // assertions at that surface.
                     buttons().filter { $0.identifier?.rawValue.hasPrefix("status.") == true }.map(\.title)
-                        + (controller.statusOptionsMenu(.position)?.items.filter {
-                            $0.action == nil && $0.submenu == nil
-                        }.map(\.title) ?? [])
+                        + controller.statusStatistics
                 }
                 let badge = { (identifier: String) in buttons().first { $0.identifier?.rawValue == identifier }?.title }
                 try require(
@@ -1557,7 +1558,7 @@ import NativeSearch
                 }
                 check(
                     badgeMismatches.isEmpty,
-                    "the position-menu character totals and line-ending field reach the previous implementation's values with no explicit refresh \(badgeMismatches)"
+                    "the position field's character totals and the line-ending field reach the previous implementation's values with no explicit refresh \(badgeMismatches)"
                 )
                 visible.editor.text = "a\r\nb\nc\u{1F600}"
                 spinUntil("exact character count and Mixed EOL") {

@@ -310,7 +310,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         splitBelowTabs = content.topAnchor.constraint(equalTo: root.topAnchor)
         splitBelowTabs?.isActive = true
         statusLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        statusLabel.textColor = .secondaryLabelColor
+        // DS-61: small text in the secondary colour measured about 3.8:1; the primary label
+        // colour is well above 4.5:1 in both appearances.
+        statusLabel.textColor = .labelColor
         statusLabel.lineBreakMode = .byClipping
         applyStatusMessage(
             document.currentSaveStateStatus,
@@ -327,6 +329,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             self.lastEditor = self.activeEditor
             return self.statusOptionsMenu(field)
         }
+        statusDetails.onCommand = { [weak self] field in self?.runStatusCommand(field) }
         // Editor events make the bar follow an edit or a selection change in the same turn of
         // the run loop; the timer started by visibilityChanged() covers state no event reports.
         stateObserver = NotificationCenter.default.addObserver(
@@ -449,9 +452,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             doc?.compactPausedRecoveryStatus
             ?? (doc?.recoveredOrigin == nil ? message : "Recovered copy — Save As to keep")
         applyStatusMessage(message, compactMessage: failed ? failureSummary : compact)
-        // The failure is carried by the words and the symbol; full-strength label colour keeps it
-        // readable in both appearances, where small red text was not.
-        statusLabel.textColor = failed ? .labelColor : .secondaryLabelColor
+        // The failure is carried by the words, the symbol and the heavier weight; the label
+        // colour is the primary one in every state (DS-61, DS-62).
         statusLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: failed ? .semibold : .regular)
         updateLeadingStatus()
     }
@@ -491,8 +493,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 DispatchQueue.main.async { deliver(count, eol) }
             }
         }
+        // The same name the chooser and the Syntax Highlighting menu use (DS-20, DS-24).
         let language =
-            EditorServices.current?.languages?.profile(identifier: doc.languageIdentifier)?.title
+            EditorServices.current?.languages?.displayName(identifier: doc.languageIdentifier)
             ?? (doc.languageIdentifier == LanguageProfile.plainTextID ? "Plain Text" : doc.languageIdentifier)
         let eol =
             cachedEndings.isEmpty ? ([0: "CRLF", 1: "CR", 2: "LF"][info.eol.rawValue] ?? "LF") : cachedEndings
@@ -544,8 +547,37 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         ]
         if editor.readOnly { items.append(.init(field: .readOnly, text: "Read Only")) }
         statusSummaryItems = items
+        // The position field runs Go to Line; what its menu used to list about the document is
+        // its tooltip and accessibility help instead.
+        let statistics = statusStatistics.joined(separator: "\n")
         let rowOrder: [StatusField] = [.position, .selectedCharacters, .selections, .language, .indent, .encoding, .eol]
-        statusDetails.update(rowOrder.compactMap { field in items.first { $0.field == field } })
+        statusDetails.update(
+            rowOrder.compactMap { field in
+                guard let item = items.first(where: { $0.field == field }) else { return nil }
+                return field == .position ? StatusItem(field: field, text: item.text, detail: statistics) : item
+            })
+    }
+    /// The document statistics the position field carries in its tooltip and accessibility
+    /// help, one per line: lines, characters, bookmarks, text size, wrapping, access, and the
+    /// selection when there is one.
+    var statusStatistics: [String] {
+        let totals: [StatusField] = [.lines, .characters, .bookmarks, .font, .wrap, .readOnly]
+        return totals.compactMap { field in statusSummaryItems.first { $0.field == field }?.text }
+            + statusSummaryItems.filter { [.selectedCharacters, .selections].contains($0.field) }.map {
+                String(format: Strings.text("status.fieldValue", "%@: %@"), $0.field.displayName, $0.text)
+            }
+    }
+    /// The one command of a status field that runs directly (DS-20: the same actions the menu
+    /// bar's Find > Go to Line… and View > Syntax Highlighting > Choose Language… send).
+    func runStatusCommand(_ field: StatusField) {
+        guard !statusClosed, focusPresentationChrome(explicit: false) else { return }
+        EditorServices.current?.noteActiveController(self)
+        lastEditor = activeEditor
+        switch field {
+        case .position: goToLine(nil)
+        case .language: EditorServices.current?.languages?.chooseLanguage(nil)
+        default: break
+        }
     }
     /// The menu a status bar field opens, for the active pane. Building it changes nothing, so
     /// its wording can be checked without showing it.
@@ -619,10 +651,6 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             for n in [2, 3, 4, 8] {
                 add("Width: \(n)", #selector(statusOption(_:)), self, "width.\(n)", info.tabWidth == n)
             }
-            if let settings = app?.settings {
-                menu.addItem(.separator())
-                add("Default Editor Settings…", #selector(SettingsController.showSettings(_:)), settings)
-            }
         case .eol:
             heading("Convert document line endings")
             for (name, code) in [("LF — Unix / macOS", "LF"), ("CRLF — Windows", "CRLF"), ("CR — Classic Mac", "CR")] {
@@ -641,33 +669,12 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
                 menu.addItem(.separator())
                 menu.addItem(languages.styleSettingsMenuItem())
             }
-        case .language:
-            if let languages = app?.languages {
-                for item in languages.languageMenuItems() {
-                    item.state = (item.representedObject as? String) == doc.languageIdentifier ? .on : .off
-                    menu.addItem(item)
-                }
-            }
         case .bookmarks:
             for value: EditorCommand in [.bookmarkToggle, .bookmarkNext, .bookmarkPrevious] { command(value) }
-        case .position:
-            add("Go to Line…", #selector(statusOption(_:)), self, "goToLine")
-            menu.addItem(.separator())
-            for item in statusSummaryItems
-            where [.bookmarks, .characters, .lines, .font, .wrap, .readOnly].contains(item.field) {
-                heading(item.text)
-            }
-            for item in statusSummaryItems where [.selectedCharacters, .selections].contains(item.field) {
-                heading(String(format: Strings.text("status.fieldValue", "%@: %@"), item.field.displayName, item.text))
-            }
-            command(.selectAll)
-            add("Clear Selection", #selector(statusOption(_:)), self, "clearSelection")
-            for field: StatusField in [.bookmarks, .font, .wrap, .language, .indent, .encoding, .eol] {
-                guard let submenu = statusOptionsMenu(field) else { continue }
-                let item = NSMenuItem(title: field.displayName, action: nil, keyEquivalent: "")
-                item.submenu = submenu
-                menu.addItem(item)
-            }
+        case .position, .language:
+            // These fields run one command when clicked and have no menu: Go to Line and the
+            // language chooser.
+            return nil
         case .document, .readOnly:
             if let receipt = doc.bulkReceipt {
                 heading(receipt.summary)
@@ -677,9 +684,11 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             add("Save", #selector(NSDocument.save(_:)), doc)
             add("Save As…", #selector(NSDocument.saveAs(_:)), doc)
             add("Read Only", #selector(TextDocument.toggleReadOnly(_:)), doc, nil, editor.readOnly)
-        case .characters, .lines, .selectedCharacters, .selections:
-            command(.selectAll)
+        case .selectedCharacters, .selections:
             add("Clear Selection", #selector(statusOption(_:)), self, "clearSelection")
+        case .characters, .lines:
+            // Totals are read in the position field's tooltip; they have no commands.
+            return nil
         }
         return menu
     }
@@ -705,7 +714,6 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         case "tabs", "spaces": editor.configureTabWidth(info.tabWidth, useTabs: id == "tabs")
         case "wrap.on", "wrap.off": editor.wrap = id == "wrap.on"
         case "clearSelection": Self.clearSelection(in: editor, macros: EditorServices.current?.macros)
-        case "goToLine": goToLine(sender)
         default:
             if id.hasPrefix("width."), let width = Int(id.dropFirst(6)) {
                 editor.configureTabWidth(width, useTabs: info.useTabs)
