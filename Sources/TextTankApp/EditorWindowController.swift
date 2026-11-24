@@ -237,7 +237,10 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         }
         if editor == nil {
             EditorServices.current?.settings?.apply(to: primaryEditor)
-            if document.deferredLargeFileLanguage != nil { primaryEditor.wrap = false }
+            if document.deferredLargeFileLanguage != nil {
+                primaryEditor.wrap = false
+                primaryEditor.stopChangeTracking()
+            }
         }
         let root = presentationRoot
         split.delegate = self
@@ -1620,6 +1623,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         splitView.subviews[1].frame = NSRect(
             x: left + splitView.dividerThickness, y: 0, width: available - left, height: splitView.bounds.height)
     }
+    /// The off direction of View > Split Tab View. The menu lists the one toggle (`clone`,
+    /// DS-D13); this selector stays for macros, the toolbar's checks and callers that only close.
     @objc func closeSplit(_ sender: Any?) {
         guard !CompareCommandScope.blocksWorkspace else { return }
         guard let clone = secondary else { return }
@@ -1648,6 +1653,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         case #selector(closeSplit(_:)): return secondary != nil
         case #selector(setDocumentViewMode(_:)): return validateDocumentViewMode(item)
         case #selector(toggleDocumentPreview(_:)): return validateToggleDocumentPreview(item)
+        case #selector(toggleSyncPreviewScrolling(_:)): return validateSyncPreviewScrolling(item)
         case #selector(command(_:)):
             if (NSApp.modalWindow ?? NSApp.keyWindow)?.firstResponder is NSTextView { return false }
             guard let id = item.representedObject as? String else { return false }

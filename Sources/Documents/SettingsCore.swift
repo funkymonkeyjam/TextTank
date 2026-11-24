@@ -48,6 +48,23 @@ package struct EditorSettings: Codable, Equatable {
     package var showWhitespaceEnabled: Bool { showWhitespace ?? false }
     package var showLineEndings: Bool?
     package var showLineEndingsEnabled: Bool { showLineEndings ?? false }
+    /// View > Show > Change Bars (DS-D13), for every editor view: a narrow margin marks the
+    /// lines changed since the document was opened. Off unless the member is `true`.
+    package var changeBars: Bool?
+    package var changeBarsEnabled: Bool { changeBars ?? false }
+    /// View > Centered Text Column (DS-D13), for every editor view, and the column's width in
+    /// characters of the editor font. Off unless `centeredColumn` is `true`; a missing width is
+    /// 90. A stored width outside 40...240 is read as the nearest bound and is not rewritten.
+    package var centeredColumn: Bool?
+    package var centeredColumnEnabled: Bool { centeredColumn ?? false }
+    package var centeredColumnWidth: Int?
+    static package let centeredColumnWidths = 40...240
+    static package let standardCenteredColumnWidth = 90
+    package var centeredColumnCharacters: Int {
+        min(
+            max(centeredColumnWidth ?? Self.standardCenteredColumnWidth, Self.centeredColumnWidths.lowerBound),
+            Self.centeredColumnWidths.upperBound)
+    }
     package var reopenLastSession: Bool?
     package var reopensLastSession: Bool { reopenLastSession ?? true }
     /// DS-D9. Quitting keeps each edited untitled document as a verified recovery copy and
@@ -185,7 +202,7 @@ package struct ShortcutLoadIssue: Equatable {
 }
 package enum SettingsError: Error, LocalizedError, Equatable {
     case invalid, invalidFont, conflict, unreadable, tabWidth, unknownShortcut, invalidShortcut, changedOnDisk,
-        ambiguousViewPreference
+        ambiguousViewPreference, centeredColumnWidth
     case duplicateShortcut(first: String, second: String, key: String)
     /// Two commands on one key. `first` and `second` are the commands as the menu bar lists
     /// them and `shortcut` is the key in words.
@@ -200,6 +217,9 @@ package enum SettingsError: Error, LocalizedError, Equatable {
                 "The saved preference is ambiguous. Check Settings.json for duplicate preference keys, then try again."
         case .changedOnDisk: return "The settings file changed before this edit finished. Try the command again."
         case .tabWidth: return "Tab width must be a whole number from 1 to 32. The settings were not changed."
+        case .centeredColumnWidth:
+            return
+                "Column width must be a whole number of characters from \(EditorSettings.centeredColumnWidths.lowerBound) to \(EditorSettings.centeredColumnWidths.upperBound). The settings were not changed."
         case .invalidFont: return "Choose a font name, a size from 6 to 72 points and a default zoom from −10 to 60."
         case .invalid: return "Unsupported settings version or value. Existing settings have not been replaced."
         case .conflict:
@@ -247,9 +267,12 @@ package struct ShortcutValidationFailure: LocalizedError {
 
 package enum EditorViewPreference: String {
     case autoIndent, autoPair, braceHighlight, currentLineHighlight, indentGuides
-    /// Not a View command yet: the stored switch for scroll sync in Both (docs/preview-model.md).
+    /// View > Preview > Sync Scrolling in Both, and the Settings row of the same name
+    /// (docs/preview-model.md).
     case syncPreviewScrolling
     case lineNumbers, showWhitespace, showLineEndings
+    /// View > Show > Change Bars and View > Centered Text Column (DS-D13).
+    case changeBars, centeredColumn
     package func enabled(in settings: EditorSettings) -> Bool {
         switch self {
         case .autoIndent: return settings.autoIndentEnabled
@@ -261,6 +284,8 @@ package enum EditorViewPreference: String {
         case .lineNumbers: return settings.lineNumbersEnabled
         case .showWhitespace: return settings.showWhitespaceEnabled
         case .showLineEndings: return settings.showLineEndingsEnabled
+        case .changeBars: return settings.changeBarsEnabled
+        case .centeredColumn: return settings.centeredColumnEnabled
         }
     }
 }

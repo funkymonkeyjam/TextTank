@@ -90,6 +90,20 @@ extension EditorWindowController {
     /// checkmark of its own: the three items above it show which mode is on (DS-22).
     func validateToggleDocumentPreview(_ item: NSMenuItem) -> Bool { previewKind != nil }
 
+    /// View > Preview > Sync Scrolling in Both: the stored `syncPreviewScrolling` setting, the same
+    /// value as the Settings row, so changing either shows in the other at once (DS-20).
+    @objc func toggleSyncPreviewScrolling(_ sender: Any?) {
+        guard previewKind != nil, !CompareCommandScope.blocksWorkspace else { return }
+        EditorServices.current?.settings?.toggle(.syncPreviewScrolling, sender: sender)
+    }
+
+    /// A checkmark for the stored value (DS-22); disabled with the rest of the Preview submenu
+    /// for a document that has no preview (DS-21).
+    func validateSyncPreviewScrolling(_ item: NSMenuItem) -> Bool {
+        item.state = (EditorServices.current?.settings?.value.syncsPreviewScrolling ?? true) ? .on : .off
+        return previewKind != nil
+    }
+
     /// Shows what Settings says a document of this format opens in. Called once, when a document
     /// read from a file gets its first tab; never for a tab restored from a session, an untitled
     /// document, or a tab that is already open (see "Opening in Preview or Both" in

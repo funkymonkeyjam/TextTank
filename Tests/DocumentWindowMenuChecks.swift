@@ -218,7 +218,9 @@ extension DocumentChecks {
                 "View → Editor Groups → Show Tab in Another Group", "Tools → Automations → Manage Automations…",
                 "File → Quick Open…", "Find → Find and Replace…", "Tools → Macros", "Tools → Run Commands",
                 "View → Syntax Highlighting", "Help → TextTank User Guide", "Help → Welcome to TextTank",
-                "Edit → Undo", "File → New", "File → Save"
+                "Edit → Undo", "File → New", "File → Save", "View → Split Tab View", "View → Show → Change Bars",
+                "View → Centered Text Column", "View → Preview → Toggle Preview",
+                "View → Preview → Sync Scrolling in Both"
             ]
             let listed = Set(walk(try requireValue(NSApp.mainMenu, "actual menu bar")).map(\.path))
             let unlisted = helpPaths.filter { !listed.contains($0.replacingOccurrences(of: " → ", with: " > ")) }
@@ -261,7 +263,17 @@ extension DocumentChecks {
                 ("Language Function List", "Find › Function List…"),
                 ("Search Bookmarked Lines Invert", "Find › Bookmarks › Invert Bookmarks"),
                 ("File Compare with Saved", "Compare › Compare with Saved Version"),
-                ("View Auto-Pair", "Edit › Typing › Auto-Pair Brackets and Quotes")
+                ("View Auto-Pair", "Edit › Typing › Auto-Pair Brackets and Quotes"),
+                // DS-D13: the View menu before it was regrouped on 23 November 2026.
+                ("View › Source", "View › Preview › Source"), ("View › Both", "View › Preview › Both"),
+                ("View › Toggle Preview", "View › Preview › Toggle Preview"),
+                ("Close Split View", "View › Split Tab View"),
+                ("View › Show Line Numbers", "View › Show › Line Numbers"),
+                ("View › Show Whitespace", "View › Show › Whitespace"),
+                ("View › Show Line Endings", "View › Show › Line Endings"),
+                ("Guides and Highlights Show Indentation Guides", "View › Show › Indentation Guides"),
+                ("Guides and Highlights › Highlight Current Line", "View › Show › Current Line Highlight"),
+                ("Highlight Matching Braces", "View › Show › Matching Braces")
             ]
             let unfound = formerPlaces.filter { !found($0.0).contains($0.1) }.map(\.0)
             check(unfound.isEmpty, "palette finds each command by its former menu or name: \(unfound)")
@@ -290,24 +302,36 @@ extension DocumentChecks {
                     && detail("Find › Matching Brace") == "Search, bookmarks or editor selection"
                     && detail("File › Reload with Encoding › UTF-8…")
                         == "Reads saved file • Reloads document contents after the normal review"
-                    && detail("View › Guides and Highlights › Highlight Current Line")
+                    && detail("View › Show › Current Line Highlight")
                         == "Reads active view • Changes display or view settings",
                 "DS-20 a palette entry records what its command works on, wherever the menu bar lists it")
             check(
                 !entries.contains { $0.row.detail == $0.scope || $0.row.title.contains(" › ") }
-                    && entries.allSatisfy { $0.path == ($0.row.detail.isEmpty ? "" : $0.row.detail + " › ") + $0.row.title },
+                    && entries.allSatisfy {
+                        $0.path == ($0.row.detail.isEmpty ? "" : $0.row.detail + " › ") + $0.item.title
+                            && $0.row.title == $0.name
+                            // DS-D13: an item of View › Show is titled by what it shows, and the
+                            // palette names the command in full.
+                            && ($0.name == $0.item.title
+                                || ($0.row.detail == "View › Show" && $0.name == "Show " + $0.item.title))
+                    }
+                    && entries.filter { $0.row.detail == "View › Show" }.map(\.row.title) == [
+                        "Show Line Numbers", "Show Whitespace", "Show Line Endings", "Show Indentation Guides",
+                        "Show Current Line Highlight", "Show Matching Braces", "Show Change Bars"
+                    ],
                 "a palette row shows the command's name and the menu that holds it, never the internal description")
             // Toggle Preview is an ordinary menu item, so the palette lists and validates it
             // exactly as it does Source, Preview and Both.
             let toggleRow = try requireValue(
-                entries.first { $0.path == "View › Toggle Preview" }, "palette row for View › Toggle Preview")
+                entries.first { $0.path == "View › Preview › Toggle Preview" },
+                "palette row for View › Preview › Toggle Preview")
             let previewRow = try requireValue(
-                entries.first { $0.path == "View › Preview" }, "palette row for View › Preview")
+                entries.first { $0.path == "View › Preview › Preview" }, "palette row for View › Preview › Preview")
             let previewable = sessionDelegate.currentDocumentController?.previewKind != nil
             check(
-                found("toggle preview") == ["View › Toggle Preview"]
+                found("toggle preview") == ["View › Preview › Toggle Preview"]
                     && toggleRow.scope == "Reads active view • Changes display or view settings"
-                    && toggleRow.scope == previewRow.scope && toggleRow.row.detail == "View"
+                    && toggleRow.scope == previewRow.scope && toggleRow.row.detail == "View › Preview"
                     && toggleRow.row.detail == previewRow.row.detail,
                 "DS-20 the palette finds Toggle Preview and describes it as it does the three mode commands")
             check(
@@ -486,11 +510,11 @@ extension DocumentChecks {
                     && entries.allSatisfy { $0.row.accessory == (ControlPresentation.shortcut(of: $0.item) ?? "") },
                 "every palette row whose command has a key shows it, and no other row shows one")
             check(
-                key("File › Save") == "⌘S" && key("File › Save All") == "⌥⌘S" && key("View › Toggle Preview") == "⇧⌘V"
+                key("File › Save") == "⌘S" && key("File › Save All") == "⌥⌘S" && key("View › Preview › Toggle Preview") == "⇧⌘V"
                     && key("File › Quick Open…") == "⇧⌘O" && key("Window › Next Tab") == "⌃⇥"
                     && key("Edit › Undo") == "⌘Z" && key("Edit › Redo") == "⇧⌘Z"
                     && key("Find › Bookmarks › Toggle Bookmark") == functionKeyTwo
-                    && entries.first { $0.path == "View › Toggle Preview" }?.row.accessoryLabel == "Shortcut Shift-Command-V",
+                    && entries.first { $0.path == "View › Preview › Toggle Preview" }?.row.accessoryLabel == "Shortcut Shift-Command-V",
                 "keys read as the menu bar draws them: \(["File › Save All", "Window › Next Tab", "Find › Bookmarks › Toggle Bookmark"].map { key($0) ?? "none" })")
             let upper = EditorCommand.upper.rawValue
             let before = sessionDelegate.settings.value

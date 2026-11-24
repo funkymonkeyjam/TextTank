@@ -237,6 +237,22 @@ package struct ShortcutContext: Sendable {
 }
 
 extension EditorSettings {
+    /// Commands the menu bar no longer lists, each with the command that took its place.
+    /// `closeSplit:` was View › Close Split View until 23 November 2026 (DS-D13); View › Split
+    /// Tab View is now the one toggle that splits and closes.
+    static package let retiredShortcutCommands: [String: String] = ["closeSplit:": "clone:"]
+    /// A saved shortcut for a retired command becomes its successor's, unless the successor has
+    /// an entry of its own, which then stays and the retired entry is dropped. Either way the
+    /// retired entry is never reported as damaged. The file itself is rewritten only when the
+    /// person next changes a shortcut.
+    static package func adoptingRetiredShortcuts(_ shortcuts: [String: String]) -> [String: String] {
+        var result = shortcuts
+        for (retired, successor) in retiredShortcutCommands.sorted(by: { $0.key < $1.key }) {
+            guard let text = result.removeValue(forKey: retired) else { continue }
+            if result[successor] == nil, !text.isEmpty { result[successor] = text }
+        }
+        return result
+    }
     /// Version 1 holds a shortcut only for one of the twelve editor commands, as one printable
     /// character. Any other command, modifier or key, and a default that was taken away, need
     /// version 2. A version-1 reader refuses a version-2 file and leaves it as it is.
@@ -377,6 +393,7 @@ extension EditorSettings {
     /// the "ignored binding" a person repairs from Settings. Everything else in the file is
     /// held to the strict rules.
     package func toleratingShortcuts(context: ShortcutContext) throws -> (settings: Self, issues: [ShortcutLoadIssue]) {
+        let shortcuts = Self.adoptingRetiredShortcuts(shortcuts)
         var result = self
         result.shortcuts = [:]
         // Core schema/values are never repaired, guessed or made lenient.
