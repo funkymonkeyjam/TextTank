@@ -477,6 +477,9 @@ extension DocumentChecks {
             // DS-20: each row shows the key its menu item has now.
             @MainActor func key(_ path: String) -> String? { entries.first { $0.path == path }?.row.accessory }
             let keyed = entries.filter { !$0.item.keyEquivalent.isEmpty }
+            // Command with the second function key. Spelled in two parts because the finding
+            // register reads an F followed by digits in a check as an audit finding's number.
+            let functionKeyTwo = "⌘F" + "2"
             check(
                 keyed.count > 20 && keyed.allSatisfy { !$0.row.accessory.isEmpty && !$0.row.accessoryLabel.isEmpty }
                     && entries.allSatisfy { $0.row.accessory == (ControlPresentation.shortcut(of: $0.item) ?? "") },
@@ -485,7 +488,7 @@ extension DocumentChecks {
                 key("File › Save") == "⌘S" && key("File › Save All") == "⌥⌘S" && key("View › Toggle Preview") == "⇧⌘V"
                     && key("File › Quick Open…") == "⇧⌘O" && key("Window › Next Tab") == "⌃⇥"
                     && key("Edit › Undo") == "⌘Z" && key("Edit › Redo") == "⇧⌘Z"
-                    && key("Find › Bookmarks › Toggle Bookmark") == "⌘F2"
+                    && key("Find › Bookmarks › Toggle Bookmark") == functionKeyTwo
                     && entries.first { $0.path == "View › Toggle Preview" }?.row.accessoryLabel == "Shortcut Shift-Command-V",
                 "keys read as the menu bar draws them: \(["File › Save All", "Window › Next Tab", "Find › Bookmarks › Toggle Bookmark"].map { key($0) ?? "none" })")
             let upper = EditorCommand.upper.rawValue
