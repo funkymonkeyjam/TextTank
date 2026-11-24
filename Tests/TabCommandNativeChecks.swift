@@ -95,10 +95,12 @@ extension TabDiskIO {
         func id(_ doc: TextDocument) -> TabID {
             host.model.groups.flatMap(\.tabs).first { $0.documentID == doc.runtimeID }!.id
         }
+        // The Window menu lists the commands that close several tabs in one submenu (DS-23).
         func item(_ menu: NSMenu, _ command: TabCommand) throws -> NSMenuItem {
             try requireValue(
-                menu.items.first { $0.identifier?.rawValue == "tabs.command." + command.rawValue },
-                "T1 menu " + command.rawValue)
+                (menu.items + menu.items.flatMap { $0.submenu?.items ?? [] }).first {
+                    $0.identifier?.rawValue == "tabs.command." + command.rawValue
+                }, "T1 menu " + command.rawValue)
         }
         func dispatch(_ item: NSMenuItem) { _ = NSApp.sendAction(item.action!, to: item.target, from: item) }
         func waitClose() { spinUntil("T1 close operation finishes") { !commands.isBusy } }
@@ -635,6 +637,11 @@ extension TabDiskIO {
         let windowMenu = try requireValue(
             NSApp.mainMenu?.items.first { $0.title == "Window" }?.submenu, "T1 Window menu")
         windowMenu.update()
+        windowMenu.items.forEach { $0.submenu?.update() }
+        check(
+            Set(windowMenu.items.flatMap { $0.submenu?.items ?? [] }.compactMap { $0.representedObject as? String })
+                == Set([TabCommand.closeOthers, .closeLeft, .closeRight, .closeGroup, .closeSaved].map(\.rawValue)),
+            "T1 only the five commands that close several tabs are in a Window submenu; the rest are at its top level")
         for command in TabCommand.allCases {
             let x = try item(windowMenu, command)
             check(!x.isEnabled && !(x.toolTip ?? "").isEmpty, "T1 empty main menu disabled reason " + command.rawValue)
