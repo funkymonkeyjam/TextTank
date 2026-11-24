@@ -19,6 +19,9 @@ Compare → Compare with Saved Version compares the active file on disk with its
 
 Each time you save a file, TextTank keeps a private copy of what it wrote, and the first time it saves over content it has not seen, a copy of what was there before. These earlier versions stay on this Mac in TextTank’s own support folder, never beside your file. TextTank keeps the last 20 versions of each file for up to 30 days, and at most 200 MB in all; the oldest are removed first, and a save larger than 32 MiB is not kept. Compare → Compare with Earlier Version… lists the versions of the active file by date and size. Choose one to compare it with the current text. The earlier version is read-only. To restore it, or part of it, choose Compare → Merge Changes → Select All Changes or Select Changes…, then Apply Selected Changes: the document changes in one Undo step, and the file changes only when you save. Compare → Clear Local History… deletes the kept versions of the active file, or of every file, after asking; it does not change your files and cannot be undone. Untitled documents and Save Copy keep no earlier versions.
 
+Tabs
+A tab shows the document’s name. When the document has unsaved edits, a dot takes the place of the tab’s close button; move the pointer over the tab and the dot becomes the close button again. Clicking either closes the tab and asks about unsaved edits as usual. A warning triangle on a tab means its file changed outside TextTank, and a pair of arrows means the document is selected for comparison. Hold the pointer over either symbol to read what it means.
+
 Editor groups
 View → Editor Groups → Editor Group Layout lets you place groups side by side. Move to Group moves a tab. Show Tab in Another Group shows the same document in both groups, with independent views and shared edits. Returning to Single Group brings the tabs together.
 

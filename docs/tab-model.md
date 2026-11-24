@@ -300,3 +300,41 @@ window, as its frame does. Restoring an explicit session applies the keys its la
 
 Physical keyboard, VoiceOver, pointer dragging of the divider and full screen with the sidebar shown
 have not been observed; the native checks drive the same views and commands in an owned window.
+
+## What a tab shows, the mouse and the list of open tabs
+
+A tab's title is the document's name and nothing else. State is drawn beside it, as shapes with
+words behind them, never as a character in the title and never by colour alone (DS-62):
+
+- **Edited.** The close button shows a filled dot instead of its cross. Under the pointer, or while
+  the close button has the keyboard, it shows the cross. It is the same 28 by 28 button with the
+  same action, so a click on the dot closes through the same Save / Don't Save / Cancel review as a
+  click on the cross (DS-12), and an edited tab never looks as if it cannot be closed.
+- **Changed outside TextTank.** A warning triangle between the title and the close button. Its
+  tooltip and accessibility text give the document, the notice and what to do next (DS-70, DS-85).
+- **Selected for comparison.** A pair of opposed arrows in the same place, with its own tooltip.
+- **Pinned** remains the pin in place of the document icon; Source, Preview and Both remain the eye.
+
+A click on a state symbol is a click on its tab; a Control-click or secondary click opens the tab's
+menu. The symbols are 16 points wide with four points on either side, so the title, each symbol, the
+eye and the close button never abut (DS-14, DS-74).
+
+The tab's own accessibility label is one whole string for each combination of what the tab shows,
+pinned and edited ("notes.md, pinned, edited, showing Preview"), and one whole sentence form around it
+for an outside change, for comparison and for the two together ("notes.md, edited. Changed on disk.
+Selected for comparison."), so each can be translated as a whole (DS-84).
+
+**What gives way when a tab is narrow.** Tabs shrink from 220 to 130 points before the strip scrolls.
+From the trailing edge, in order of who keeps their place:
+
+1. the close button, which is also the edited dot: always;
+2. the eye of a tab in Preview or Both: always, because it is state;
+3. the outside-change symbol: always, because it warns that a save may overwrite other work;
+4. the comparison symbol: only while the title keeps 50 points, the width a title has beside the eye
+   at the minimum;
+5. the eye a Source tab shows under the pointer: only while the title keeps 82 points.
+
+So a 130-point tab shows close, and at most one of the two symbols, the outside change first; a
+130-point tab in Preview or Both shows close, the eye and the outside change, and its title keeps 30
+points. Whatever is not drawn is still in the tab's tooltip, its accessibility label and the list of
+open tabs.
