@@ -263,10 +263,19 @@ import EditorBridge
         check(choose(monitor) && browser.monitor.document == nil, "fixture: monitoring stopped")
 
         // Keyboard: arrows move, Return opens or selects the tab.
-        try browser.store.addFolder(folder)
-        browser.select(mode: 1)
+        // Add Folder, from the menu or from Quick Open's empty state, ends here once a folder is chosen.
+        browser.hide()
+        window.makeFirstResponder(plainTab.keyboardFocusView)
+        try browser.addChosenFolder(folder)
         let outline = browser.outline
-        check(outline.numberOfRows == 1, "fixture: the saved folder is listed")
+        check(
+            browser.store.contains(folder) && host.isSidebarShown && browser.isShown && outline.numberOfRows == 1
+                && (outline.item(atRow: 0) as? WorkspaceBrowserNode)?.entry.url.lastPathComponent == "sidebar",
+            "a folder added by Add Folder is saved and the docked sidebar shows it under Folders")
+        check(
+            keyboard(in: plainTab.activeEditor, of: host) && NSApp.windows.count == windowsBefore
+                && !NSApp.windows.contains { $0 is NSPanel && $0.isVisible && $0.title == "Workspace" },
+            "without a floating panel and without taking the keyboard")
         outline.selectRowIndexes([0], byExtendingSelection: false)
         window.makeFirstResponder(outline)
         outline.keyDown(with: try key(36, "\r", in: window))

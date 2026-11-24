@@ -68,15 +68,54 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
     private var keyControls: [NSView] = []
     var firstKeyView: NSView { keyControls.first ?? outline }
     var lastKeyView: NSView { keyControls.last ?? outline }
-    private let fileChooser = WorkspaceQuickOpen()
+    let fileChooser = WorkspaceQuickOpen()
+    /// Shift-Command-O: free in the menu bar, in Scintilla's key map and in the reserved set.
+    /// It is a default that gives way to a shortcut the person assigned to the same key in
+    /// Settings, as Toggle Preview's does (DS-25 is not involved: no system shortcut has this key).
+    static let quickOpenShortcut = MenuShortcut("O")
     @objc func quickOpen(_ sender: Any?) {
         guard !CompareCommandScope.blocksWorkspace else { return }
-        fileChooser.show(roots: store.state.folders, open: { [weak self] root, file in
-            guard let self, store.contains(root) else {
-                throw WorkspaceError.invalid("This workspace folder was removed. Open Quick Open again to refresh the list.")
+        fileChooser.show(
+            roots: store.state.folders, documents: quickOpenDocuments(), recent: recentURLs(),
+            select: { [weak self] id in
+                guard let self, !CompareCommandScope.blocksWorkspace else { return false }
+                return try selectOpenDocument(id)
+            },
+            open: { [weak self] root, file in
+                guard let self, !CompareCommandScope.blocksWorkspace else { return false }
+                if let root, !store.contains(root) {
+                    throw WorkspaceError.invalid(
+                        "This workspace folder was removed. Open Quick Open again to refresh the list.")
+                }
+                return try openOfferingEncoding(file) != nil
+            },
+            addFolder: { [weak self] in self?.addFolder(nil) })
+    }
+    /// The open documents Quick Open lists, one row a document, in the order they were opened.
+    /// The group is named only when there is more than one to tell apart.
+    func quickOpenDocuments() -> [QuickOpenList.OpenDocument] {
+        NSDocumentController.shared.documents.compactMap { $0 as? TextDocument }.filter(\.isOpen).map { document in
+            var group: String?
+            if let tab = document.presentation, let id = tab.tabID, tab.host.model.groups.count > 1,
+                let slot = tab.host.model.groups.first(where: { $0.tabs.contains { $0.id == id } })?.slot
+            {
+                group = tab.host.groupLabel(slot)
             }
-            return try openOfferingEncoding(file) != nil
-        })
+            return .init(
+                id: document.runtimeID.rawValue.uuidString, name: document.displayName, url: document.fileURL,
+                group: group)
+        }
+    }
+    /// Shows the tab the open document already has, in whichever group holds it. A document
+    /// that closed while Quick Open was showing is reported, never reopened.
+    func selectOpenDocument(_ id: String) throws -> Bool {
+        guard
+            let document = NSDocumentController.shared.documents.compactMap({ $0 as? TextDocument })
+                .first(where: { $0.isOpen && $0.runtimeID.rawValue.uuidString == id }),
+            let tab = document.presentation
+        else { throw FormFailure.documentChanged }
+        tab.host.show(tab, sender: nil)
+        return true
     }
     private enum Mode: Int { case openDocuments, folders, recentFiles }
     private var selectedMode: Mode { Mode(rawValue: mode.indexOfSelectedItem) ?? .openDocuments }
@@ -165,7 +204,10 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         case .monitor: (title, action) = ("Monitor Current File", #selector(toggleMonitor(_:)))
         case .reloadMonitored: (title, action) = ("Reload Monitored File…", #selector(reloadMonitored(_:)))
         }
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        let item =
+            command == .quickOpen
+            ? DefaultShortcutItem(title, action: action, shortcut: Self.quickOpenShortcut)
+            : NSMenuItem(title: title, action: action, keyEquivalent: "")
         item.target = self
         return item
     }
@@ -391,12 +433,14 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        do {
-            try store.addFolder(url)
-            mode.selectItem(at: Mode.folders.rawValue)
-            // Adding a folder shows where it went; the keyboard stays where it was.
-            if isShown { refresh(nil) } else { reveal() }
-        } catch { TTAlert.present(error) }
+        do { try addChosenFolder(url) } catch { TTAlert.present(error) }
+    }
+    /// What every Add Folder route ends with, Quick Open's included: the folder is saved and
+    /// the docked sidebar shows it under Folders. The keyboard stays where it was.
+    func addChosenFolder(_ url: URL) throws {
+        try store.addFolder(url)
+        mode.selectItem(at: Mode.folders.rawValue)
+        if isShown { refresh(nil) } else { reveal() }
     }
     @objc func removeFolder(_ sender: Any?) {
         guard !CompareCommandScope.blocksWorkspace else { return }
