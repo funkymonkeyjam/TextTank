@@ -96,8 +96,10 @@ import UniformTypeIdentifiers
     func requestTabClose(_ sender: Any?) {
         guard isOpen, !tabClosePending else { return }
         tabClosePending = true
-        // An injected close decision stands in for the review sheet, as it does for a bulk close.
-        if isDocumentEdited, let commands = presentation?.host.tabCommands, let decide = commands.decisionHandler {
+        // An injected single-close decision stands in for the review sheet.
+        if isDocumentEdited, let commands = presentation?.host.tabCommands,
+            let decide = commands.singleCloseDecisionHandler
+        {
             decide(TabClosePrompt(documentID: runtimeID, name: displayName, tabCount: 1)) { [weak self] decision in
                 guard let self else { return }
                 self.tabClosePending = false

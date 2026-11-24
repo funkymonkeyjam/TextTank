@@ -739,11 +739,11 @@ private final class Box<Value> {
         spinUntil("the edited dot") { (try? appearance(editedTab, in: strip).closeShowsEditedDot) == true }
         let asked = Box<[String]>([]), answer = Box<TabCloseDecision>(.cancel)
         let commands = host.tabCommands
-        commands.decisionHandler = { prompt, reply in
+        commands.singleCloseDecisionHandler = { prompt, reply in
             asked.value.append(prompt.name)
             reply(answer.value)
         }
-        defer { commands.decisionHandler = nil }
+        defer { commands.singleCloseDecisionHandler = nil }
         let dot = try closeButton(edited, in: strip)
         let text = editedTab.primaryEditor.text
         check(try appearance(editedTab, in: strip).closeShowsEditedDot, "fixture: the edited tab shows the dot")

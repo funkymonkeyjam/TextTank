@@ -50,6 +50,10 @@ import EditorBridge
     var isTerminating = false
     var decisionHandler: ((TabClosePrompt, @escaping @MainActor (TabCloseDecision) -> Void) -> Void)?
     var saveHandler: ((TextDocument, @escaping @MainActor (Error?) -> Void) -> Void)?
+    /// Stands in for the review sheet of one edited tab closed by itself. It is separate from
+    /// `decisionHandler`, which answers only for a command that closes several tabs: a check
+    /// that injects one must still be able to see the other's native review.
+    var singleCloseDecisionHandler: ((TabClosePrompt, @escaping @MainActor (TabCloseDecision) -> Void) -> Void)?
     var revealFiles: ([URL]) -> Void = { NSWorkspace.shared.activateFileViewerSelecting($0) }
     var copyPath: (String) -> Bool = { path in
         guard let board = RuntimeEnvironment.current.generalPasteboard() else { return false }
