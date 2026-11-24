@@ -2,6 +2,7 @@
 // Checks for the Foundation-only preview core (Sources/Preview): kind selection, limits, the
 // Markdown renderer, the static HTML policy, the resource resolver, delimited text, the JSON
 // tree and the SVG scan. Fixtures are in Tests/Fixtures/preview; see its README.
+import CryptoKit
 import Foundation
 @testable import TextTankCore
 
@@ -534,6 +535,74 @@ private func seconds(_ work: () -> Void) -> Double {
                     && map.blocks.allSatisfy { $0.lineCount >= 1 && $0.firstLine + $0.lineCount <= lineCount },
                 "markdown/\(name).md: the expected HTML, with \(map.count) entries for its \(topLevelElementCount(html)) top-level elements, in order and inside the document"
             )
+        }
+
+        // Shapes a reader meets: front matter, nesting, a long table, raw HTML.
+        func shape(_ lines: [String], _ expected: [[Int]], _ label: String) {
+            let result = mapped(lines.joined(separator: "\n"))
+            check(
+                result.map { spans($0.map) } == expected
+                    && result.map { topLevelElementCount($0.html) } == expected.count
+                    && result?.html == rendered(lines.joined(separator: "\n")),
+                "\(label): \(result.map { spans($0.map) } ?? [])")
+        }
+        shape(
+            ["---", "title: Notes", "tags: [a, b]", "---", "", "# Heading", "", "Body"],
+            [[0, 1], [1, 3], [5, 1], [7, 1]],
+            "front matter is not a Markdown construct: its rule and its lines are blocks like any other, and the heading after it keeps its own line"
+        )
+        shape(
+            [
+                "- one", "  - one a", "    - one a i", "", "      deep paragraph", "  - one b", "- two", "", "  1. first",
+                "  2. second", "", "after"
+            ],
+            [[0, 10], [11, 1]],
+            "a nested list is one top-level block over all its lines, loose items and inner lists included")
+        shape(
+            [
+                "> outer", "> > inner", "> > - item", "> >   more", "lazy line", "", "> second quote", ">", "> ```",
+                "> code", "> ```", "", "end"
+            ],
+            [[0, 5], [6, 5], [12, 1]],
+            "a quote with a quote, a list, a lazy line and code inside is one block for each quote")
+        let rows = (1...3000).map { "| \($0) | value \($0) |" }
+        shape(
+            ["intro", "", "| n | text |", "| - | - |"] + rows + ["", "outro"], [[0, 1], [2, 3002], [3005, 1]],
+            "a long table is one block from its header to its last row")
+        let table = mapped((["| n | text |", "| - | - |"] + rows).joined(separator: "\n"))?.map
+        check(
+            table?.position(forLine: 1502) == PreviewScrollMap.Position(block: 0, fraction: 1502.0 / 3002.0)
+                && (0..<3002).allSatisfy { line in table?.position(forLine: line).flatMap { table?.line(for: $0) } == line },
+            "and every one of its lines maps to a place in it and back")
+        shape(
+            [
+                "<div onclick=\"x()\">", "raw block", "</div>", "", "<script>alert(1)</script>", "",
+                "text <b>inline</b> <img src=x onerror=y>", "", "<!-- comment -->", "# After"
+            ],
+            [[0, 3], [4, 1], [6, 1], [8, 1], [9, 1]],
+            "raw HTML is ordinary paragraph text for the map, as it is for the output")
+        let raw = mapped("<script>alert(1)</script>\n\ntext <b>inline</b> <img src=x onerror=y>")?.html
+        check(
+            raw == "<p>&lt;script&gt;alert(1)&lt;/script&gt;</p>\n<p>text &lt;b&gt;inline&lt;/b&gt; &lt;img src=x onerror=y&gt;</p>\n",
+            "and it is still escaped, never passed through: \(raw ?? "nil")")
+
+        // The adversarial fixture renders to exactly the bytes it rendered to before the map existed.
+        let adversarial = try PreviewFixtures.data("markdown/adversarial.md")
+        let adversarialExpected = try PreviewFixtures.data("markdown/adversarial.html")
+        let digest = SHA256.hash(data: adversarialExpected).map { String(format: "%02x", $0) }.joined()
+        fixtureCheck(
+            digest == "496611ef4e8d68fbc8e78a3534e0150b4e2445ba825647fdf4d045ef11b54458",
+            "markdown/adversarial.html is the file main has (SHA-256 \(digest))")
+        let withMap = MarkdownRenderer.renderWithScrollMap(adversarial, isCancelled: never)
+        if case .rendered(let html) = withMap.rendering, case .rendered(let plain) = MarkdownRenderer.render(
+            adversarial, isCancelled: never)
+        {
+            check(
+                Data(html.utf8) == adversarialExpected && Data(plain.utf8) == adversarialExpected,
+                "the adversarial Markdown fixture renders byte for byte to main's output, with and without the map")
+            check(markdownOutputViolation(html) == nil, "and has only the renderer's tags")
+        } else {
+            check(false, "the adversarial Markdown fixture renders")
         }
 
         // A line to a place and back.

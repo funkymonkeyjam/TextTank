@@ -409,6 +409,7 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         }
         Checks.section("scroll sync: a page with scripts") { try scrollSyncScripts(root: root, listener: listener) }
         Checks.section("scroll sync: table and tree") { try scrollSyncRows(root: root) }
+        Checks.section("scroll sync: opened in Both by Settings") { try scrollSyncOpenIn(root: root, app: app) }
         Checks.section("fail closed") { try failClosed(root: root) }
         Checks.section("docked Workspace Browser") { try WorkspaceSidebarChecks.run(root: root, app: app, host: host) }
         Checks.section("tab strip: state, mouse and the list of open tabs") {
@@ -857,6 +858,43 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         check(
             tab.primaryEditor.firstVisibleDocumentLine == 0 && (script(web, "window.scrollY") as? Double ?? 900) < 1,
             "Undo put the caret on the heading, the source scrolled there, and in Both the preview followed it")
+
+        // The scenario this check always had: the preview is scrolled away and the heading is
+        // then edited the ordinary way, with the caret. With sync on the preview goes to the
+        // edited block with the source; with sync off it keeps its place, as it did before.
+        let settings = try requireValue(EditorServices.current?.settings, "settings")
+        func pageY() -> Double { script(web, "window.scrollY") as? Double ?? -1 }
+        check(settings.value.syncsPreviewScrolling, "fixture: sync is on")
+        _ = script(web, "window.scrollTo(0, 900); window.scrollY")
+        wait("fixture: the source followed the preview down") { tab.primaryEditor.firstVisibleDocumentLine > 10 }
+        try replace("Alpha heading", with: "Gamma heading", in: tab.primaryEditor)
+        waitCurrent(tab, "Markdown after a caret edit, sync on")
+        wait("the preview follows the edit") { pageText(tab).contains("Gamma heading") && pageY() < 1 }
+        check(
+            pageText(tab).contains("Gamma heading") && pageY() < 1 && tab.primaryEditor.firstVisibleDocumentLine == 0
+                && (blockTop(web, "Gamma heading") ?? -1) >= 0,
+            "sync on: an edit typed at the heading takes the source there and the preview shows the edited heading (page at \(pageY()))"
+        )
+        var switched = settings.value
+        switched.syncPreviewScrolling = false
+        try settings.save(switched)
+        _ = script(web, "window.scrollTo(0, 900); window.scrollY")
+        settle(0.3)
+        check(
+            tab.primaryEditor.firstVisibleDocumentLine == 0 && abs(pageY() - 900) < 2,
+            "fixture: with sync off the source stays at the heading while the preview is scrolled away")
+        let appliedOff = coordinator.appliedCount
+        try replace("Gamma heading", with: "Delta heading", in: tab.primaryEditor)
+        waitCurrent(tab, "Markdown after a caret edit, sync off")
+        wait("scroll position restored, sync off") { pageText(tab).contains("Delta heading") && pageY() > 800 }
+        settle(0.3)
+        check(
+            pageText(tab).contains("Delta heading") && coordinator.appliedCount == appliedOff + 1
+                && abs(pageY() - 900) < 2,
+            "sync off: the same edit leaves the preview where it was across the new rendering, as before (page at \(pageY()))"
+        )
+        switched.syncPreviewScrolling = nil
+        try settings.save(switched)
         settle(0.3)
         check(listener.connections == 1, "Markdown with a remote image made no network connection")
         document.close()
@@ -3295,8 +3333,42 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         wait("the page's own world answered or refused") { worldDone.value }
         print("NOTE the page's own script world sees: \(world.value ?? "nothing; no script runs there")")
         check(
-            world.value == nil || world.value == "undefined undefined",
-            "the page's own script world has neither the sync object nor its message handler")
+            world.value == "undefined undefined",
+            "the page's own script world answers, and has neither the sync object nor its message handler: \(world.value ?? "no answer")"
+        )
+        check(
+            PreviewWebPresenter.scriptWorld === WKContentWorld.defaultClient
+                && PreviewWebPresenter.scriptWorld !== WKContentWorld.page
+                && web.configuration.userContentController.userScripts.count == 2
+                && web.configuration.userContentController.userScripts.allSatisfy(\.isForMainFrameOnly),
+            "both scripts and both handlers are registered by one function, in the application's own world")
+        // Negative control: the same registration made in the page's world of a throwaway web
+        // view, also with page JavaScript off, is seen by the same probe.
+        let probe =
+            "typeof globalThis.textTankPreviewSync + ' ' + typeof (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.textTankPreviewSync)"
+        final class Ignoring: NSObject, WKScriptMessageHandler {
+            func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {}
+        }
+        let exposedConfiguration = WKWebViewConfiguration()
+        exposedConfiguration.websiteDataStore = .nonPersistent()
+        exposedConfiguration.defaultWebpagePreferences.allowsContentJavaScript = false
+        PreviewWebPresenter.installScripts(
+            on: exposedConfiguration.userContentController, linkReceiver: Ignoring(), scrollReceiver: Ignoring(),
+            world: .page)
+        let exposed = WKWebView(frame: NSRect(x: 0, y: 0, width: 50, height: 50), configuration: exposedConfiguration)
+        exposed.loadHTMLString("<p>control</p>", baseURL: nil)
+        wait("control page loaded") { !exposed.isLoading }
+        let exposedWorld = Box<String?>(nil), exposedDone = Box(false)
+        exposed.evaluateJavaScript(probe, in: nil, in: .page) { result in
+            if case .success(let value) = result { exposedWorld.value = value as? String }
+            exposedDone.value = true
+        }
+        wait("control world answered") { exposedDone.value }
+        print("NOTE with the registration in the page's world the probe sees: \(exposedWorld.value ?? "no answer")")
+        check(
+            exposedWorld.value?.hasSuffix(" object") == true,
+            "control: registered in the page's world instead, the handler is there for the page and the probe says so: \(exposedWorld.value ?? "no answer")"
+        )
         check(
             script(web, "typeof globalThis.textTankPreviewSync.show") as? String == "function",
             "control: the application's own world has it")
@@ -3581,7 +3653,82 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         counts = jsonSync.checkRecord
         settle(0.3)
         check(top(outline) == 120 && jsonSync.checkRecord == counts, "neither scroll is answered")
+
+        // A new parse keeps the tree's offset in points. Three values added on the first line
+        // move no source line, so nothing scrolls the source, but every row moves down three.
+        func shownAtTop() -> Int { outlinePresenter.sourceLine(ofRow: top(outline)) ?? -1 }
+        let lineAtTop = shownAtTop()
+        try replaceInPlace("[\n", with: "[ 0, 0, 0,\n", in: jsonEditor)
+        waitCurrent(jsonTab, "JSON after values were added above")
+        wait("the tree shows the same value at its top") { top(outline) == 123 }
+        check(
+            outline.numberOfRows == 304 && top(outline) == 123 && shownAtTop() == lineAtTop
+                && lineAtTop == 4 * 120 - 3 && jsonEditor.firstVisibleDocumentLine == 4 * 120 - 3,
+            "with sync on, rows added above without moving a line do not slide the tree: row \(top(outline)) of \(outline.numberOfRows), value from line \(shownAtTop()) as before (\(lineAtTop))"
+        )
         jsonDocument.close()
+
+        // The same for the table when rows are added above: the lines move, the source keeps
+        // showing the same text, and the table keeps showing the same row.
+        let (againDocument, againTab) = try open("again.csv", csv, in: folder)
+        check(againTab.setViewMode(.both), "fixture: a CSV document shows Both")
+        waitCurrent(againTab, "CSV again")
+        let againPresenter = try requireValue(againTab.previewCoordinator?.pane.tablePresenter, "table presenter")
+        let againView = againPresenter.tableView
+        againTab.primaryEditor.scrollTo(documentLine: table.rowLines[150] - 1, subline: 0)
+        wait("fixture: the table follows") { top(againView) == 150 }
+        let cellBefore = againPresenter.displayText(row: top(againView), column: 1)
+        try replaceInPlace("a1,b1,c1\n", with: "a1,b1,c1\nnew1,x,y\nnew2,x,y\n", in: againTab.primaryEditor)
+        waitCurrent(againTab, "CSV after rows were added above")
+        wait("the table shows the same row at its top") { top(againView) == 152 }
+        check(
+            cellBefore == "b151" && top(againView) == 152
+                && againPresenter.displayText(row: top(againView), column: 1) == cellBefore,
+            "with sync on, rows added above do not slide the table: row \(top(againView)) shows \(againPresenter.displayText(row: top(againView), column: 1))"
+        )
+        againDocument.close()
+    }
+
+    /// A document that Settings opens in Both is followed exactly as one switched by hand: the
+    /// rule goes through `setViewMode`, which makes the same coordinator.
+    private static func scrollSyncOpenIn(root: URL, app: AppDelegate) throws {
+        let folder = root.appendingPathComponent("sync-open-in")
+        let text = (1...200).map { "## Heading \($0)\n\nParagraph \($0).\n" }.joined(separator: "\n")
+        let url = try write(text, "opened.md", in: folder)
+        var value = app.settings.value
+        value.setPreviewOpenMode(.both, for: .markdown)
+        try app.settings.save(value)
+        defer {
+            var restored = app.settings.value
+            restored.setPreviewOpenMode(.source, for: .markdown)
+            _ = try? app.settings.save(restored)
+        }
+        let document = try DocumentFactory.openCaptured(
+            WorkspaceStore.captureRegularFile(url, maximumBytes: Int.max), from: url)
+        let tab = try requireValue(document.presentation, "fixture: tab for opened.md")
+        check(tab.viewMode == .both, "fixture: Settings opened the Markdown document in Both")
+        waitCurrent(tab, "opened in Both")
+        let coordinator = try requireValue(tab.previewCoordinator, "coordinator")
+        let presenter = try requireValue(coordinator.pane.webPresenter, "web presenter")
+        let web = try requireValue(presenter.webView, "web view")
+        wait("armed") { coordinator.scrollSync.isWatching && presenter.followGeneration != 0 }
+        check(
+            coordinator.scrollSync.isWatching && presenter.followGeneration != 0 && presenter.scrollMap?.count == 400,
+            "a tab opened in Both by Settings holds the observers and its page is armed, with no mode chosen by hand")
+        let height = number(web, "window.innerHeight") ?? 0
+        tab.primaryEditor.scrollTo(documentLine: 4 * 119, subline: 0)
+        wait("the preview follows the source") { (blockTop(web, "Heading 120") ?? -9) >= -1 }
+        check(
+            (blockTop(web, "Heading 120").map { $0 >= -1 && $0 < height }) == true,
+            "and scrolling its source brings the matching heading into the preview")
+        _ = script(
+            web,
+            "window.scrollTo(0, document.body.children[100].getBoundingClientRect().top + window.scrollY + 1); 0")
+        wait("the source follows the preview") { tab.primaryEditor.firstVisibleDocumentLine == 4 * 50 }
+        check(
+            tab.primaryEditor.firstVisibleDocumentLine == 4 * 50,
+            "and scrolling its preview scrolls the source: \(tab.primaryEditor.firstVisibleDocumentLine)")
+        document.close()
     }
 
     // MARK: Fail closed

@@ -641,8 +641,10 @@ caret, takes the keyboard, edits, or touches Undo or the file.
   number of lines the edit added or removed until the next scroll.
 - Folded or wrapped source lines are matched by document line; the fraction of a wrapped line
   is not used.
-- The table and the tree keep their offset in points across a new parse, as before. In Both
-  with sync on, an edit above that moves the source's lines moves the table to the same rows.
+- Outside Both, or with sync off, the table and the tree keep their offset in points across a
+  new parse, as before, so rows added above slide the rows under it. In Both with sync on they
+  do not: when the top row was the row of the source's top line before the parse, the row of
+  that line is put back at the top after it, whether or not the edit moved a source line.
 
 ### Measurements
 
