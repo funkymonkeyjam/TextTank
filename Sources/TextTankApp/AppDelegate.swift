@@ -104,6 +104,18 @@ import AppKit
                 ($0.languageIdentifier, $0.editor)
             }
         }
+        // The chooser lists first what the document's name and first line suggest, and is a
+        // sheet on the workspace window.
+        controller.detectedLanguage = { [weak self, weak controller] in
+            guard let document = self?.currentDocument else { return nil }
+            // Only a "#!" first line is read from the text. A document too large to copy for
+            // that on the main thread is detected by its name alone.
+            let editor = document.editor
+            let sample =
+                editor.byteLength <= 1_048_576 ? String(decoding: editor.utf8Data.prefix(512), as: UTF8.self) : ""
+            return controller?.detect(filename: document.fileURL?.lastPathComponent ?? "", text: sample)
+        }
+        controller.chooserParent = { [weak self] in self?.currentDocumentController?.hostWindow }
         return controller
     }()
     // The providers below only answer "which editor". A macro recording is invalidated where

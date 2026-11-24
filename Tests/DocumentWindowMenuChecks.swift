@@ -781,9 +781,14 @@ extension DocumentChecks {
             check(shifted.count == 1, "Shift-Command-P is assigned once in the menus")
 
             let (document, controller, window) = try tab("p21-goto")
+            // The position field is a button whose one command is Go to Line; it has no menu.
+            let positionField = descendants(try requireValue(window.contentView, "fixture: window content"))
+                .compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "status.position.0" }
             check(
                 controller.responds(to: #selector(EditorWindowController.goToLine(_:)))
-                    && controller.statusOptionsMenu("position")?.items.first?.title == "Go to Line…",
+                    && controller.statusOptionsMenu("position") == nil && positionField != nil
+                    && !(positionField is NSPopUpButton) && positionField?.action != nil
+                    && positionField?.accessibilityLabel()?.hasSuffix("Go to line.") == true,
                 "the document window implements Go to Line and the status bar keeps its own entry")
             let text = "één\r\ntwo 😀\rthree\nfour"
             document.editor.text = text

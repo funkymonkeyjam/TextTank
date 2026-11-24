@@ -324,7 +324,7 @@ import UniformTypeIdentifiers
         if identifier == LanguageProfile.plainTextID {
             usePlainTextLanguage()
         } else if !applyLanguage(identifier, using: EditorServices.current?.languages) {
-            presentations.forEach { $0.showTransientStatus("The saved language profile is unavailable. Choose a language.") }
+            presentations.forEach { $0.showUnavailableLanguage() }
             return
         }
         for view in presentations.flatMap(\.views) { view.wrap = EditorServices.current?.settings?.value.wrap ?? false }

@@ -60,6 +60,29 @@ package struct LanguageProfile: Codable, Equatable, Identifiable {
         guard let stored, stored != "null" else { return plainTextID }
         return stored
     }
+    /// The name a person reads for this language, in the status bar, the language chooser and
+    /// the Syntax Highlighting menu alike (DS-20, DS-24). The catalog keeps the reference
+    /// implementation's titles, some of which are lexer identifiers ("json", "mssql"); those are
+    /// given their proper names here. A title the person changed in Edit Language Profiles is
+    /// theirs and is shown as it is.
+    package var displayName: String {
+        if let known = Self.properNames[id], known.catalogTitle == title { return known.name }
+        return title
+    }
+    /// Profiles that colour TextTank's own panes or another program's output rather than a
+    /// language a person writes. They stay in the Syntax Highlighting menu and are left out of
+    /// the language chooser.
+    package var isInternal: Bool { Self.internalIDs.contains(id) }
+    static package let internalIDs: Set<String> = ["errorlist", "escseq", "searchResult"]
+    static package let properNames: [String: (catalogTitle: String, name: String)] = [
+        "normal": ("Normal text", "Plain Text"), "ini": ("ini", "INI"), "json": ("json", "JSON"),
+        "json5": ("json5", "JSON5"), "mssql": ("mssql", "Microsoft SQL"),
+        "registry": ("registry", "Windows Registry"), "javascript": ("Embedded JS", "JavaScript (Embedded)"),
+        "errorlist": ("ErrorList", "Error List"), "escseq": ("EscapeSequence (ANSI)", "ANSI Escape Sequences"),
+        "searchResult": ("Internal Search", "Search Results"), "fortran": ("Fortran free form", "Fortran (Free Form)"),
+        "fortran77": ("Fortran fixed form", "Fortran (Fixed Form)"), "props": ("Properties file", "Properties File"),
+        "tehex": ("Tektronix extended HEX", "Tektronix Extended HEX"), "tcl": ("TCL", "Tcl")
+    ]
     /// The UDL lists that travel as lexer properties. They hold whole Notepad++ keyword groups, so
     /// they get a larger bound than ordinary properties, and only for the user lexer.
     static package let userListProperties: Set<String> = Set(

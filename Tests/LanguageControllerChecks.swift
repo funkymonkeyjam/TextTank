@@ -430,6 +430,149 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             try declined && recoveryOnly && Data(contentsOf: path) == corrupt && blocked.storageDamaged,
             "F155 unreadable Language storage requires explicit recovery before the JSON editor")
     }
+    /// The chooser's list, filter, recents and names, without a window: the presenter is
+    /// replaced so that no sheet is shown.
+    @MainActor static func languageChooserChecks(bundledURL: URL, support: URL) throws {
+        let editor = TTEditor(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
+        var selected = LanguageProfile.plainTextID, hasEditor = true, applied: [String] = []
+        let controller = LanguageController(
+            editorProvider: { hasEditor ? editor : nil }, languageProvider: { selected },
+            setLanguage: {
+                selected = $0
+                applied.append($0)
+            }, bundledCatalog: bundledURL)
+        let recentsURL = support.appendingPathComponent("chooser-recents-" + UUID().uuidString + ".json")
+        controller.recentsURL = recentsURL
+        // DS-24: one proper name per language; a name the person gave is kept.
+        let names = ["json": "JSON", "json5": "JSON5", "ini": "INI", "mssql": "Microsoft SQL",
+            "registry": "Windows Registry", "errorlist": "Error List", "python": "Python"]
+        let bundledPlain = try LanguageCatalog.decode(Data(contentsOf: bundledURL)).profiles.first {
+            $0.id == LanguageProfile.plainTextID
+        }
+        check(
+            bundledPlain?.title == "Normal text" && bundledPlain?.displayName == "Plain Text",
+            "SR-2 the bundled no-language profile is shown as Plain Text")
+        check(
+            names.allSatisfy { controller.displayName(identifier: $0.key) == $0.value },
+            "SR-2 lexer identifiers have proper display names: \(names.keys.sorted().map { controller.displayName(identifier: $0) })")
+        var renamed = try requireValue(controller.profile(identifier: "json"), "fixture: JSON profile")
+        check(renamed.title == "json" && renamed.displayName == "JSON", "fixture: the catalog title is the lexer's")
+        renamed.title = "My JSON"
+        check(renamed.displayName == "My JSON", "SR-2 a language the person renamed keeps their name")
+        check(
+            controller.displayName(identifier: "no-such-language") == "no-such-language"
+                && Set(controller.languageMenuItems().map(\.title)).isDisjoint(with: ["json", "ini", "mssql", "Normal text"]),
+            "SR-2 the Syntax Highlighting menu uses the display names")
+        let menuItems = controller.languageMenuItems()
+        check(
+            menuItems.map(\.title) == menuItems.map(\.title).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending },
+            "SR-2 the menu's languages are ordered by display name")
+        // Detected, then recent, then the rest by name; each once; internal profiles left out.
+        let rows = controller.chooserRows(
+            current: "ruby", detected: "json", recent: ["python", "json", "no-such-language", "errorlist", "ruby"])
+        let rest = rows.dropFirst(3)
+        check(
+            rows.prefix(3).map(\.id) == ["json", "python", "ruby"]
+                && rows.prefix(3).map(\.accessory) == ["Detected", "Recent", "Recent · Current"]
+                && rows.prefix(3).map(\.accessoryLabel)
+                    == ["Detected for this document", "Recently chosen", "Recently chosen, Current language"],
+            "SR-2 the detected language is first, then the recently chosen: \(rows.prefix(3).map { $0.id + " " + $0.accessory })")
+        check(
+            rest.map(\.title) == rest.map(\.title).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+                && rest.allSatisfy { $0.accessory.isEmpty } && Set(rows.map(\.id)).count == rows.count
+                && rows.count == menuItems.count - menuItems.filter {
+                    LanguageProfile.internalIDs.contains($0.representedObject as? String ?? "")
+                }.count,
+            "SR-2 every other language follows once, alphabetically by display name")
+        check(
+            !rows.contains { LanguageProfile.internalIDs.contains($0.id) }
+                && menuItems.contains { $0.representedObject as? String == "errorlist" },
+            "SR-2 internal profiles are hidden from the chooser and kept in the menu")
+        func filtered(_ text: String) -> [String] {
+            LanguageController.filterChooserRows(rows, matching: text).map(\.id)
+        }
+        check(filtered("py") == ["python"], "SR-2 typing py narrows the chooser to Python: \(filtered("py"))")
+        check(
+            filtered("") == rows.map(\.id) && filtered("  ") == rows.map(\.id) && filtered("zzzz").isEmpty,
+            "SR-2 an empty filter lists everything and an unmatched one lists nothing")
+        check(
+            filtered("c").first == "c" && filtered("cpp") == ["cpp"] && filtered("JSON").prefix(2) == ["json", "json5"]
+                && filtered("microsoft") == ["mssql"],
+            "SR-2 the filter matches names without regard to case, exact names first, and identifiers by prefix: \(filtered("c").prefix(3)) \(filtered("cpp")) \(filtered("JSON"))")
+        // Recents: at most five, newest first, kept in a private file, a later format left alone.
+        let store = LanguageRecentsStore(url: recentsURL)
+        for id in ["ada", "c", "css", "d", "go", "html", "c"] { store.note(id) }
+        check(store.ids == ["c", "html", "go", "d", "css"], "SR-2 at most five recent languages are kept, newest first: \(store.ids)")
+        let mode = (try FileManager.default.attributesOfItem(atPath: recentsURL.path)[.posixPermissions] as? Int) ?? 0
+        check(
+            LanguageRecentsStore(url: recentsURL).ids == store.ids && mode == 0o600,
+            "SR-2 recent languages are read back from a private file: mode \(String(mode, radix: 8))")
+        let later = support.appendingPathComponent("chooser-recents-later-" + UUID().uuidString + ".json")
+        let laterBytes = Data(#"{"languages":["swift"],"version":2,"extra":true}"#.utf8)
+        try laterBytes.write(to: later)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: later.path)
+        let newer = LanguageRecentsStore(url: later)
+        newer.note("python")
+        let laterAfter = try Data(contentsOf: later)
+        check(
+            newer.ids == ["python"] && laterAfter == laterBytes,
+            "SR-2 a recents file written by a later version is not read as this one's and is left as it is")
+        // The chooser itself, through the injected presenter.
+        var presented: [ChoicePanel] = []
+        controller.presentChooser = { panel, _ in
+            presented.append(panel)
+            panel.refresh()
+        }
+        controller.detectedLanguage = { "python" }
+        let item = try requireValue(controller.menu().items.first, "fixture: Choose Language… item")
+        check(controller.validateMenuItem(item), "DS-21 Choose Language… is enabled with a document")
+        hasEditor = false
+        check(!controller.validateMenuItem(item), "DS-21 Choose Language… is disabled without a document")
+        controller.chooseLanguage(nil)
+        check(presented.isEmpty && controller.chooser == nil, "SR-2 no chooser opens without a document")
+        hasEditor = true
+        controller.chooseLanguage(nil)
+        let panel = try requireValue(presented.last, "SR-2 Choose Language… opens the chooser")
+        check(
+            panel.displayedRows.first?.id == "python" && panel.displayedRows.first?.accessory == "Detected"
+                && panel.displayedRows.dropFirst().prefix(5).map(\.id) == ["c", "html", "go", "d", "css"]
+                && panel.selectedID == "python" && panel.emptyMessage == "No matching languages",
+            "SR-2 the chooser opens on the detected language with the stored recents after it: \(panel.displayedRows.prefix(6).map(\.id))")
+        panel.filter.stringValue = "rub"
+        panel.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: panel.filter))
+        check(panel.displayedRows.map(\.id) == ["ruby"], "SR-2 typing in the chooser's field filters its rows")
+        func views(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(views) }
+        let cancel = try requireValue(
+            views(try requireValue(panel.form.window.contentView, "fixture: chooser content")).compactMap {
+                $0 as? NSButton
+            }.first { $0.identifier?.rawValue == LanguageController.chooserIdentifier + ".cancel" },
+            "fixture: the chooser's Cancel button")
+        check(cancel.keyEquivalent == "\u{1b}", "SR-2 Escape is the chooser's Cancel")
+        cancel.performClick(nil)
+        check(
+            selected == LanguageProfile.plainTextID && applied.isEmpty && controller.chooser == nil
+                && controller.recentsStore.ids == store.ids,
+            "SR-2 Cancel closes the chooser with nothing applied and nothing remembered")
+        controller.chooseLanguage(nil)
+        let again = try requireValue(presented.last, "fixture: the chooser opens again")
+        again.filter.stringValue = "rub"
+        again.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: again.filter))
+        let handled = again.control(
+            again.filter, textView: NSTextView(), doCommandBy: #selector(NSResponder.insertNewline(_:)))
+        check(
+            handled && selected == "ruby" && applied == ["ruby"] && controller.chooser == nil,
+            "SR-2 Return applies the selected language to the document: \(handled) \(selected) \(applied) \(again.selectedID ?? "nil") \(again.form.validation.stringValue)")
+        check(
+            controller.recentsStore.ids == ["ruby", "c", "html", "go", "d"]
+                && LanguageRecentsStore(url: recentsURL).ids == controller.recentsStore.ids,
+            "SR-2 the chosen language becomes the most recent and the sixth is dropped: \(controller.recentsStore.ids)")
+        let menuChoice = try requireValue(
+            controller.languageMenuItems().first { $0.representedObject as? String == "json" }, "fixture: JSON menu item")
+        check(
+            NSApp.sendAction(menuChoice.action!, to: menuChoice.target, from: menuChoice) && selected == "json"
+                && controller.recentsStore.ids.first == "json",
+            "SR-2 a language chosen from the menu is remembered as recent too")
+    }
     @MainActor static func main() {
         Checks.run("LanguageControllerChecks") {
             let isolatedSupport = try IsolatedSupportDirectory("LanguageChecks")
@@ -1437,13 +1580,17 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             let ranges = languageMenu.items.filter { $0.submenu?.items.first?.representedObject is String }
             if !check(
                 languageMenu.title == "Syntax Highlighting"
-                    && languageMenu.items.first?.representedObject as? String == LanguageProfile.plainTextID
+                    && languageMenu.items.first?.action == #selector(LanguageController.chooseLanguage(_:))
+                    && languageMenu.items.first?.title == "Choose Language…"
                     && languageMenu.items.dropFirst().first?.isSeparatorItem == true
+                    && languageMenu.items.dropFirst(2).first?.representedObject as? String
+                        == LanguageProfile.plainTextID
+                    && languageMenu.items.dropFirst(3).first?.isSeparatorItem == true
                     && languageMenu.items.filter { !$0.isSeparatorItem }.count <= 20
                     && ranges.count >= 4 && ranges.allSatisfy { ($0.submenu?.items.count ?? 0) <= 20 }
                     && ranges.map(\.title) == ranges.map(\.title).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
                     && listed(languageMenu).count == controller.languageMenuItems().count,
-                "DS-23 Normal Text is first and every language is in an alphabetical range of at most twenty")
+                "DS-23 Choose Language… then Plain Text come first and every language is in an alphabetical range of at most twenty")
             {
                 print(
                     "NOTE Syntax Highlighting: \(languageMenu.items.map { "\($0.title)(\($0.submenu?.items.count ?? 0))" }); listed \(listed(languageMenu).count) of \(controller.languageMenuItems().count)"
@@ -1742,6 +1889,9 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                     && picker.itemTitles == ["A", "B", "A (style 12)", "Style 13", "Style 14"],
                 "the selected row is the style's index (\(picker.itemTitles))")
             Checks.section("F155 Language JSON editor") { try jsonEditorChecks(bundledURL: bundledURL) }
+            Checks.section("SR-2 language chooser") {
+                try languageChooserChecks(bundledURL: bundledURL, support: isolatedSupport.url)
+            }
             withExtendedLifetime(hosts) {}
             print(
                 "LEXER CONFIGURATION: \(supported) available; missing \(missing). This proves loading and text integrity, not every lexical semantic."

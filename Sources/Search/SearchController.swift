@@ -156,6 +156,9 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     private var searchIdentity: EmptySearch?
     /// Progress steps shown for large-document searches so far; for checks.
     private(set) var progressReports = 0
+    /// The status-row operation of the large-document search now running: the same progress
+    /// and the same Cancel as this window's, where the document is.
+    private var statusOperation: UUID?
     var replaceAllButton: NSButton { searchButtons[4] }
     private var largeNavigation: Navigation?, largeScope: Navigation?
     /// Whether an editor at a revision is above `largeDocumentUnits`, so that the next press does
@@ -614,7 +617,15 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         resultKey = nil
         table.reloadData()
     }
+    /// The outcome is announced by this window's status label; the row only loses its indicator.
+    /// Also called when a new search replaces one that is still running.
+    private func endStatusOperation() {
+        guard let id = statusOperation else { return }
+        statusOperation = nil
+        StatusOperationCenter.shared.end(id)
+    }
     private func finish() {
+        endStatusOperation()
         searchButtons.forEach { $0.isEnabled = true }
         cancellation = nil
         task = nil
@@ -734,6 +745,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         }
         cancellation?.cancel()
         task?.cancel()
+        endStatusOperation()
         let token = UUID()
         generation = token
         let flag = TTSearchCancellation()
@@ -900,6 +912,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         guard generation == token, isSearching, appliedReplace == nil, total > 0 else { return }
         progressReports += 1
         status.stringValue = "Searching, \(Strings.number(min(100, done * 100 / total)))%…"
+        if let statusOperation { StatusOperationCenter.shared.update(statusOperation, done: done, total: total) }
     }
     /// Current document and Selection scope in a document above the engine's limit. Next and
     /// Previous go to the nearest match without listing the rest; Find All / Count counts without
@@ -969,6 +982,12 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         resultKey = nil
         table.reloadData()
         let chunk = largeChunkBytes
+        let replacing = action == .replaceAll || action == .replaceOne
+        endStatusOperation()
+        statusOperation = StatusOperationCenter.shared.begin(
+            replacing ? "Replacing in the document" : "Searching the document", in: editor,
+            cancelLabel: replacing ? "Cancel replacing" : "Cancel search"
+        ) { [weak self] in self?.cancel(nil) }
         let progress: @Sendable (Int, Int) -> Void = { [weak self] done, total in
             Task { @MainActor in self?.showProgress(done, of: total, token: token) }
         }
