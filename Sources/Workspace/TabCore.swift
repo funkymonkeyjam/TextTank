@@ -219,6 +219,12 @@ package struct WorkspaceLayoutState: Codable, Equatable, Sendable {
     package var layout: LayoutKind
     package var focusedGroup: GroupSlot
     package var groups: [Group]
+    /// Whether the docked Workspace Browser is shown. Absent in files written before the sidebar
+    /// existed and in a workspace where it was never shown, so those files are unchanged and
+    /// load with the sidebar as it is: hidden at launch.
+    package var sidebarShown: Bool?
+    /// The width the person last gave the sidebar, in points. Kept while it is hidden.
+    package var sidebarWidth: Double?
     package init(version: Int = 1, layout: LayoutKind, focusedGroup: GroupSlot, groups: [Group]) {
         self.version = version
         self.layout = layout
@@ -228,7 +234,8 @@ package struct WorkspaceLayoutState: Codable, Equatable, Sendable {
     package func validate() throws {
         guard version == 1, groups.count == layout.groupCount,
             groups.map(\.slot) == Array(GroupSlot.allCases.prefix(layout.groupCount)),
-            groups.contains(where: { $0.slot == focusedGroup })
+            groups.contains(where: { $0.slot == focusedGroup }),
+            sidebarWidth.map({ $0.isFinite && $0 > 0 && $0 <= 10_000 }) != false
         else { throw TabModelError.invalid }
         for group in groups {
             guard

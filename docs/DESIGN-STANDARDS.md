@@ -56,6 +56,18 @@ Owner follow-up, 17 November 2026:
   Explicit user colors remain overrides. Markdown is a selectable language and is detected for
   `.md` and `.markdown` files. Its headings, emphasis, lists, links and code are highlighted.
 
+Owner decision, 23 November 2026:
+
+- DS-D9. The Workspace Browser is a sidebar docked at the leading edge of the workspace window, beside
+  the editor groups. The floating Workspace panel is retired and nothing opens a second presentation.
+  View > Workspace Browser is a toggle with a checkmark (DS-22). The sidebar draws on the window's own
+  background, with no material or translucency (DS-11). Its width is between 260 and 480 points and is
+  remembered with whether it was shown. While it is shown the window's minimum width grows by the
+  sidebar's minimum and its divider, so the editor groups keep the minimum their layout always had; a
+  narrowing window takes width from the sidebar first, and hiding it restores the usual minimum (DS-67).
+  Showing it moves the keyboard only when the person chose the command; Escape or the same command
+  returns the keyboard to the text (DS-73). `docs/tab-model.md` has the contract.
+
 ## 3. Rules
 
 ### Windows and tabs

@@ -10,20 +10,64 @@ import AppKit
     init(_ entry: WorkspaceBrowserEntry) { self.entry = entry }
 }
 
+/// The docked sidebar's root: a group named "Workspace Browser" (DS-70).
+final class WorkspaceSidebarView: NSView {
+    var onEscape: (() -> Void)?
+    override func cancelOperation(_ sender: Any?) { onEscape?() }
+}
+
+/// Return opens the selected row and Escape gives the keyboard back to the text (DS-73).
+/// Arrow keys and type-select are the outline view's own.
+final class WorkspaceBrowserOutline: NSOutlineView {
+    var onReturn: (() -> Void)?
+    var onEscape: (() -> Void)?
+    override func keyDown(with event: NSEvent) {
+        let plain = event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty
+        if plain, [36, 76].contains(event.keyCode), let onReturn {
+            onReturn()
+        } else if plain, event.keyCode == 53, let onEscape {
+            onEscape()
+        } else {
+            super.keyDown(with: event)
+        }
+    }
+    override func cancelOperation(_ sender: Any?) { onEscape?() }
+}
+
 @MainActor
 final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate, NSMenuDelegate,
     NSMenuItemValidation
 {
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(toggleMonitor(_:)) { item.state = monitor.document == nil ? .off : .on }
+        // DS-22: the View menu item is a toggle and carries the sidebar's state.
+        if item.action == #selector(show(_:)) { item.state = isShown ? .on : .off }
         return !CompareCommandScope.blocksWorkspace
     }
     let store: WorkspaceBrowserStore
     let monitor = DocumentMonitor()
     var chooseEncoding: @MainActor (URL, Error) -> FileEncoding? = EncodingChoice.present
     var currentDocument: () -> TextDocument? = { EditorServices.current?.activePresentation?.document as? TextDocument }
-    private(set) var window: NSPanel?
-    let outline = NSOutlineView()
+    /// The workspace window that docks the browser. There is no other presentation (DS-D9).
+    var host: () -> WorkspaceWindowController = { WorkspaceWindowController.current }
+    private var builtSidebar: WorkspaceSidebarView?
+    /// The browser's one view, built the first time it is shown.
+    var sidebarView: WorkspaceSidebarView {
+        if let builtSidebar { return builtSidebar }
+        let view = buildSidebar()
+        builtSidebar = view
+        return view
+    }
+    /// True while this browser is docked in the workspace window.
+    var isShown: Bool {
+        guard let builtSidebar else { return false }
+        let host = host()
+        return host.isSidebarShown && host.sidebarSplit.sidebar === builtSidebar
+    }
+    let outline = WorkspaceBrowserOutline()
+    private var keyControls: [NSView] = []
+    var firstKeyView: NSView { keyControls.first ?? outline }
+    var lastKeyView: NSView { keyControls.last ?? outline }
     let fileChooser = WorkspaceQuickOpen()
     /// Shift-Command-O: free in the menu bar, in Scintilla's key map and in the reserved set.
     /// It is a default that gives way to a shortcut the person assigned to the same key in
@@ -74,17 +118,21 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         return true
     }
     private enum Mode: Int { case openDocuments, folders, recentFiles }
-    private var selectedMode: Mode { Mode(rawValue: mode.selectedSegment) ?? .openDocuments }
-    private let mode = NSSegmentedControl(
-        labels: ["Open Documents", "Folders", "Recent Files"], trackingMode: .selectOne, target: nil, action: nil)
+    private var selectedMode: Mode { Mode(rawValue: mode.indexOfSelectedItem) ?? .openDocuments }
+    /// A pop-up rather than three segments: the titles do not fit a sidebar at its minimum width (DS-67).
+    private let mode: NSPopUpButton = {
+        let button = NSPopUpButton(frame: .zero, pullsDown: false)
+        button.addItems(withTitles: ["Open Documents", "Folders", "Recent Files"])
+        return button
+    }()
     private let status = AnnouncingLabel(labelWithString: "")
     /// The monitor reports here, so it never replaces a listing, error or refresh message.
     private let monitorStatus = NSTextField(labelWithString: "")
     var statusText: String { status.stringValue }
     var monitorStatusText: String { monitorStatus.stringValue }
     private var nodes: [WorkspaceBrowserNode] = []
-    /// A snapshot the outline view indexes, replaced whenever a document window opens or
-    /// closes while the panel is visible and emptied when the panel closes.
+    /// A snapshot the outline view indexes, replaced whenever a document opens or closes
+    /// while the sidebar is shown and emptied when it is hidden.
     private var documents: [TextDocument] = []
     /// Paths of expanded folders, so a refresh, which rebuilds every node to re-read the
     /// disk, can expand them again.
@@ -107,13 +155,6 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
     }
     deinit { NotificationCenter.default.removeObserver(self) }
     @objc private func windowWillClose(_ notification: Notification) {
-        if let closing = notification.object as? NSWindow, closing === window {
-            // The panel outlives its window (isReleasedWhenClosed is false); do not keep
-            // documents alive behind a closed panel.
-            documents = []
-            if selectedMode == .openDocuments { outline.reloadData() }
-            return
-        }
         // The window closes before its document leaves the document list.
         DispatchQueue.main.async { [weak self] in self?.reloadDocuments() }
     }
@@ -123,7 +164,7 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
     /// Brings the Open Documents list up to date without touching the status line or the
     /// other two views.
     private func reloadDocuments() {
-        guard window?.isVisible == true else { return }
+        guard isShown else { return }
         let current = NSDocumentController.shared.documents.compactMap { $0 as? TextDocument }
         guard current.count != documents.count || !zip(current, documents).allSatisfy({ $0 === $1 }) else { return }
         let selected = selectedMode == .openDocuments ? outline.item(atRow: outline.selectedRow) as? TextDocument : nil
@@ -136,8 +177,8 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
     }
     /// Shows one of the three views: 0 Open Documents, 1 Folders, 2 Recent Files.
     func select(mode segment: Int) {
-        guard (0..<mode.segmentCount).contains(segment) else { return }
-        mode.selectedSegment = segment
+        guard (0..<mode.numberOfItems).contains(segment) else { return }
+        mode.selectItem(at: segment)
         refresh(nil)
     }
     /// An error that carries its own recovery, such as the explicit UTF-16 LE open, needs
@@ -215,7 +256,7 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         do {
             try monitor.start(document)
             sender.state = .on
-            show(nil)
+            reveal()
         } catch { TTAlert.present(error) }
     }
     @objc private func reloadMonitored(_ sender: Any?) {
@@ -241,25 +282,44 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         do { try monitor.reload(expectedRevision: revision) } catch { TTAlert.present(error) }
     }
+    /// View › Workspace Browser, a toggle (DS-22). Choosing it shows the sidebar and moves the
+    /// keyboard to its list; choosing it again hides the sidebar and gives the keyboard back.
+    /// The selector keeps its name so the command's identity in the menu map is unchanged.
     @objc func show(_ sender: Any?) {
-        if window == nil { buildWindow() }
-        refresh(nil)
-        window?.makeKeyAndOrderFront(nil)
+        guard !CompareCommandScope.blocksWorkspace else { return }
+        if isShown { host().setSidebarShown(false, browser: self) } else { reveal(focus: true) }
+    }
+    /// Shows the sidebar if it is hidden and brings its lists up to date. The keyboard moves
+    /// to it only when the person asked for the browser itself.
+    @discardableResult func reveal(focus: Bool = false) -> Bool {
+        let wasShown = isShown
+        guard host().setSidebarShown(true, browser: self, focus: focus) else { return false }
+        if wasShown { refresh(nil) }
         if let error = store.loadError {
             status.stringValue =
                 "Saved workspace unavailable. Choose Add Folder to review recovery options. "
                 + error.localizedDescription
         }
+        return true
     }
-    private func buildWindow() {
-        let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 660, height: 500),
-            styleMask: [.titled, .closable, .resizable, .utilityWindow], backing: .buffered, defer: false)
-        panel.title = "Workspace"
-        panel.isReleasedWhenClosed = false
-        panel.minSize = NSSize(width: 450, height: 300)
+    func hide() { if isShown { host().setSidebarShown(false, browser: self) } }
+    func sidebarDidShow() { refresh(nil) }
+    /// Do not keep documents alive behind a hidden sidebar.
+    func sidebarDidHide() {
+        documents = []
+        if selectedMode == .openDocuments { outline.reloadData() }
+    }
+    private func buildSidebar() -> WorkspaceSidebarView {
+        let sidebar = WorkspaceSidebarView()
+        sidebar.identifier = .init("workspace.sidebar")
+        sidebar.setAccessibilityElement(true)
+        sidebar.setAccessibilityRole(.group)
+        sidebar.setAccessibilityLabel("Workspace Browser")
+        let escape: () -> Void = { [weak self] in self?.host().returnKeyboardFromSidebar() }
+        sidebar.onEscape = escape
         let column = NSTableColumn(identifier: .init("Name"))
         column.title = "Documents and Files"
+        column.isEditable = false
         outline.addTableColumn(column)
         outline.outlineTableColumn = column
         outline.headerView = nil
@@ -267,46 +327,64 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         outline.dataSource = self
         outline.target = self
         outline.doubleAction = #selector(openSelected(_:))
+        outline.onReturn = { [weak self] in self?.openSelected(nil) }
+        outline.onEscape = escape
+        outline.allowsTypeSelect = true
         outline.setAccessibilityLabel("Workspace files")
+        // The window's own background: no material, no translucency (DS-11).
+        outline.backgroundColor = .clear
         let scroll = NSScrollView()
         scroll.documentView = outline
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = true
+        scroll.drawsBackground = false
         mode.setAccessibilityLabel("Workspace browser view")
-        mode.selectedSegment = Mode.openDocuments.rawValue
+        mode.selectItem(at: Mode.openDocuments.rawValue)
         mode.target = self
         mode.action = #selector(refresh(_:))
         let refresh = NSButton(title: "Refresh", target: self, action: #selector(refresh(_:)))
         let add = NSButton(title: "Add Folder…", target: self, action: #selector(addFolder(_:)))
         let remove = NSButton(title: "Remove Folder", target: self, action: #selector(removeFolder(_:)))
         let open = NSButton(title: "Open", target: self, action: #selector(openSelected(_:)))
-        let controls = NSStackView(views: [mode, refresh])
-        controls.orientation = .horizontal
-        let actions = NSStackView(views: [add, remove, open])
-        actions.orientation = .horizontal
+        refresh.setAccessibilityLabel("Refresh workspace browser")
+        open.setAccessibilityLabel("Open selected workspace item")
+        let opening = NSStackView(views: [open, refresh])
+        opening.orientation = .horizontal
+        let folders = NSStackView(views: [add, remove])
+        folders.orientation = .horizontal
         status.setAccessibilityIdentifier("workspace.status")
         monitorStatus.setAccessibilityIdentifier("workspace.monitorStatus")
         for label in [status, monitorStatus] {
             label.lineBreakMode = .byTruncatingTail
-            label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            label.setContentCompressionResistancePriority(.init(1), for: .horizontal)
         }
-        let stack = NSStackView(views: [controls, scroll, actions, status, monitorStatus])
+        let stack = NSStackView(views: [mode, scroll, opening, folders, status, monitorStatus])
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 10
+        stack.spacing = 8
         stack.translatesAutoresizingMaskIntoConstraints = false
-        panel.contentView!.addSubview(stack)
+        sidebar.addSubview(stack)
+        // Below required, so a frame that is briefly too small while the window is arranged
+        // never breaks the layout; at the sidebar's minimum width everything fits (DS-67).
+        let trailing = stack.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -8)
+        trailing.priority = .init(999)
+        let bottom = stack.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor, constant: -8)
+        bottom.priority = .init(999)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: panel.contentView!.leadingAnchor, constant: 12),
-            stack.trailingAnchor.constraint(equalTo: panel.contentView!.trailingAnchor, constant: -12),
-            stack.topAnchor.constraint(equalTo: panel.contentView!.topAnchor, constant: 12),
-            stack.bottomAnchor.constraint(equalTo: panel.contentView!.bottomAnchor, constant: -12),
+            stack.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 8),
+            trailing,
+            stack.topAnchor.constraint(equalTo: sidebar.topAnchor, constant: 8),
+            bottom,
+            mode.widthAnchor.constraint(equalTo: stack.widthAnchor),
             scroll.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 180)
+            status.widthAnchor.constraint(lessThanOrEqualTo: stack.widthAnchor),
+            monitorStatus.widthAnchor.constraint(lessThanOrEqualTo: stack.widthAnchor)
         ])
-        panel.center()
-        WindowFrames.track(panel, as: "TextTank.Workspace")
-        window = panel
+        scroll.setContentHuggingPriority(.init(1), for: .vertical)
+        scroll.setContentCompressionResistancePriority(.init(1), for: .vertical)
+        keyControls = [mode, outline, open, refresh, add, remove]
+        for (view, next) in zip(keyControls, keyControls.dropFirst()) { view.nextKeyView = next }
+        return sidebar
     }
     @objc func refresh(_ sender: Any?) {
         reloading = true
@@ -355,11 +433,14 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        do {
-            try store.addFolder(url)
-            mode.selectedSegment = Mode.folders.rawValue
-            show(nil)
-        } catch { TTAlert.present(error) }
+        do { try addChosenFolder(url) } catch { TTAlert.present(error) }
+    }
+    /// What every Add Folder route ends with, Quick Open's included: the folder is saved and
+    /// the docked sidebar shows it under Folders. The keyboard stays where it was.
+    func addChosenFolder(_ url: URL) throws {
+        try store.addFolder(url)
+        mode.selectItem(at: Mode.folders.rawValue)
+        if isShown { refresh(nil) } else { reveal() }
     }
     @objc func removeFolder(_ sender: Any?) {
         guard !CompareCommandScope.blocksWorkspace else { return }
