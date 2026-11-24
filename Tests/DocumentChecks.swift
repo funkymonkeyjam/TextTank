@@ -32,7 +32,12 @@ import NativeSearch
         }
     }
     @MainActor static func main() {
-        let arguments = Array(CommandLine.arguments.dropFirst())
+        var arguments = Array(CommandLine.arguments.dropFirst())
+        // `-AppleShowScrollBars Always` (or WhenScrolling) is read by AppKit from the argument
+        // domain: a hosted runner has no trackpad and always shows scroll bars. It selects no check.
+        if let index = arguments.firstIndex(of: "-AppleShowScrollBars"), index + 1 < arguments.count {
+            arguments.removeSubrange(index...index + 1)
+        }
         if arguments.count == 2, arguments.first == "--write-service-selection", let id = UUID(uuidString: arguments[1])
         {
             let board = NSPasteboard(name: .init("org.texttank.tests.service." + id.uuidString))

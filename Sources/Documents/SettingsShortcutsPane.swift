@@ -211,8 +211,16 @@ final class ShortcutRecorder: NSButton {
         scroll.hasVerticalScroller = true
         scroll.borderType = .bezelBorder
         scroll.identifier = .init("settings.shortcuts.scroll")
-        // The list takes whatever height the window gives the pane, and never less than this.
-        scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: Self.minimumListHeight).isActive = true
+        // The list takes whatever height the window gives the pane. It opens at
+        // `minimumListHeight`; on a display too short for the whole pane, where AppKit makes the
+        // window shorter than its content asks, the list gives up height down to
+        // `leastListHeight` and every control below it stays in the window (DS-67).
+        scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: Self.leastListHeight).isActive = true
+        let preferred = scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: Self.minimumListHeight)
+        // Below the priority at which a window holds its size, so a window that is made
+        // shorter wins, and above the one a fitting size is measured at.
+        preferred.priority = .init(NSLayoutConstraint.Priority.windowSizeStayPut.rawValue - 10)
+        preferred.isActive = true
         scroll.setContentHuggingPriority(.init(1), for: .vertical)
 
         selection.lineBreakMode = .byTruncatingMiddle
@@ -286,6 +294,7 @@ final class ShortcutRecorder: NSButton {
         reload()
     }
     static let minimumListHeight: CGFloat = 240
+    static let leastListHeight: CGFloat = 96
 
     // MARK: The list
 
