@@ -68,6 +68,44 @@ import EditorBridge
         // AppKit's segment reports false even when it has acted; the callers check the effect.
         _ = element.accessibilityPerformPress()
     }
+    /// A pointer click, delivered as the window delivers one: the view under the pointer takes
+    /// the keyboard if it accepts it, then receives the mouse-down and the mouse-up. `tab` is told
+    /// which event is being handled, as NSApp.currentEvent would tell it in the application.
+    private static func click(at point: NSPoint, in window: NSWindow, of tab: EditorWindowController) throws {
+        func event(_ type: NSEvent.EventType) throws -> NSEvent {
+            try requireValue(
+                NSEvent.mouseEvent(
+                    with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1),
+                "fixture: mouse event")
+        }
+        let content = try requireValue(window.contentView, "fixture: window content")
+        let hit = try requireValue(
+            content.hitTest(content.superview?.convert(point, from: nil) ?? point), "fixture: a view under the pointer")
+        // A pane that has not been on screen yet answers with its clip view; the text view is in it.
+        let view = (hit as? NSClipView)?.documentView ?? hit
+        let down = try event(.leftMouseDown), up = try event(.leftMouseUp)
+        let provider = tab.goToLineClickEvent
+        tab.goToLineClickEvent = { down }
+        defer { tab.goToLineClickEvent = provider }
+        if view.acceptsFirstResponder { window.makeFirstResponder(view) }
+        view.mouseDown(with: down)
+        view.mouseUp(with: up)
+    }
+    /// A window point over the editor's text, 40 points in from its margins, and one over its
+    /// line-number margin, both on the given fraction of its height.
+    private static func points(in editor: TTEditor, down fraction: CGFloat) throws -> (text: NSPoint, margin: NSPoint) {
+        let frame = editor.convert(editor.bounds, to: nil)
+        let y = frame.maxY - frame.height * fraction
+        let edge = try requireValue(
+            stride(from: frame.minX + 1, to: frame.maxX, by: 1).first {
+                editor.textAreaContains(windowPoint: NSPoint(x: $0, y: y))
+            }, "fixture: where the text begins")
+        try require(
+            edge - frame.minX >= 12 && editor.textAreaContains(windowPoint: NSPoint(x: edge + 40, y: y)),
+            "fixture: the editor has a margin and drawn text beside it (\(edge - frame.minX))")
+        return (NSPoint(x: edge + 40, y: y), NSPoint(x: frame.minX + 6, y: y))
+    }
     private static let returnKey = #selector(NSResponder.insertNewline(_:))
     private static let escapeKey = #selector(NSResponder.cancelOperation(_:))
     /// Everything shown is inside the bar and nothing overlaps; every control (a label is not
@@ -580,15 +618,20 @@ import EditorBridge
         check(
             !tab.goToLineBarVisible && place(editor) == before,
             "the keyboard leaving Go to Line without Return closes it and restores the caret, selection and scroll position")
-        // A caret the person put in the text themselves since (a click) is theirs and stands.
+        // A click that places a caret in the text of the pane being previewed is the person's own
+        // move, made where they pointed: it stands, and it is not the previewed line.
         tab.goToLine(nil)
         try keys("300", into: field)
-        window.makeFirstResponder(editor)
-        try require(editor.setSelectionAnchor(40, caret: 40), "fixture: the click's caret")
+        window.contentView?.layoutSubtreeIfNeeded()
+        let spot = try points(in: editor, down: 0.5)
+        try click(at: spot.text, in: window, of: tab)
+        let clicked = editor.selectionCaret
         spinUntil("Go to Line closes after a click in the text") { !tab.goToLineBarVisible }
         check(
-            editor.selectionCaret == 40 && editor.selectionAnchor == 40,
-            "a caret placed in the text by the person stands: it is neither the previewed line nor put back")
+            editor.selectionCaret == clicked && editor.selectionAnchor == clicked && editor.selectionCount == 1
+                && (200...400).contains(editor.statusInfo.line) && !before.carets.contains(clicked)
+                && keyboard(in: editor, of: host),
+            "a click in the previewed text places the caret where it pointed, and that caret stands (line \(editor.statusInfo.line))")
         try require(editor.setSelectionAnchor(10, caret: 25), "fixture: the selection again")
         editor.scrollTo(documentLine: 50, subline: 0)
         try require(place(editor) == before, "fixture: where the text was")
@@ -795,6 +838,8 @@ import EditorBridge
                 && folded.selectionAnchor == folded.selectionCaret,
             "Return unfolds the line and goes there")
 
+        try splitAndEdits(app: app, host: host, window: window, folder: folder)
+
         // A Preview-alone tab shows its source first, and going back to Preview closes the field.
         let (notes, notesTab) = try open("notes.md", "# Notes\n\none\ntwo\nthree\n", in: folder)
         defer { notes.close() }
@@ -807,5 +852,109 @@ import EditorBridge
         check(
             notesTab.setViewMode(.preview) && !notesTab.goToLineBarVisible && notesTab.primaryEditor.statusInfo.line == 1,
             "choosing Preview closes Go to Line, which acts on the hidden source, and no jump was made")
+    }
+
+    // MARK: Go to Line in a split tab, and under edits from the other pane
+
+    private static func splitAndEdits(
+        app: AppDelegate, host: WorkspaceWindowController, window: NSWindow, folder: URL
+    ) throws {
+        let text = (1...400).map { "row \($0) of the split fixture" }.joined(separator: "\n")
+        let (document, tab) = try open("split.txt", text, in: folder)
+        defer {
+            document.updateChangeCount(.changeCleared)
+            document.close()
+        }
+        let first = tab.primaryEditor, field = tab.goToLineBar.field, bar = tab.goToLineBar
+        tab.clone(nil)
+        let second = try requireValue(tab.secondary, "fixture: the second pane of the split")
+        window.contentView?.layoutSubtreeIfNeeded()
+        // The new pane sizes its text view when it first draws.
+        window.displayIfNeeded()
+        spinUntil("the second pane has drawn its text") {
+            let frame = second.convert(second.bounds, to: nil)
+            return second.textAreaContains(windowPoint: NSPoint(x: frame.maxX - 60, y: frame.midY))
+        }
+        func hold() throws -> Place {
+            window.makeFirstResponder(first)
+            try require(
+                first.setSelectionRanges([TTSelectionRange(anchor: 10, caret: 25)]) && tab.activeEditor === first,
+                "fixture: a selection in the first pane, which has the keyboard")
+            first.scrollTo(documentLine: 50, subline: 0)
+            window.contentView?.layoutSubtreeIfNeeded()
+            return place(first)
+        }
+        func preview() throws {
+            tab.goToLine(nil)
+            try keys("300", into: field)
+            window.contentView?.layoutSubtreeIfNeeded()
+            try require(tab.goToLineBarVisible && first.statusInfo.line == 300, "fixture: line 300 is shown in the first pane")
+        }
+
+        // A click in the other pane: the previewing pane goes back exactly, and the click lands.
+        var before = try hold()
+        _ = second.setSelectionAnchor(0, caret: 0)
+        try preview()
+        let otherSpot = try points(in: second, down: 0.5)
+        try click(at: otherSpot.text, in: window, of: tab)
+        spinUntil("Go to Line closes after a click in the other pane") { !tab.goToLineBarVisible }
+        window.contentView?.layoutSubtreeIfNeeded()
+        check(
+            !tab.goToLineBarVisible && place(first) == before,
+            "a click in the other pane of a split puts the previewing pane back: caret, selection and scroll position (line \(first.statusInfo.line))")
+        check(
+            second.selectionCaret != 0 && keyboard(in: second, of: host) && tab.activeEditor === second,
+            "and the click does what it does: its caret is in the other pane, which has the keyboard ")
+
+        // A click on the previewing pane's own margin places no caret in the text.
+        before = try hold()
+        try preview()
+        try click(at: try points(in: first, down: 0.5).margin, in: window, of: tab)
+        spinUntil("the margin click is dealt with") { !tab.goToLineBarVisible || first.statusInfo.line != 300 }
+        window.contentView?.layoutSubtreeIfNeeded()
+        check(
+            first.statusInfo.line != 300 && first.firstVisibleDocumentLine == before.topLine,
+            "a click on the previewing pane's line-number margin does not keep the previewed line (line \(first.statusInfo.line), field open \(tab.goToLineBarVisible))")
+        if tab.goToLineBarVisible { tab.cancelGoToLine(nil) }
+
+        // The text changes underneath, from the other pane: the place to go back to moves with
+        // the edit, and is never the previewed line.
+        before = try hold()
+        let selected = first.selectedText
+        try preview()
+        try require(
+            second.setSelectionRanges([TTSelectionRange(anchor: 0, caret: 0)]) && second.replaceSelection("added above\n"),
+            "fixture: a line added at the top from the other pane")
+        spinUntil("the field follows the edit") { field.placeholderString == "1–401" }
+        check(
+            bar.message.stringValue.hasPrefix("Lines are 1–401.") && !bar.entryIsMarked && first.statusInfo.line == 300,
+            "an edit elsewhere in the text leaves the field open, with the new range, still showing the line typed")
+        try keyDown("\u{1B}", code: 53, in: field)
+        window.contentView?.layoutSubtreeIfNeeded()
+        check(
+            first.selectionAnchor == 10 + 12 && first.selectionCaret == 25 + 12 && first.selectedText == selected
+                && first.selectionCount == 1,
+            "Escape after an edit from another view goes back to the selection the person had, moved with the text, not to the previewed line (line \(first.statusInfo.line))")
+        check(
+            first.firstVisibleDocumentLine == before.topLine + 1 && first.horizontalScrollOffset == before.across,
+            "and the same line of text is at the top again")
+
+        // The text the caret was in is deleted underneath: the nearest place left, and words.
+        before = try hold()
+        try preview()
+        NativeFixtureEnvironment.announcements = []
+        try require(
+            second.setSelectionRanges([TTSelectionRange(anchor: 0, caret: 60)]) && second.replaceSelection(""),
+            "fixture: the first lines, with the caret's own, deleted from the other pane")
+        spinUntil("the field says the place is gone") { bar.message.stringValue.hasPrefix("The text changed.") }
+        check(
+            bar.message.stringValue
+                == "The text changed. Escape goes back to the nearest place left to where the caret was. \(GoToLineEntry.range(first.statusInfo.lines))"
+                && !bar.entryIsMarked && NativeFixtureEnvironment.announcements.contains(bar.message.stringValue),
+            "when the caret's own text is deleted underneath, the field says so in words and it is announced")
+        try keyDown("\u{1B}", code: 53, in: field)
+        check(
+            first.selectionAnchor == 0 && first.selectionCaret == 0 && first.selectionCount == 1 && first.statusInfo.line == 1,
+            "and Escape goes to the nearest place left, where the deleted text began, never to the previewed line (line \(first.statusInfo.line))")
     }
 }

@@ -294,6 +294,11 @@ enum GoToLineEntry: Equatable {
         lines == 1 ? "This document has 1 line." : "Lines are 1–\(Strings.number(lines))."
     }
     static func hint(_ lines: Int) -> String { "\(range(lines)) Add a colon for a column, such as 12:4." }
+    /// Shown after text that held the caret, the selection or the top line was deleted from
+    /// another view or by an automation while the field was open.
+    static func displaced(_ lines: Int) -> String {
+        "The text changed. Escape goes back to the nearest place left to where the caret was. \(range(lines))"
+    }
     /// Shown while the line typed is hidden in a fold: the preview leaves folding alone.
     static func folded(_ line: Int) -> String {
         "Line \(Strings.number(line)) is in folded text. Press Return to unfold it and go there."
@@ -403,28 +408,36 @@ final class EditorGoToLineBar: NSView {
     }
 }
 
-/// What Go to Line found when it opened, so that typing can show a line and anything but Return
-/// can put the caret, every selection, the scroll position and the folding back exactly.
+/// Where the text was when Go to Line opened, so that typing can show a line and anything but
+/// Return can put the caret, every selection, the scroll position and the folding back exactly.
+/// The editor holds the place and moves it with every edit to the document, so a change made
+/// from another view or by an automation while the field is open never makes the previewed
+/// line the place to go back to.
 @MainActor final class LineJumpPreview {
     weak var editor: TTEditor?
-    let revision: UInt
-    /// Every range, which one is main, and stream or rectangular mode, as the bridge keeps them.
-    private let selections: [NSNumber]
-    private let topLine: Int, topSubline: Int, horizontalOffset: Int
-    /// Where the last preview left the caret; nil while the text shows what it showed at opening.
-    private var shownCaret: Int?
+    /// The text as last read by the field; a different revision means it changed underneath.
+    private(set) var revision: UInt
+    private let topSubline: Int, horizontalOffset: Int
+    /// The preview has moved the caret, so there is something to put back.
+    private var moved = false
     init(_ editor: TTEditor) {
         self.editor = editor
         revision = editor.revision
-        selections = editor.selectionSnapshot
-        topLine = editor.firstVisibleDocumentLine
         topSubline = editor.firstVisibleSubline
         horizontalOffset = editor.horizontalScrollOffset
+        editor.holdPlace()
     }
-    /// The saved positions are byte offsets into the text as it was.
     private var current: TTEditor? {
-        guard let editor, EditorLifetime.isOpen(editor), editor.revision == revision else { return nil }
+        guard let editor, EditorLifetime.isOpen(editor) else { return nil }
         return editor
+    }
+    /// The document changed underneath. True when text that held the caret, a selection end or
+    /// the top line was deleted, so the place to go back to is the nearest one left; also when
+    /// the view now shows another document and there is no place to go back to.
+    func noteDocumentChanged() -> Bool {
+        guard let editor = current else { return false }
+        revision = editor.revision
+        return editor.heldPlaceDisplaced || editor.heldSelectionSnapshot == nil
     }
     /// Shows the line without it counting as a jump: nothing is recorded, nothing is unfolded,
     /// and a macro recording in this view is left alone because the caret is not moved while one
@@ -434,28 +447,26 @@ final class EditorGoToLineBar: NSView {
         guard !recording, let editor = current else { return nil }
         let shown = editor.preview(line: line, column: column ?? 1)
         guard shown > 0 else { return nil }
-        shownCaret = editor.selectionCaret
+        moved = true
         return shown
     }
-    /// The caret is still where the preview put it. False once the person has put it somewhere
-    /// themselves (a click in the text), which then stands.
-    var ownsSelection: Bool {
-        guard let shownCaret, let editor = current else { return shownCaret == nil }
-        return editor.selectionCount == 1 && editor.selectionAnchor == shownCaret && editor.selectionCaret == shownCaret
-    }
     func restoreSelection() {
-        guard shownCaret != nil, let editor = current else { return }
-        _ = editor.restoreSelectionSnapshot(selections)
-        shownCaret = nil
+        guard moved, let editor = current, let held = editor.heldSelectionSnapshot else { return }
+        _ = editor.restoreSelectionSnapshot(held)
+        moved = false
     }
     /// After the bar has left and the editor has its height back.
     func restoreScroll() {
         guard let editor = current else { return }
+        let topLine = editor.heldTopDocumentLine
+        guard topLine >= 0 else { return }
         if editor.firstVisibleDocumentLine != topLine || editor.firstVisibleSubline != topSubline {
             editor.scrollTo(documentLine: topLine, subline: topSubline)
         }
         if editor.horizontalScrollOffset != horizontalOffset { editor.horizontalScrollOffset = horizontalOffset }
     }
+    /// The field is closed; the editor stops following the place.
+    func end() { current?.releaseHeldPlace() }
 }
 
 /// What a live preview shows in the bar's count label: a count, or why there is none.

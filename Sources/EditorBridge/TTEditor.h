@@ -210,6 +210,22 @@ __attribute__((objc_subclassing_restricted))
 /// Puts a snapshot of this view's selections back. NO, changing nothing, when it is not a
 /// snapshot or the text is no longer the length it was taken from.
 - (BOOL)restoreSelectionSnapshot:(NSArray<NSNumber *> *)snapshot;
+/// Keeps this view's selections and the line at its top as they are now, and from then on moves
+/// them with every insertion and deletion in the document, by the rule Scintilla applies to its
+/// own selections. One place is held at a time; holding again replaces it.
+- (void)holdPlace;
+- (void)releaseHeldPlace;
+/// The held selections where they are in the text now, for restoreSelectionSnapshot:. Nil when
+/// nothing is held or the view shows another document than the one the place was held in.
+@property(nonatomic, readonly, nullable) NSArray<NSNumber *> *heldSelectionSnapshot;
+/// The zero-based document line that was at the top when the place was held, as it is numbered
+/// now; -1 when nothing is held.
+@property(nonatomic, readonly) NSInteger heldTopDocumentLine;
+/// YES once text that held one of the positions was deleted: that position is now where the
+/// deleted text began, the nearest place left.
+@property(nonatomic, readonly) BOOL heldPlaceDisplaced;
+/// YES for a window point over this view's text, not its line-number, bookmark or fold margins.
+- (BOOL)textAreaContainsWindowPoint:(NSPoint)point NS_SWIFT_NAME(textAreaContains(windowPoint:));
 - (void)scrollCaretIntoView;
 /// Zero-based display line at the top of this view.
 @property(nonatomic, readonly) NSInteger firstVisibleLine;

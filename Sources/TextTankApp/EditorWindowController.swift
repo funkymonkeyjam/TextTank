@@ -866,13 +866,18 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             jump.restoreScroll()
         }
     }
-    /// The text changed under an open Go to Line (another view, an automation). The saved caret
-    /// and scroll position belong to the old text, so Escape now leaves the view as it is; the
-    /// range and the entry are read against the new text.
+    /// The text changed under an open Go to Line (another view, an automation). The place to go
+    /// back to is still where the caret was when the field opened: the editor has moved it with
+    /// the edit, and the previewed line never takes its place. The range and the entry are read
+    /// against the new text, the line typed is shown again, and when the edit deleted the text
+    /// the caret was in, the field says that Escape goes to the nearest place left.
     private func lineJumpDocumentChanged() {
-        guard let editor = lineJump?.editor, EditorLifetime.isOpen(editor) else { return }
-        lineJump = LineJumpPreview(editor)
-        readLineEntry(accepting: false)
+        guard let jump = lineJump, let editor = jump.editor, EditorLifetime.isOpen(editor) else { return }
+        let displaced = jump.noteDocumentChanged()
+        if lineEntryTyped { lineEntryChanged() } else { readLineEntry(accepting: false) }
+        if displaced, !goToLineBar.entryIsMarked {
+            goToLineBar.show(GoToLineEntry.displaced(editor.statusInfo.lines), rejected: false)
+        }
     }
     /// Return, or Go: the only thing that makes the jump. A rejected entry stays in the field
     /// with the reason beside it (DS-45): no alert, no sound, and the caret does not move.
@@ -923,6 +928,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             presentationRoot.layoutSubtreeIfNeeded()
             jump?.restoreScroll()
         }
+        jump?.end()
         goToLineBar.show("", rejected: false)
         if returningKeyboard { hostWindow?.makeFirstResponder(editor) }
     }
@@ -1461,21 +1467,39 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     /// person has put in the text themselves since (a click there): that is their own move, made
     /// where they pointed, and it is not the previewed line.
     func controlTextDidEndEditing(_ notification: Notification) {
-        guard notification.object as? NSTextField === goToLineBar.field, lineJump != nil else { return }
-        // A click in the text ends the editing before the click itself places the caret.
-        var clickedText = false
-        if let event = NSApp.currentEvent, event.type == .leftMouseDown, event.window === hostWindow {
-            clickedText = views.contains { $0.bounds.contains($0.convert(event.locationInWindow, from: nil)) }
+        guard notification.object as? NSTextField === goToLineBar.field, let jump = lineJump else { return }
+        // A click ends the editing before the click itself is delivered. Only a click that
+        // places a caret in the text of the pane being previewed lets that caret stand. Any
+        // other click (the other pane of a split, a line-number or fold margin, another group,
+        // the sidebar) first puts this pane back exactly, and then does what it does.
+        let mouseDowns: [NSEvent.EventType] = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        if let event = goToLineClickEvent(), mouseDowns.contains(event.type), event.window === hostWindow,
+            !goToLineBar.bounds.contains(goToLineBar.convert(event.locationInWindow, from: nil))
+        {
+            let placesCaret =
+                event.type == .leftMouseDown && jump.editor?.textAreaContains(windowPoint: event.locationInWindow) == true
+            if !placesCaret {
+                jump.restoreSelection()
+                jump.restoreScroll()
+            }
+            // Nothing more to put back: the bar closes once the click has been delivered, so the
+            // views do not move under the pointer before it.
+            jump.end()
+            lineJump = nil
         }
-        DispatchQueue.main.async { [weak self] in self?.goToLineLostKeyboard(clickedText: clickedText) }
+        DispatchQueue.main.async { [weak self] in self?.goToLineLostKeyboard() }
     }
-    func goToLineLostKeyboard(clickedText: Bool = false) {
-        guard let jump = lineJump, goToLineBarVisible else { return }
+    /// The event being handled when the field stopped being edited. Checks supply their own.
+    var goToLineClickEvent: @MainActor () -> NSEvent? = { NSApp.currentEvent }
+    /// The keyboard has left the field by a key (Tab, Move Focus to Next Area) or by a click
+    /// already dealt with above. Only Return or Go commits, so whatever is left is put back.
+    func goToLineLostKeyboard() {
+        guard goToLineBarVisible else { return }
         let responder = hostWindow?.firstResponder
         let inBar =
             (responder as? NSView)?.isDescendant(of: goToLineBar) == true
             || responder.map { goToLineBar.field.currentEditor() === $0 } == true
-        if !inBar { closeGoToLineBar(restoring: !clickedText && jump.ownsSelection, returningKeyboard: false) }
+        if !inBar { closeGoToLineBar(restoring: true, returningKeyboard: false) }
     }
     func controlTextDidChange(_ notification: Notification) {
         if notification.object as? NSTextField === goToLineBar.field {
