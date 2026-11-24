@@ -31,6 +31,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     /// Go to Line, in the find bar's place: one of the two is shown, or neither.
     let goToLineBar = EditorGoToLineBar()
     private var lineJump: LineJumpPreview?
+    /// The field still holds the line it opened with: Return then has nothing to do.
+    private var lineEntryTyped = false
     var goToLineBarVisible: Bool { !goToLineBar.isHidden }
     /// DS-35, one Find: what this bar last sent to or took from the shared Find text. A field
     /// that no longer matches was changed here and is shared; otherwise the shared text is shown.
@@ -845,9 +847,10 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             let editor = activeEditor
             lastEditor = editor
             lineJump = LineJumpPreview(editor)
+            lineEntryTyped = false
             field.stringValue = String(editor.statusInfo.line)
             showLineRange(for: editor)
-            keepingScroll { showBar(.goToLine) }
+            showBar(.goToLine)
         }
         hostWindow?.makeFirstResponder(field)
         field.selectText(nil)
@@ -877,10 +880,13 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     }
     private func lineEntryChanged() {
         guard let jump = lineJump, let editor = jump.editor else { return }
+        lineEntryTyped = true
         if let target = readLineEntry(accepting: false) {
-            jump.show(
+            let shown = jump.show(
                 line: target.line, column: target.column,
                 recording: EditorServices.current?.macros?.isRecording(in: editor) == true)
+            // The preview never unfolds: say why the line itself is not on screen.
+            if let shown, shown != target.line { goToLineBar.show(GoToLineEntry.folded(target.line), rejected: false) }
         } else {
             // Nothing to show: the text is where it was when Go to Line opened.
             jump.restoreSelection()
@@ -895,8 +901,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         lineJump = LineJumpPreview(editor)
         readLineEntry(accepting: false)
     }
-    /// Return, or Go. A rejected entry stays in the field with the reason beside it (DS-45):
-    /// no alert, no sound, and the caret does not move.
+    /// Return, or Go: the only thing that makes the jump. A rejected entry stays in the field
+    /// with the reason beside it (DS-45): no alert, no sound, and the caret does not move.
+    /// Return on the line the field opened with, untouched, changes nothing at all.
     @objc func commitGoToLine(_ sender: Any?) {
         guard goToLineBarVisible, !statusClosed, let jump = lineJump, let editor = jump.editor,
             EditorLifetime.isOpen(editor)
@@ -904,11 +911,18 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             closeGoToLineBar(restoring: false, returningKeyboard: true)
             return
         }
+        guard lineEntryTyped else {
+            closeGoToLineBar(restoring: true, returningKeyboard: true)
+            return
+        }
         guard let target = readLineEntry(accepting: true) else {
             jump.restoreSelection()
             jump.restoreScroll()
             return
         }
+        // The preview goes back first, so the jump is made from where the person was: one move,
+        // and the one that unfolds the line if it was hidden.
+        jump.restoreSelection()
         // This is the jump: the one a macro recording has to know about (F277).
         guard
             Self.goTo(line: target.line, column: target.column, in: editor, macros: EditorServices.current?.macros)
@@ -1154,22 +1168,11 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         if visible, goToLineBarVisible { closeGoToLineBar(restoring: true, returningKeyboard: false) }
         showBar(visible ? .find : .none)
     }
-    /// A bar that appears or grows takes its height from the editor. The line at the top of each
-    /// view of the text is the same line afterwards.
-    private func keepingScroll(_ change: () -> Void) {
-        let tops = views.map { ($0, $0.firstVisibleDocumentLine, $0.firstVisibleSubline) }
-        change()
-        guard !statusClosed else { return }
-        presentationRoot.layoutSubtreeIfNeeded()
-        for (view, line, subline) in tops
-        where view.firstVisibleDocumentLine != line || view.firstVisibleSubline != subline {
-            view.scrollTo(documentLine: line, subline: subline)
-        }
-    }
-    /// The Replace row of the find bar. The bar's height follows and the text does not scroll.
+    /// The Replace row of the find bar. The bar's height follows; the editor view keeps the line
+    /// at its top when its height changes, so the text does not scroll.
     func setReplaceRow(shown: Bool) {
         guard let findBar, findBar.showsReplace != shown else { return }
-        if findBarVisible { keepingScroll { findBar.setShowsReplace(shown) } } else { findBar.setShowsReplace(shown) }
+        findBar.setShowsReplace(shown)
     }
     var replaceRowShown: Bool { findBar?.showsReplace == true }
     /// The text other apps and the Find and Replace hostWindow last searched for.
@@ -1479,18 +1482,27 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             _ = focusPresentationChrome()
         }
     }
-    /// The keyboard left Go to Line for the text or another part of the window without Return or
-    /// Escape (a click in the text). The bar closes and what the person did there stands.
+    /// The keyboard left Go to Line without Return or Escape: Tab, Move Focus to Next Area, a
+    /// click elsewhere. Only Return or Go makes the jump, so the bar closes and the caret, the
+    /// selection and the scroll position go back. The one thing that stands is a caret the
+    /// person has put in the text themselves since (a click there): that is their own move, made
+    /// where they pointed, and it is not the previewed line.
     func controlTextDidEndEditing(_ notification: Notification) {
         guard notification.object as? NSTextField === goToLineBar.field, lineJump != nil else { return }
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.lineJump != nil, self.goToLineBarVisible else { return }
-            let responder = self.hostWindow?.firstResponder
-            let inBar =
-                (responder as? NSView)?.isDescendant(of: self.goToLineBar) == true
-                || responder.map { self.goToLineBar.field.currentEditor() === $0 } == true
-            if !inBar { self.closeGoToLineBar(restoring: false, returningKeyboard: false) }
+        // A click in the text ends the editing before the click itself places the caret.
+        var clickedText = false
+        if let event = NSApp.currentEvent, event.type == .leftMouseDown, event.window === hostWindow {
+            clickedText = views.contains { $0.bounds.contains($0.convert(event.locationInWindow, from: nil)) }
         }
+        DispatchQueue.main.async { [weak self] in self?.goToLineLostKeyboard(clickedText: clickedText) }
+    }
+    func goToLineLostKeyboard(clickedText: Bool = false) {
+        guard let jump = lineJump, goToLineBarVisible else { return }
+        let responder = hostWindow?.firstResponder
+        let inBar =
+            (responder as? NSView)?.isDescendant(of: goToLineBar) == true
+            || responder.map { goToLineBar.field.currentEditor() === $0 } == true
+        if !inBar { closeGoToLineBar(restoring: !clickedText && jump.ownsSelection, returningKeyboard: false) }
     }
     func controlTextDidChange(_ notification: Notification) {
         if notification.object as? NSTextField === goToLineBar.field {

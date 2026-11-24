@@ -1543,9 +1543,8 @@ extension DocumentChecks {
             // F12: Go to Line through its real inline field, on the engine's own line model.
             @MainActor func goToLineDialog(_ entry: String, confirm: Bool = true) -> Bool {
                 explanation.text = ""
-                let item = NSMenuItem(title: "Go to Line…", action: nil, keyEquivalent: "")
-                item.representedObject = "goToLine"
-                controller.perform(NSSelectorFromString("statusOption:"), with: item)
+                // The status row's position field runs Go to Line itself.
+                controller.runStatusCommand(.position)
                 let bar = controller.goToLineBar, field = bar.field
                 guard controller.goToLineBarVisible, presentedFormWindow == nil else { return false }
                 field.stringValue = entry
@@ -1560,7 +1559,9 @@ extension DocumentChecks {
                     // Invalid input remains in this same inline field, instead of an alert.
                     explanation.text = bar.message.stringValue
                     check(
-                        field.stringValue == entry && field.accessibilityHelp() != nil,
+                        field.stringValue == entry && field.accessibilityHelp() == bar.message.stringValue
+                            && field.toolTip == bar.message.stringValue && bar.entryIsMarked
+                            && bar.message.accessibilityLabel()?.hasPrefix("Input needs correction") == true,
                         "DG Go to Line keeps and marks the rejected input")
                     bar.cancelButton.performClick(nil)
                 }
