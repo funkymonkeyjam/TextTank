@@ -4,6 +4,10 @@ import EditorBridge
 @testable import TextTankCore
 @testable import TextTankRuntime
 
+private final class Box<Value> {
+    var value: Value
+    init(_ value: Value) { self.value = value }
+}
 /// What a tab draws and how it answers the mouse: the edited dot in the close button's place,
 /// the symbols for an outside change and for comparison, the tooltip, the other mouse button,
 /// a double-click on the empty strip, and the list of open tabs when the strip overflows. Driven
@@ -78,6 +82,13 @@ import EditorBridge
         closeAll(host)
         try openTabList(root: root, app: app, host: host)
         closeAll(host)
+        try clickPairs(root: root, app: app, host: host)
+        closeAll(host)
+        try symbolDragPointerAndMenus(root: root, app: app, host: host)
+        closeAll(host)
+        try reviewOnClose(root: root, app: app, host: host)
+        closeAll(host)
+        observers()
     }
 
     // MARK: The edited dot and the state symbols
@@ -145,8 +156,9 @@ import EditorBridge
             "and its title is the name alone (\(drawn.title); \(notice))")
         check(
             outside.toolTip == "plain.txt: Changed on disk. Select this tab to choose what to do."
-                && outside.accessibilityLabel == outside.toolTip,
-            "DS-62/70/85 the symbol says what happened and what to do, in its tooltip and to assistive technology")
+                && !outside.isAccessibilityElement
+                && !((strip.accessibilityChildren() ?? []).contains { $0 is NSImageView }),
+            "DS-62/85 the symbol's tooltip says what happened and what to do; it is not an accessibility element, because the tab's label says it")
         check(
             drawn.accessibilityLabel == "plain.txt, edited. Changed on disk.",
             "DS-84 the tab's own label says both in whole sentences (\(drawn.accessibilityLabel ?? "nil"))")
@@ -168,8 +180,9 @@ import EditorBridge
         check(
             compared.toolTip
                 == "other.txt is selected for comparison. Choose Compare with Selected on another tab to compare them."
-                && compared.accessibilityLabel == compared.toolTip,
-            "DS-70/85 the comparison symbol says what it means and what to do next")
+                && !compared.isAccessibilityElement
+                && !((strip.accessibilityChildren() ?? []).contains { $0 is NSImageView }),
+            "DS-85 the comparison symbol's tooltip says what it means and what to do next; the tab's label carries it for assistive technology")
 
         // Both on one tab, wide and at the minimum width.
         try compare.mark(plainTab.primaryEditor)
@@ -252,11 +265,11 @@ import EditorBridge
     // MARK: Tooltip, the other mouse button and a double-click on the empty strip
 
     private static func mouse(
-        _ type: NSEvent.EventType, at point: NSPoint, clicks: Int = 1, in window: NSWindow
+        _ type: NSEvent.EventType, at point: NSPoint, clicks: Int = 1, time: TimeInterval = 0, in window: NSWindow
     ) throws -> NSEvent {
         try requireValue(
             NSEvent.mouseEvent(
-                with: type, location: point, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber,
+                with: type, location: point, modifierFlags: [], timestamp: time, windowNumber: window.windowNumber,
                 context: nil, eventNumber: 0, clickCount: clicks, pressure: 1), "fixture: a mouse event")
     }
     /// The view a press at `point` (in the strip's coordinates) reaches, as AppKit would find it.
@@ -269,10 +282,18 @@ import EditorBridge
         view.otherMouseDown(with: try mouse(.otherMouseDown, at: strip.convert(down, to: nil), in: window))
         view.otherMouseUp(with: try mouse(.otherMouseUp, at: strip.convert(up, to: nil), in: window))
     }
-    private static func click(_ count: Int, at point: NSPoint, in strip: DocumentTabStrip, window: NSWindow) throws {
+    private static func click(
+        _ count: Int, at point: NSPoint, time: TimeInterval = 0, in strip: DocumentTabStrip, window: NSWindow
+    ) throws {
         let view = try target(at: point, in: strip)
-        view.mouseDown(with: try mouse(.leftMouseDown, at: strip.convert(point, to: nil), clicks: count, in: window))
-        view.mouseUp(with: try mouse(.leftMouseUp, at: strip.convert(point, to: nil), clicks: count, in: window))
+        // A system control would track the mouse until a release that never comes.
+        let identifier = view.identifier?.rawValue ?? ""
+        try require(
+            !(view is NSControl) || (identifier.hasPrefix("tab.") && !identifier.hasPrefix("tab.viewMode.")),
+            "fixture: a synthetic click must not land on a control that tracks the mouse")
+        let place = strip.convert(point, to: nil)
+        view.mouseDown(with: try mouse(.leftMouseDown, at: place, clicks: count, time: time, in: window))
+        view.mouseUp(with: try mouse(.leftMouseUp, at: place, clicks: count, time: time, in: window))
     }
     private static func middle(of tab: EditorWindowController, in strip: DocumentTabStrip) throws -> NSPoint {
         let button = try tabButton(tab, in: strip)
@@ -527,6 +548,258 @@ import EditorBridge
         }
         closeAll(host)
         check(host.setEditorLayout(.single), "fixture: back to one group")
+    }
+    // MARK: Click pairs that span a change of tabs
+
+    private static func clickPairs(root: URL, app: AppDelegate, host: WorkspaceWindowController) throws {
+        let folder = root.appendingPathComponent("tab-pairs")
+        let strip = try requireValue(host.tabStrips.first, "fixture: the focused group's tab strip")
+        let window = try requireValue(host.window, "workspace window")
+        let (_, keptTab) = try open("kept.txt", "kept\n", in: folder)
+        let (second, secondTab) = try open("second.txt", "second\n", in: folder)
+        try resize(host, to: 1000, strip: strip)
+        try hover(nil, in: strip)
+        host.activate(keptTab)
+        func documents() -> Int { NSDocumentController.shared.documents.count }
+        func centre(_ view: NSView) -> NSPoint { strip.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), from: view) }
+
+        // The close button of the rightmost tab: the first click closes it, the second lands on
+        // the strip where the tab was.
+        var (last, _) = try open("last.txt", "last\n", in: folder)
+        var count = documents()
+        var close = try closeButton(last, in: strip)
+        var where_ = centre(close)
+        close.performClick(nil)
+        spinUntil("the last tab closes") { !last.isOpen }
+        check(!last.isOpen && documents() == count - 1, "fixture: the first click of the pair closed the rightmost tab")
+        try click(2, at: where_, in: strip, window: window)
+        check(
+            documents() == count - 1,
+            "a double-click on the close button of the rightmost tab closes it and opens nothing")
+
+        // The other mouse button closes the rightmost tab; a click that follows is not a pair.
+        let (middleClosed, middleTab) = try open("middle.txt", "middle\n", in: folder)
+        count = documents()
+        where_ = try middle(of: middleTab, in: strip)
+        try otherClick(down: where_, up: where_, in: strip, window: window)
+        spinUntil("the other-button close") { !middleClosed.isOpen }
+        try click(2, at: where_, in: strip, window: window)
+        check(
+            !middleClosed.isOpen && documents() == count - 1,
+            "an other-button close followed by a second click where the tab was opens nothing")
+
+        // The end of a reorder, then the second click of what AppKit counts as a pair.
+        let empty = NSPoint(x: strip.bounds.maxX - 60, y: strip.bounds.midY)
+        count = documents()
+        check(strip.beginReorder(try requireValue(keptTab.tabID, "fixture: kept tab")), "fixture: a reorder begins")
+        strip.updateReorder(at: empty)
+        strip.finishReorder(at: empty)
+        try click(2, at: empty, in: strip, window: window)
+        check(documents() == count, "a reorder dropped on the empty strip followed by a second click opens nothing")
+
+        // A first click on the empty strip, then the tabs change, then the second click.
+        try click(1, at: empty, in: strip, window: window)
+        let (extra, _) = try open("extra.txt", "extra\n", in: folder)
+        count = documents()
+        try click(2, at: empty, in: strip, window: window)
+        check(documents() == count, "a pair whose clicks are separated by a change of tabs opens nothing")
+        extra.close()
+
+        // A stale first click does not pair with a later second one.
+        count = documents()
+        try click(1, at: empty, time: 100, in: strip, window: window)
+        try click(2, at: empty, time: 100 + NSEvent.doubleClickInterval + 1, in: strip, window: window)
+        check(documents() == count, "a second click later than the double-click interval opens nothing")
+        try click(2, at: empty, time: 300, in: strip, window: window)
+        check(documents() == count, "a second click with no first click on the empty strip opens nothing")
+
+        // When a close makes the tabs fit and the list of open tabs goes, the tabs fill the strip:
+        // there is no empty strip where the list was for a second click to land on.
+        var fillers: [TextDocument] = []
+        for number in 1...5 { fillers.append(try open("pair\(number).txt", "text\n", in: folder).0) }
+        try resize(host, to: 800, strip: strip)
+        check(strip.showsOpenTabList && documents() == 7, "fixture: seven tabs overflow and show the list of open tabs")
+        where_ = centre(strip.openTabListButton)
+        last = fillers[4]
+        close = try closeButton(last, in: strip)
+        count = documents()
+        close.performClick(nil)
+        spinUntil("the seventh tab closes") { !last.isOpen }
+        window.contentView?.layoutSubtreeIfNeeded()
+        strip.layout()
+        let under = try target(at: where_, in: strip)
+        check(
+            !strip.showsOpenTabList && under is NSButton && documents() == count - 1,
+            "when the list of open tabs goes, a tab is where it was: a second click there is a click on that tab, not on empty strip")
+
+        // And the real thing still works: two clicks, both on the empty strip, close together.
+        fillers.prefix(4).forEach { $0.close() }
+        try resize(host, to: 1000, strip: strip)
+        count = documents()
+        check(count == 2, "fixture: two tabs leave most of the strip empty")
+        let free = NSPoint(x: strip.bounds.maxX - 30, y: strip.bounds.midY)
+        try click(1, at: free, time: 500, in: strip, window: window)
+        check(documents() == count, "fixture: the first click alone opens nothing")
+        try click(2, at: free, time: 500.2, in: strip, window: window)
+        check(documents() == count + 1, "two clicks on the empty strip within the interval still open one new document")
+        _ = (second, secondTab)
+    }
+
+    // MARK: A drag from a state symbol, the pointer after a layout change, and injected menus
+
+    private static func symbolDragPointerAndMenus(root: URL, app: AppDelegate, host: WorkspaceWindowController) throws {
+        let folder = root.appendingPathComponent("tab-drag")
+        let strip = try requireValue(host.tabStrips.first, "fixture: the focused group's tab strip")
+        let window = try requireValue(host.window, "workspace window")
+        var tabs: [(TextDocument, EditorWindowController)] = []
+        for name in ["a", "b", "c", "d", "e"] { tabs.append(try open(name + ".txt", "text\n", in: folder)) }
+        try resize(host, to: 1000, strip: strip)
+        try hover(nil, in: strip)
+        host.activate(tabs[0].1)
+        func order() -> [TabID] { host.model.groups.first { $0.slot == strip.groupSlot }?.tabs.map(\.id) ?? [] }
+        let ids = try tabs.map { try requireValue($0.1.tabID, "fixture: tab identity") }
+
+        // A drag that starts on a state symbol reorders the tab, as a drag on its title does.
+        let compare = try requireValue(EditorServices.current?.compare, "fixture: the compare service")
+        try compare.mark(tabs[2].1.primaryEditor)
+        let symbol = try requireValue(
+            descendantImageViews(of: strip).first { !$0.isHidden && $0.toolTip?.hasPrefix("c.txt is selected") == true },
+            "fixture: the comparison symbol of the third tab")
+        let from = symbol.convert(NSPoint(x: 8, y: 8), to: nil)
+        let to = strip.convert(NSPoint(x: 30, y: strip.bounds.midY), to: nil)
+        check(order() == ids, "fixture: five tabs in the order they were opened")
+        symbol.mouseDown(with: try mouse(.leftMouseDown, at: from, in: window))
+        symbol.mouseDragged(with: try mouse(.leftMouseDragged, at: to, in: window))
+        check(strip.isReordering && strip.dropIndicatorVisible, "a drag that starts on a state symbol starts a reorder")
+        symbol.mouseUp(with: try mouse(.leftMouseUp, at: to, in: window))
+        check(
+            order() == [ids[2], ids[0], ids[1], ids[3], ids[4]] && !strip.isReordering && host.active === tabs[0].1,
+            "and dropping it moves the tab, without selecting it")
+        symbol.mouseDown(with: try mouse(.leftMouseDown, at: symbol.convert(NSPoint(x: 8, y: 8), to: nil), in: window))
+        symbol.mouseUp(with: try mouse(.leftMouseUp, at: symbol.convert(NSPoint(x: 8, y: 8), to: nil), in: window))
+        check(host.active === tabs[2].1 && order().first == ids[2], "a click on the symbol still selects its tab and moves nothing")
+
+        // The pointer is asked for again after a layout change it did not cause.
+        // Order now: c a b d e. Edited tabs show the dot, except the one under the pointer.
+        let left = tabs[0].1, right = tabs[1].1
+        _ = left.primaryEditor.replaceSelection("x")
+        _ = right.primaryEditor.replaceSelection("x")
+        spinUntil("two edited tabs") { tabs[0].0.isDocumentEdited && tabs[1].0.isDocumentEdited }
+        func cross(_ tab: EditorWindowController) throws -> Bool { try !appearance(tab, in: strip).closeShowsEditedDot }
+        let still = strip.convert(NSPoint(x: 390, y: strip.bounds.midY), to: nil)
+        let location = Box<NSPoint?>(still)
+        strip.pointerLocationInWindow = { location.value }
+        defer { strip.pointerLocationInWindow = nil }
+        strip.pointerMoved(to: strip.convert(still, from: nil))
+        check(try cross(left) && !cross(right), "fixture: at 200 points a tab, the pointer is over the second tab")
+        try resize(host, to: 800, strip: strip)
+        check(
+            try cross(right) && !cross(left),
+            "after the window narrows under a still pointer, the cross is on the tab now under it, not the one that was")
+        try resize(host, to: 1000, strip: strip)
+        check(try cross(left) && !cross(right), "and back again when it widens")
+        location.value = nil
+        strip.needsLayout = true
+        strip.layoutSubtreeIfNeeded()
+        strip.layout()
+        check(try !cross(left) && !cross(right), "a layout change that leaves the pointer outside the window drops the hover")
+
+        // Menus go through the strip's presenters, so a check tracks none on the desktop.
+        let shown = Box<[NSMenu]>([])
+        let present = strip.presentContextMenu, presentForAccessibility = strip.presentAccessibilityMenu
+        strip.presentContextMenu = { menu, _, _ in shown.value.append(menu) }
+        strip.presentAccessibilityMenu = { menu, _ in shown.value.append(menu) }
+        defer {
+            strip.presentContextMenu = present
+            strip.presentAccessibilityMenu = presentForAccessibility
+        }
+        let button = try tabButton(tabs[3].1, in: strip)
+        let place = button.convert(NSPoint(x: 10, y: 10), to: nil)
+        button.rightMouseDown(with: try mouse(.rightMouseDown, at: place, in: window))
+        check(shown.value.count == 1, "a secondary click on a tab asks the strip's presenter for the tab's menu")
+        check(
+            button.accessibilityPerformShowMenu() && shown.value.count == 2 && !shown.value[1].items.isEmpty,
+            "the accessibility Show Menu action asks the strip's presenter too")
+        symbol.rightMouseDown(with: try mouse(.rightMouseDown, at: from, in: window))
+        check(shown.value.count == 3 && host.active === tabs[2].1, "and so does a secondary click on a state symbol")
+    }
+
+    // MARK: The review when an edited tab is closed by the dot or the other mouse button
+
+    private static func reviewOnClose(root: URL, app: AppDelegate, host: WorkspaceWindowController) throws {
+        let folder = root.appendingPathComponent("tab-review")
+        let strip = try requireValue(host.tabStrips.first, "fixture: the focused group's tab strip")
+        let window = try requireValue(host.window, "workspace window")
+        let (other, otherTab) = try open("other.txt", "other\n", in: folder)
+        let (edited, editedTab) = try open("edited.txt", "saved\n", in: folder)
+        try resize(host, to: 1000, strip: strip)
+        try hover(nil, in: strip)
+        host.activate(otherTab)
+        _ = editedTab.primaryEditor.replaceSelection("unsaved ")
+        spinUntil("the edited dot") { (try? appearance(editedTab, in: strip).closeShowsEditedDot) == true }
+        let asked = Box<[String]>([]), answer = Box<TabCloseDecision>(.cancel)
+        let commands = host.tabCommands
+        commands.decisionHandler = { prompt, reply in
+            asked.value.append(prompt.name)
+            reply(answer.value)
+        }
+        defer { commands.decisionHandler = nil }
+        let dot = try closeButton(edited, in: strip)
+        let text = editedTab.primaryEditor.text
+        check(try appearance(editedTab, in: strip).closeShowsEditedDot, "fixture: the edited tab shows the dot")
+        dot.performClick(nil)
+        check(asked.value == ["edited.txt"], "a click on the dot asks for the review exactly once (\(asked.value))")
+        check(
+            edited.isOpen && edited.isDocumentEdited && editedTab.primaryEditor.text == text && window.attachedSheet == nil
+                && (try? tabButton(editedTab, in: strip)) != nil && NSDocumentController.shared.documents.count == 2,
+            "DS-12 on Cancel the tab stays open with its unsaved text, and nothing else changed")
+        let point = try middle(of: editedTab, in: strip)
+        try otherClick(down: point, up: point, in: strip, window: window)
+        check(
+            asked.value == ["edited.txt", "edited.txt"],
+            "an other-button click on the edited tab asks for the same review exactly once (\(asked.value))")
+        check(
+            edited.isOpen && edited.isDocumentEdited && editedTab.primaryEditor.text == text
+                && NSDocumentController.shared.documents.count == 2,
+            "DS-12 and on Cancel the tab stays open")
+        answer.value = .discard
+        try otherClick(down: point, up: point, in: strip, window: window)
+        spinUntil("the discarded tab closes") { !edited.isOpen }
+        check(
+            asked.value.count == 3 && !edited.isOpen && other.isOpen,
+            "after a cancelled review the next close asks again, and Don't Save closes the tab")
+        try otherClick(down: try middle(of: otherTab, in: strip), up: try middle(of: otherTab, in: strip), in: strip, window: window)
+        spinUntil("the clean tab closes") { !other.isOpen }
+        check(asked.value.count == 3 && !other.isOpen, "a tab with nothing to save closes without a review")
+    }
+
+    // MARK: Observers end with the strip
+
+    private static func observers() {
+        weak var gone: DocumentTabStrip?
+        weak var firstBag: AnyObject?
+        weak var secondBag: AnyObject?
+        autoreleasepool {
+            let strip = DocumentTabStrip(frame: NSRect(x: 0, y: 0, width: 400, height: 36))
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 400, height: 100), styleMask: [.borderless], backing: .buffered,
+                defer: true)
+            window.isReleasedWhenClosed = false
+            check(strip.observerCount == 1, "a strip outside a window observes only its own scrolling")
+            window.contentView?.addSubview(strip)
+            check(strip.observerCount == 3, "in a window it also observes the window and the application")
+            strip.removeFromSuperview()
+            check(strip.observerCount == 1, "leaving the window removes those two observers")
+            window.contentView?.addSubview(strip)
+            strip.removeFromSuperview()
+            gone = strip
+            firstBag = strip.observerBags[0]
+            secondBag = strip.observerBags[1]
+        }
+        settle()
+        check(
+            gone == nil && firstBag == nil && secondBag == nil,
+            "when the strip is released its observers go with it: nothing registered outlives it")
     }
     private static func settle() {
         let end = Date().addingTimeInterval(0.2)

@@ -18,16 +18,6 @@ extension TabDiskIO {
     func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { false }
     func applicationDidFinishLaunching(_ notification: Notification) { launched?() }
 }
-@MainActor private final class MenuTrackingContext: NSObject {
-    var tracked: NSMenu?
-    @objc func beganTracking(_ note: Notification) {
-        tracked = note.object as? NSMenu
-        let timer = Timer(timeInterval: 0.1, repeats: false) { [self] _ in
-            MainActor.assumeIsolated { tracked?.cancelTrackingWithoutAnimation() }
-        }
-        RunLoop.main.add(timer, forMode: .eventTracking)
-    }
-}
 @MainActor private final class TabCommandContext {
     let isolated: IsolatedSupportDirectory
     init() throws { isolated = try IsolatedSupportDirectory("TabCommandProcess") }
@@ -121,15 +111,19 @@ extension TabDiskIO {
         check(
             select.responds(to: NSSelectorFromString("accessibilityPerformShowMenu")),
             "T1-R1 standard accessibility Show Menu action exists")
-        // Close the actual native menu through its tracking run loop, without dispatching an item.
-        let menuContext = MenuTrackingContext()
-        NotificationCenter.default.addObserver(
-            menuContext, selector: #selector(MenuTrackingContext.beganTracking(_:)),
-            name: NSMenu.didBeginTrackingNotification, object: nil)
-        defer { NotificationCenter.default.removeObserver(menuContext) }
+        // The strip's injected presenters receive each menu, so none is tracked on the desktop.
+        var presented: [NSMenu] = []
+        let presentMenu = host.tabStrip.presentContextMenu
+        let presentAccessibilityMenu = host.tabStrip.presentAccessibilityMenu
+        host.tabStrip.presentContextMenu = { menu, _, _ in presented.append(menu) }
+        host.tabStrip.presentAccessibilityMenu = { menu, _ in presented.append(menu) }
+        defer {
+            host.tabStrip.presentContextMenu = presentMenu
+            host.tabStrip.presentAccessibilityMenu = presentAccessibilityMenu
+        }
         select.rightMouseDown(with: event)
         check(
-            host.model.activeTab?.id == active && window.firstResponder === before,
+            presented.count == 1 && host.model.activeTab?.id == active && window.firstResponder === before,
             "T1 actual right-click tracking preserves inactive target and responder")
         let controlEvent = NSEvent.mouseEvent(
             with: .leftMouseDown, location: select.convert(.zero, to: nil),
@@ -137,11 +131,12 @@ extension TabDiskIO {
             eventNumber: 2, clickCount: 1, pressure: 1)!
         select.mouseDown(with: controlEvent)
         check(
-            host.model.activeTab?.id == active && window.firstResponder === before,
+            presented.count == 2 && host.model.activeTab?.id == active && window.firstResponder === before,
             "T1 actual Control-click tracking preserves inactive target and responder")
         check(select.accessibilityPerformShowMenu(), "T1 native AX Show Menu action opens a menu")
         check(
-            host.model.activeTab?.id == active && window.firstResponder === before,
+            presented.count == 3 && presented.allSatisfy { !$0.items.isEmpty }
+                && host.model.activeTab?.id == active && window.firstResponder === before,
             "T1 AX menu tracking preserves editing focus")
         let titles = menu.items.filter { !$0.isSeparatorItem }.map(\.title)
         check(
