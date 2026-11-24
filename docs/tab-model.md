@@ -289,13 +289,16 @@ small sizes is explicit (DS-67):
    lower than the minimum without the sidebar, and hiding the sidebar restores that minimum.
 2. Showing the sidebar in a narrower window grows the window to the new minimum and keeps it on
    screen. A full-screen window, a split-view tile included, is never resized: its room is the
-   content it has. If the screen, or the full-screen content, cannot fit the minimum, the command
-   is refused with a status message and nothing changes on screen.
+   content it has. If the screen, or the full-screen content, cannot fit the minimum, the request
+   is deferred: a status message says the sidebar will appear when there is room.
    The same test runs whenever the window is resized, changes screen, enters or leaves full screen
    or changes its editor layout: a shown sidebar that no longer fits is hidden with a status
-   message, so the editor groups never fall below their minimum. A sidebar refused or hidden for
-   want of room is still recorded as shown in the saved layout, and it is shown again, without
-   taking the keyboard, as soon as it fits. Hiding it by command ends that.
+   message, so the editor groups never fall below their minimum. A sidebar deferred or hidden for
+   want of room is waiting: View > Workspace Browser carries a mixed mark and a tooltip that says
+   so, and choosing it withdraws the request with a status message. While it waits it is shown,
+   without taking the keyboard, as soon as it fits. The saved layout records waiting as
+   `sidebarShown` false with `sidebarAwaitsRoom` true, so a build without that key reads hidden.
+   Restoring a waiting layout tries again and says nothing, whether or not it fits.
 3. A narrowing window takes width from the sidebar first, down to 260 points. The editor groups keep
    at least 320 points each.
 4. Inside a group, Both keeps its own rule: source and preview keep 120 points each while there is
@@ -317,7 +320,7 @@ before the first, the keyboard goes to the text of the tab that is active when t
 That target is never stored, so it follows a tab switch, a change between Source, Preview and Both, a
 closed tab and a layout restored before any document was open. With no document open the controls wrap. The three views are chosen from a pop-up, because three segment titles do not fit 260 points.
 
-`WorkspaceLayoutState` version 1 gains two optional keys, `sidebarShown` and `sidebarWidth` (points,
+`WorkspaceLayoutState` version 1 gains optional keys: `sidebarAwaitsRoom`, above, and `sidebarShown` and `sidebarWidth` (points,
 greater than 0 and at most 10,000; clamped to the bounds when applied). A workspace whose sidebar was
 never shown writes neither, so its files and the golden fixtures are byte-for-byte unchanged. Once it
 has been used both are written, `sidebarShown` as true or false. A layout without the keys changes

@@ -231,6 +231,10 @@ package struct WorkspaceLayoutState: Codable, Equatable, Sendable {
     package var sidebarShown: Bool?
     /// The width the person last gave the sidebar, in points. Kept while it is hidden.
     package var sidebarWidth: Double?
+    /// The person asked for the sidebar and the window could not hold it. Written as true beside
+    /// `sidebarShown` false, and otherwise absent: a build that does not know the key reads the
+    /// layout as hidden, and one that does shows the sidebar when there is room.
+    package var sidebarAwaitsRoom: Bool?
     package init(version: Int = 1, layout: LayoutKind, focusedGroup: GroupSlot, groups: [Group]) {
         self.version = version
         self.layout = layout
