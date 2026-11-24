@@ -325,6 +325,94 @@ enum SearchSessionChecks {
         check(
             wrong == 0 && moves > 500,
             "Next and Previous in a large document go where the enumerating planner goes, with and without wrap")
+        // Fix round 1, item 2: Next and Previous stop at the nearest match. Nothing after it is
+        // read, so a deadline or Cancel that would have come later cannot discard it.
+        let late = Data((String(repeating: ".", count: 2_000) + "needle" + String(repeating: ".", count: 2_000)).utf8)
+        var read: [Int] = []
+        let nearest = try SearchCore.searchBytes(
+            late, options: SearchOptions(query: "needle"), limit: 1, stopAtLimit: true, chunkBytes: 64,
+            progress: { read.append($0) })
+        check(
+            nearest.hits.map(\.range) == [NSRange(location: 2_000, length: 6)] && !nearest.truncated
+                && (read.last ?? 0) < 2_100,
+            "a search for the nearest match stops reading at that match")
+        read = []
+        let nearestBack = try SearchCore.searchBytes(
+            late, options: SearchOptions(query: "NEEDLE"), backwards: true, limit: 1, stopAtLimit: true,
+            chunkBytes: 64, progress: { read.append($0) })
+        check(
+            nearestBack.hits.map(\.range) == [NSRange(location: 2_000, length: 6)] && (read.last ?? 0) < 2_100,
+            "a backwards search for the nearest match stops reading at that match")
+        // 2,000 bytes in 64-byte windows are about 32 looks at Cancel. Forty are allowed: the
+        // match is reached, and the 31 windows after it must not be read.
+        for action in ["next", "previous"] {
+            let selection = NSRange(location: action == "next" ? 0 : late.count, length: 0)
+            let found = try? SearchSession.planBytes(
+                late, options: SearchOptions(query: "needle", matchCase: true, wrap: false), action: action,
+                selection: selection,
+                search: SearchSession.ByteSearch(chunkBytes: 64, cancellation: CancelAfterPolls(allowed: 40)))
+            check(
+                found == .select(NSRange(location: 2_000, length: 6)),
+                "\(action): a match already found is not lost to a Cancel or deadline that comes after it")
+        }
+        // Item 3: Cancel and the deadline are looked at inside a window. A long search text with a
+        // repetitive start costs its whole length at every position of this one 256 KiB window.
+        let run = Data(String(repeating: "a", count: 262_144).utf8)
+        let costly = String(repeating: "a", count: 60_000) + "b"
+        for (matchCase, backwards) in [(true, false), (true, true), (false, false), (false, true)] {
+            let token = CancelAfterPolls(allowed: 3)
+            rejects(
+                "a costly search inside one window is cancelled (match case \(matchCase), backwards \(backwards))",
+                message: "cancelled"
+            ) {
+                _ = try SearchCore.searchBytes(
+                    run, options: SearchOptions(query: costly, matchCase: matchCase), backwards: backwards,
+                    cancellation: token)
+            }
+            check(token.polls >= 4, "Cancel is looked at more than once per window")
+        }
+        rejects(
+            "a costly search inside one window meets its deadline", where: { TTSearchEngine.timedOut($0 as NSError) }
+        ) {
+            _ = try SearchCore.searchBytes(
+                run, options: SearchOptions(query: costly, matchCase: true), timeLimit: 0.01)
+        }
+        // Item 6: the real path at the real limit and the real window size. 65 MiB of zero bytes
+        // is 68,157,440 UTF-16 units, above the engine's 67,108,864, with three planted matches
+        // of multi-byte text: across the first 4 MiB window boundary, mid-document and at the end.
+        try autoreleasepool {
+            let size = 65 * 1_048_576, marker = Array("Straddle-\u{c9}\u{dc}\u{1F600}-Mark".utf8)
+            let planted = [4 * 1_048_576 - 7, 33 * 1_048_576 + 12_345, size - marker.count]
+            var real = Data(count: size)
+            for position in planted { real.replaceSubrange(position..<position + marker.count, with: marker) }
+            check(
+                real.count > SearchCore.maximumTextUnits && SearchCore.isLarge(real)
+                    && SearchCore.utf16Length(ofUTF8: real) == size - 3 * 4,
+                "a 65 MiB document is above the engine's real 64 Mi UTF-16 limit")
+            let expected = planted.map { NSRange(location: $0, length: marker.count) }
+            let exact = try SearchCore.searchBytes(
+                real, options: SearchOptions(query: "Straddle-\u{c9}\u{dc}\u{1F600}-Mark", matchCase: true))
+            let folded = try SearchCore.searchBytes(
+                real, options: SearchOptions(query: "STRADDLE-\u{c9}\u{dc}\u{1F600}-MARK"))
+            check(
+                exact.hits.map(\.range) == expected && folded.hits.map(\.range) == expected && !exact.truncated
+                    && !folded.truncated,
+                "at the real limit and window size the count is right, with the boundary match found once")
+            let options = SearchOptions(query: "straddle-\u{e9}\u{fc}\u{1F600}-mark")
+            check(
+                try SearchSession.planBytes(
+                    real, options: options, action: "next", selection: NSRange(location: 0, length: 0))
+                    == .select(expected[0])
+                    && SearchSession.planBytes(real, options: options, action: "next", selection: expected[2])
+                        == .select(expected[0])
+                    && SearchSession.planBytes(real, options: options, action: "previous", selection: expected[0])
+                        == .select(expected[2]),
+                "at the real limit Next finds the boundary match and both directions wrap")
+            rejects("at the real limit a regular expression is refused", expecting: SearchFailure.largeDocumentRegex) {
+                _ = try SearchCore.searchBytes(
+                    real, options: SearchOptions(query: "Strad+le", mode: .regularExpression))
+            }
+        }
         let pairs = Data("ab ab ab".utf8)
         check(
             try SearchSession.planBytes(

@@ -100,6 +100,7 @@ package enum SearchSession {
             let total = range.length
             return try SearchCore.searchBytes(
                 data, options: options, range: range, backwards: backwards, overlapping: overlapping, limit: limit,
+                stopAtLimit: limit == 1,
                 timeLimit: max(0.001, deadline.timeIntervalSinceNow), chunkBytes: search.chunkBytes,
                 cancellation: search.cancellation, progress: search.progress.map { report in { report($0, total) } })
         }
