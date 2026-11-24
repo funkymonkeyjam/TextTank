@@ -1456,10 +1456,19 @@ extension DesignSettingsChecks {
         document.editor.text = "one\ntwo"
         document.editor.setSavePoint()
         controller.goToLine(nil)
+        // The same oracle as the form fields above: the native element the field exposes (its
+        // cell), and the real window's accessibility tree, each naming a text field.
         let lineField = controller.goToLineBar.field
+        let lineWindow = try requireValue(lineField.window, "DG AX Go to Line is in the workspace window")
+        lineWindow.contentView?.layoutSubtreeIfNeeded()
         check(
-            controller.goToLineBarVisible && lineField.accessibilityLabel() == "Line number in Go to Line"
-                && lineField.accessibilityRole() == .textField && lineField.currentEditor() != nil,
+            controller.goToLineBarVisible && lineField.currentEditor() != nil
+                && NSAccessibility.unignoredChildrenForOnlyChild(from: lineField).contains {
+                    exposes($0, purpose: "Line number in Go to Line", role: "AXTextField")
+                }
+                && nativeTree(lineWindow).contains {
+                    exposes($0, purpose: "Line number in Go to Line", role: "AXTextField")
+                },
             "DG AX Go to Line is one named inline text field that takes the keyboard")
         controller.cancelGoToLine(nil)
         composition.showDocumentTabs(nil)

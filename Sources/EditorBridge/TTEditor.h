@@ -196,6 +196,20 @@ __attribute__((objc_subclassing_restricted))
 /// One-based display coordinates, with tab stops matching the status bar. Coordinates beyond the text
 /// resolve to the last line or its end. Navigation does not change text, Undo, or the saved selection of another view.
 - (void)showLine:(NSInteger)line column:(NSInteger)column NS_SWIFT_NAME(show(line:column:));
+/// Shows a one-based line (and column) without making the jump final: the caret goes there and
+/// is scrolled into view, and folding is left exactly as it is. A line hidden in a fold is shown
+/// by the nearest visible fold header that holds it. Returns the one-based line the caret is
+/// on, or 0, changing nothing, when the line does not exist.
+- (NSInteger)previewLine:(NSInteger)line column:(NSInteger)column NS_SWIFT_NAME(preview(line:column:));
+/// NO for a one-based line that is hidden in a fold or does not exist.
+- (BOOL)lineIsVisible:(NSInteger)line NS_SWIFT_NAME(lineIsVisible(_:));
+/// Every selection of this view exactly as it is: each range with its virtual space, which one
+/// is the main selection, and stream, line or rectangular mode. Opaque; only
+/// restoreSelectionSnapshot: reads it.
+@property(nonatomic, readonly) NSArray<NSNumber *> *selectionSnapshot;
+/// Puts a snapshot of this view's selections back. NO, changing nothing, when it is not a
+/// snapshot or the text is no longer the length it was taken from.
+- (BOOL)restoreSelectionSnapshot:(NSArray<NSNumber *> *)snapshot;
 - (void)scrollCaretIntoView;
 /// Zero-based display line at the top of this view.
 @property(nonatomic, readonly) NSInteger firstVisibleLine;

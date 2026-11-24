@@ -271,8 +271,13 @@ exactly once. Go to Line is one inline field in the find bar's place, owned by i
 (`EditorGoToLineBar`, `LineJumpPreview`): the two bars replace each other and the shared Find
 state is untouched. A valid entry (`line` or `line:column`, read by `GoToLineEntry`) shows the
 line without a jump being made; Return makes the jump through `goTo(line:column:in:macros:)`,
-the one place a macro recording learns of it; Escape, another tab, Find or Preview alone put
-the caret, every selection and the scroll position back. Closing the document closes the
+the one place a macro recording learns of it, and the only thing that makes the jump. Showing
+a line uses the bridge's `preview(line:column:)`, which never unfolds: a line hidden in a fold
+is stood in for by its fold header and the field says so. Everything else that closes the
+field (Escape, Cancel, Tab or Move Focus out of it, another tab, Find, Preview alone) puts the
+caret, the exact selection state (`selectionSnapshot`: every range, the main one, rectangular
+mode), the scroll position and so the folding back. Return on the line the field opened with
+changes nothing. A caret the person has since placed in the text themselves (a click) stands. Closing the document closes the
 field, and a changed or retired target cannot navigate a stale editor.
 
 `VersionedLibrary` in `Sources/Documents/` shares their Foundation-only codec with

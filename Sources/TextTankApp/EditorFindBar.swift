@@ -206,11 +206,15 @@ final class EditorFindBar: NSView {
         return Arrangement(oneRow: false, words: width - beside >= options.wordsWidth)
     }
     private func rows(for width: CGFloat) -> Int { (arrangement(for: width).oneRow ? 1 : 2) + (showsReplace ? 1 : 0) }
-    /// 24 points with one row; 50 with Replace or at a narrow width; 76 with both, which a
-    /// 320 × 200 group still has above the editor and status row.
+    /// Three rows are only ever needed in a narrow group, which may also be the shortest one: a
+    /// 320 × 200 group has 72 points for the bar above a 32-point editor and the 28-point status
+    /// row. Three rows therefore sit without the 2-point gap that one or two rows have.
+    private func pitch(rows: Int) -> CGFloat { rows > 2 ? Self.rowHeight : Self.rowPitch }
+    /// 24 points with one row; 50 with Replace or at a narrow width; 72 with both.
     override var intrinsicContentSize: NSSize {
-        let count = CGFloat(rows(for: bounds.width))
-        return NSSize(width: NSView.noIntrinsicMetric, height: count * Self.rowPitch - (Self.rowPitch - Self.rowHeight))
+        let count = rows(for: bounds.width)
+        return NSSize(
+            width: NSView.noIntrinsicMetric, height: CGFloat(count - 1) * pitch(rows: count) + Self.rowHeight)
     }
     override func setFrameSize(_ newSize: NSSize) {
         let before = rows(for: bounds.width)
@@ -223,9 +227,10 @@ final class EditorFindBar: NSView {
         let shape = arrangement(for: bounds.width)
         options.setShowsWords(shape.words)
         var nextRow = 0
+        let rowPitch = pitch(rows: rows(for: bounds.width))
         func takeRow() -> CGFloat {
             defer { nextRow += 1 }
-            return bounds.height - Self.rowHeight - CGFloat(nextRow) * Self.rowPitch
+            return bounds.height - Self.rowHeight - CGFloat(nextRow) * rowPitch
         }
         // Each row has at most one flexible field or label. Native control fitting sizes
         // preserve the labels across system font sizes and appearances.
@@ -289,6 +294,10 @@ enum GoToLineEntry: Equatable {
         lines == 1 ? "This document has 1 line." : "Lines are 1–\(Strings.number(lines))."
     }
     static func hint(_ lines: Int) -> String { "\(range(lines)) Add a colon for a column, such as 12:4." }
+    /// Shown while the line typed is hidden in a fold: the preview leaves folding alone.
+    static func folded(_ line: Int) -> String {
+        "Line \(Strings.number(line)) is in folded text. Press Return to unfold it and go there."
+    }
     /// `line` or `line:column` in ASCII digits. A colon with nothing after it yet is the line alone.
     static func parse(_ text: String, lines: Int) -> GoToLineEntry {
         let typed = text.trimmingCharacters(in: .whitespaces)
@@ -328,7 +337,9 @@ final class EditorGoToLineBar: NSView {
         super.init(frame: frame)
         identifier = .init("editor.goToLine")
         field.identifier = .init("goToLine.line")
+        // On the cell as well: the cell is the element assistive technology is given (DS-70).
         field.setAccessibilityLabel("Line number in Go to Line")
+        field.cell?.setAccessibilityLabel("Line number in Go to Line")
         message.identifier = .init("goToLine.message")
         message.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         message.textColor = .secondaryLabelColor
@@ -336,8 +347,10 @@ final class EditorGoToLineBar: NSView {
         message.setAccessibilityLabel("Lines in document")
         goButton.identifier = .init("goToLine.go")
         goButton.setAccessibilityLabel("Go to the line entered")
+        goButton.cell?.setAccessibilityLabel("Go to the line entered")
         cancelButton.identifier = .init("goToLine.cancel")
         cancelButton.setAccessibilityLabel("Close Go to Line and return to where the caret was")
+        cancelButton.cell?.setAccessibilityLabel("Close Go to Line and return to where the caret was")
         [label, field, message, goButton, cancelButton].forEach { addSubview($0) }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
@@ -390,20 +403,20 @@ final class EditorGoToLineBar: NSView {
     }
 }
 
-/// What Go to Line found when it opened, so that typing can show a line and Escape can put the
-/// caret, every selection and the scroll position back exactly.
+/// What Go to Line found when it opened, so that typing can show a line and anything but Return
+/// can put the caret, every selection, the scroll position and the folding back exactly.
 @MainActor final class LineJumpPreview {
     weak var editor: TTEditor?
     let revision: UInt
-    private let selections: [TTSelectionRange]
-    private let mayMoveSelection: Bool
+    /// Every range, which one is main, and stream or rectangular mode, as the bridge keeps them.
+    private let selections: [NSNumber]
     private let topLine: Int, topSubline: Int, horizontalOffset: Int
-    private var moved = false
+    /// Where the last preview left the caret; nil while the text shows what it showed at opening.
+    private var shownCaret: Int?
     init(_ editor: TTEditor) {
         self.editor = editor
         revision = editor.revision
-        selections = editor.selectionRanges
-        mayMoveSelection = !editor.selectionIsRectangular
+        selections = editor.selectionSnapshot
         topLine = editor.firstVisibleDocumentLine
         topSubline = editor.firstVisibleSubline
         horizontalOffset = editor.horizontalScrollOffset
@@ -413,16 +426,27 @@ final class EditorGoToLineBar: NSView {
         guard let editor, EditorLifetime.isOpen(editor), editor.revision == revision else { return nil }
         return editor
     }
-    /// Shows the line without it counting as a jump: nothing is recorded, and a macro recording
-    /// in this view is left alone because the caret is not moved while one runs (F277).
-    func show(line: Int, column: Int?, recording: Bool) {
-        guard mayMoveSelection, !recording, let editor = current else { return }
-        if let column { editor.show(line: line, column: column) } else { _ = editor.goToLine(line) }
-        moved = true
+    /// Shows the line without it counting as a jump: nothing is recorded, nothing is unfolded,
+    /// and a macro recording in this view is left alone because the caret is not moved while one
+    /// runs (F277). Returns the line the caret was put on: the fold header that holds a line
+    /// hidden in a fold; nil when nothing was shown.
+    @discardableResult func show(line: Int, column: Int?, recording: Bool) -> Int? {
+        guard !recording, let editor = current else { return nil }
+        let shown = editor.preview(line: line, column: column ?? 1)
+        guard shown > 0 else { return nil }
+        shownCaret = editor.selectionCaret
+        return shown
+    }
+    /// The caret is still where the preview put it. False once the person has put it somewhere
+    /// themselves (a click in the text), which then stands.
+    var ownsSelection: Bool {
+        guard let shownCaret, let editor = current else { return shownCaret == nil }
+        return editor.selectionCount == 1 && editor.selectionAnchor == shownCaret && editor.selectionCaret == shownCaret
     }
     func restoreSelection() {
-        guard moved, let editor = current else { return }
-        _ = editor.setSelectionRanges(selections)
+        guard shownCaret != nil, let editor = current else { return }
+        _ = editor.restoreSelectionSnapshot(selections)
+        shownCaret = nil
     }
     /// After the bar has left and the editor has its height back.
     func restoreScroll() {
@@ -431,7 +455,6 @@ final class EditorGoToLineBar: NSView {
             editor.scrollTo(documentLine: topLine, subline: topSubline)
         }
         if editor.horizontalScrollOffset != horizontalOffset { editor.horizontalScrollOffset = horizontalOffset }
-        moved = false
     }
 }
 

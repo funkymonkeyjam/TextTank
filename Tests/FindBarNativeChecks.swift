@@ -33,6 +33,41 @@ import EditorBridge
     private static func press(_ selector: Selector, in field: NSTextField, of tab: EditorWindowController) -> Bool {
         tab.control(field, textView: NSTextView(), doCommandBy: selector)
     }
+    /// The real paths. A key goes to the field's own editor as a key-down event, which the text
+    /// system turns into typed text or a command for the field's delegate.
+    private static func keyDown(_ characters: String, code: UInt16, in field: NSTextField) throws {
+        let editor = try requireValue(field.currentEditor() as? NSTextView, "fixture: the field is being edited")
+        let window = try requireValue(field.window, "fixture: the field is in a window")
+        editor.keyDown(
+            with: try requireValue(
+                NSEvent.keyEvent(
+                    with: .keyDown, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                    windowNumber: window.windowNumber, context: nil, characters: characters,
+                    charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code), "fixture: key event"))
+    }
+    private static let digitKeys: [Character: UInt16] = [
+        "0": 29, "1": 18, "2": 19, "3": 20, "4": 21, "5": 23, "6": 22, "7": 26, "8": 28, "9": 25, ":": 41
+    ]
+    /// Replaces what the field holds by typing, one key at a time.
+    private static func keys(_ text: String, into field: NSTextField) throws {
+        try requireValue(field.currentEditor(), "fixture: the field is being edited").selectAll(nil)
+        for character in text {
+            try keyDown(String(character), code: try requireValue(digitKeys[character], "fixture: key for \(character)"), in: field)
+        }
+    }
+    /// Presses one segment the way assistive technology does: the segment's own accessibility
+    /// element performs its press, and the control sends its action.
+    private static func press(segment: Int, of control: NSSegmentedControl) throws {
+        // The control's accessibility children are its cell; the cell's are the segments.
+        var segments: [NSObject] = [control]
+        while segments.count == 1, let inner = (segments[0] as? NSAccessibilityProtocol)?.accessibilityChildren() {
+            segments = inner.compactMap { $0 as? NSObject }
+        }
+        try require(segments.count == control.segmentCount, "fixture: one accessibility element for each segment (\(segments.count))")
+        let element = try requireValue(segments[segment] as? NSAccessibilityProtocol, "fixture: segment \(segment)")
+        // AppKit's segment reports false even when it has acted; the callers check the effect.
+        _ = element.accessibilityPerformPress()
+    }
     private static let returnKey = #selector(NSResponder.insertNewline(_:))
     private static let escapeKey = #selector(NSResponder.cancelOperation(_:))
     /// Everything shown is inside the bar and nothing overlaps; every control (a label is not
@@ -71,12 +106,21 @@ import EditorBridge
     }
     private struct Place: Equatable {
         var anchors: [Int], carets: [Int], topLine: Int, topSubline: Int, across: Int
+        /// Every range with its virtual space, which one is main, and the selection mode.
+        var selections: [NSNumber]
+    }
+    /// The bridge's snapshot without its third entry, the keyboard column mode's "moves extend"
+    /// switch: Scintilla itself turns that off whenever the text loses the keyboard, to any field.
+    private static func selections(_ editor: TTEditor) -> [NSNumber] {
+        var state = editor.selectionSnapshot
+        state.remove(at: 2)
+        return state
     }
     private static func place(_ editor: TTEditor) -> Place {
         Place(
             anchors: editor.selectionRanges.map(\.anchor), carets: editor.selectionRanges.map(\.caret),
             topLine: editor.firstVisibleDocumentLine, topSubline: editor.firstVisibleSubline,
-            across: editor.horizontalScrollOffset)
+            across: editor.horizontalScrollOffset, selections: selections(editor))
     }
 
     static func run(root: URL, app: AppDelegate, host: WorkspaceWindowController) throws {
@@ -246,7 +290,8 @@ import EditorBridge
                 let name = FindOptionsControl.Option(rawValue: index)?.name ?? "?"
                 return options.toolTip(forSegment: index)?.hasPrefix("\(name) is off") == true
             }, "each segment's tooltip names its option and says what it does")
-        options.toggle(.matchCase)
+        // The control's own path: the first segment is pressed, and the control sends its action.
+        try press(segment: 0, of: options)
         check(
             options.isOn(.matchCase) && search.caseButton.state == .on
                 && search.sharedOptions(query: "", replacement: "").matchCase
@@ -261,7 +306,7 @@ import EditorBridge
         check(
             !options.isOn(.matchCase) && !options.isOn(.wholeWord) && search.caseButton.state == .off
                 && search.wordButton.state == .off, "and both turn off from the bar")
-        options.toggle(.regex)
+        try press(segment: 2, of: options)
         check(
             options.isOn(.regex) && search.sharedOptions(query: "", replacement: "").mode == .regularExpression
                 && search.mode.indexOfSelectedItem == 2, "Regex in the bar is Regex mode in the window")
@@ -310,6 +355,24 @@ import EditorBridge
         typed("line 39", into: tab.findField, of: tab)
         spinUntil("the mark clears") { !tab.findFieldIsMarked && !tab.findCount.stringValue.isEmpty }
         check(!tab.findFieldIsMarked, "and the mark clears with a valid search")
+        // The keyboard's own path: keys typed into the Find field, then Return, then Escape.
+        _ = editor.setSelectionAnchor(0, caret: 0)
+        window.makeFirstResponder(tab.findField)
+        try keys("390", into: tab.findField)
+        spinUntil("the live count for typed keys") { tab.findCount.stringValue.contains("1") && !tab.findCount.stringValue.isEmpty }
+        check(
+            tab.findField.stringValue == "390" && search.sharedQuery == "390" && search.queryField.stringValue == "390",
+            "keys typed into the Find field are the shared Find text")
+        try keyDown("\r", code: 36, in: tab.findField)
+        spinUntil("Return finds the next match") { !tab.inlineSearchPending && editor.selectedText == "390" }
+        check(
+            editor.selectedText == "390" && editor.statusInfo.line == 390 && tab.findBarVisible
+                && tab.findField.currentEditor() != nil,
+            "Return in the Find field selects the next match and the field keeps the keyboard (DS-35)")
+        try keyDown("\u{1B}", code: 53, in: tab.findField)
+        check(!tab.findBarVisible && keyboard(in: editor, of: host), "Escape in the Find field closes the bar")
+        tab.showFind(nil)
+        typed("line 39", into: tab.findField, of: tab)
         search.remember(query: "line 39", replacement: "LINE 39")
         var shownHistory: (menu: NSMenu, anchor: NSView)?
         let nativePresenter = tab.presentFindHistory
@@ -342,7 +405,7 @@ import EditorBridge
             tab.setReplaceRow(shown: true)
             window.contentView?.layoutSubtreeIfNeeded()
             check(
-                sound(bar) && bar.frame.height == CGFloat((rows + 1) * 26 - 2),
+                sound(bar) && bar.frame.height == (rows == 1 ? 50 : 72),
                 "\(label): the Replace row adds one row and nothing overlaps")
             picture(tab, "width-\(Int(bar.frame.width))")
             tab.setReplaceRow(shown: false)
@@ -370,6 +433,28 @@ import EditorBridge
             options.frame.minY < tab.findField.frame.minY && abs(tab.findCount.frame.midY - options.frame.midY) <= 1
                 && tab.findNavigation.frame.minY == tab.findField.frame.minY,
             "in a narrow group the options and the count take the second row; Find and its navigation keep the first")
+        // The smallest editor group, 320 × 200, with the bar at its tallest: three rows.
+        let surface = try requireValue(host.groupSurfaces[.first], "fixture: the first group's surface")
+        let surfaceFrame = surface.frame
+        surface.frame = NSRect(x: surfaceFrame.minX, y: surfaceFrame.minY, width: 320, height: 200)
+        tab.setReplaceRow(shown: true)
+        surface.layoutSubtreeIfNeeded()
+        tab.presentationRoot.layoutSubtreeIfNeeded()
+        let root = tab.presentationRoot
+        try require(
+            root.frame.width <= 320 && root.frame.height <= 200,
+            "fixture: the tab is in a 320 × 200 group (\(root.frame.size))")
+        check(
+            bar.frame.height == bar.intrinsicContentSize.height && bar.frame.height == 72 && sound(bar)
+                && root.bounds.contains(bar.frame),
+            "in a 320 × 200 group the three-row bar has its whole height: no row is cut off (bar \(bar.frame.height), root \(root.frame.size))")
+        check(
+            tab.viewContainer.frame.height >= 32 && tab.viewContainer.frame.maxY <= bar.frame.minY
+                && root.subviews.filter { !$0.isHidden }.allSatisfy { root.bounds.insetBy(dx: -0.5, dy: -0.5).contains($0.frame) },
+            "and the text keeps its minimum height between the bar and the status row (text \(tab.viewContainer.frame.height))")
+        picture(tab, "smallest-group")
+        tab.setReplaceRow(shown: false)
+        surface.frame = surfaceFrame
         _ = host.setEditorLayout(.single)
         window.setContentSize(NSSize(width: 1400, height: 700))
         window.contentView?.layoutSubtreeIfNeeded()
@@ -427,7 +512,8 @@ import EditorBridge
 
         // Typing a line the document has shows it, and nothing is recorded as a jump.
         let revision = editor.revision
-        typed("300", into: field, of: tab)
+        try keys("300", into: field)
+        check(field.stringValue == "300", "keys typed into the field replace the line it opened with")
         check(
             editor.statusInfo.line == 300 && tab.goToLineBarVisible && editor.revision == revision && !editor.modified
                 && editor.firstVisibleDocumentLine != before.topLine,
@@ -462,21 +548,92 @@ import EditorBridge
             "Return on an empty field asks for a line number")
 
         // Escape after a preview.
-        typed("350", into: field, of: tab)
+        try keys("350", into: field)
         try require(editor.statusInfo.line == 350, "fixture: line 350 is shown")
+        try keyDown("\u{1B}", code: 53, in: field)
         check(
-            press(escapeKey, in: field, of: tab) && !tab.goToLineBarVisible && !tab.findBarVisible
-                && keyboard(in: editor, of: host),
+            !tab.goToLineBarVisible && !tab.findBarVisible && keyboard(in: editor, of: host),
             "Escape closes Go to Line and returns the keyboard to the text")
         window.contentView?.layoutSubtreeIfNeeded()
         check(
             place(editor) == before, "Escape after a preview restores the caret, the selection and the scroll position exactly")
 
         // Return goes there and closes.
+        // Return with the field as it opened changes nothing: not the caret, not the selection.
         tab.goToLine(nil)
-        typed("12:4", into: field, of: tab)
+        try require(field.stringValue == "1" && place(editor) == before, "fixture: the field holds the caret's line")
+        try keyDown("\r", code: 36, in: field)
+        window.contentView?.layoutSubtreeIfNeeded()
         check(
-            press(returnKey, in: field, of: tab) && !tab.goToLineBarVisible && editor.statusInfo.line == 12
+            !tab.goToLineBarVisible && place(editor) == before && editor.selectedText.utf8.count == 15
+                && keyboard(in: editor, of: host),
+            "Return on the line the field opened with closes it and keeps the caret, the selection and the scroll position")
+
+        // Only Return or Go makes the jump. The keyboard leaving the field any other way (Tab,
+        // Move Focus to Next Area) closes it and puts everything back.
+        tab.goToLine(nil)
+        try keys("300", into: field)
+        try require(editor.statusInfo.line == 300, "fixture: line 300 is shown")
+        window.makeFirstResponder(editor)
+        spinUntil("Go to Line closes when the keyboard leaves it") { !tab.goToLineBarVisible }
+        window.contentView?.layoutSubtreeIfNeeded()
+        check(
+            !tab.goToLineBarVisible && place(editor) == before,
+            "the keyboard leaving Go to Line without Return closes it and restores the caret, selection and scroll position")
+        // A caret the person put in the text themselves since (a click) is theirs and stands.
+        tab.goToLine(nil)
+        try keys("300", into: field)
+        window.makeFirstResponder(editor)
+        try require(editor.setSelectionAnchor(40, caret: 40), "fixture: the click's caret")
+        spinUntil("Go to Line closes after a click in the text") { !tab.goToLineBarVisible }
+        check(
+            editor.selectionCaret == 40 && editor.selectionAnchor == 40,
+            "a caret placed in the text by the person stands: it is neither the previewed line nor put back")
+        try require(editor.setSelectionAnchor(10, caret: 25), "fixture: the selection again")
+        editor.scrollTo(documentLine: 50, subline: 0)
+        try require(place(editor) == before, "fixture: where the text was")
+
+        // Several selections, the main one, and a rectangular selection come back exactly.
+        let lineStart = { (line: Int) in (1..<line).map { "line \($0) of the find bar fixture\n".utf8.count }.reduce(0, +) }
+        let threeRanges = [(lineStart(60), lineStart(60) + 4), (lineStart(62) + 4, lineStart(62)), (lineStart(64), lineStart(64) + 4)]
+        try require(
+            editor.setSelectionRanges(threeRanges.map { TTSelectionRange(anchor: $0.0, caret: $0.1) }),
+            "fixture: three selections")
+        let three = place(editor)
+        tab.goToLine(nil)
+        try keys("300", into: field)
+        try require(editor.selectionCount == 1 && editor.statusInfo.line == 300, "fixture: line 300 is shown")
+        try keyDown("\u{1B}", code: 53, in: field)
+        window.contentView?.layoutSubtreeIfNeeded()
+        check(
+            editor.selectionCount == 3 && place(editor) == three,
+            "Escape puts back every selection, with the same one as the main selection")
+        // Rectangular Selection is the keyboard column mode: plain moves then grow the rectangle.
+        func command(_ name: String, times: Int = 1) -> Bool {
+            (0..<times).allSatisfy { _ in editor.executeCommand(TTEditorCommandIdentifier(rawValue: name)) }
+        }
+        try require(
+            editor.setSelectionRanges([TTSelectionRange(anchor: lineStart(60) + 2, caret: lineStart(60) + 2)])
+                && command("rectangularSelection") && command("lineDown", times: 3) && command("charRight", times: 4)
+                && editor.selectionIsRectangular && editor.selectionCount == 4 && editor.selectedText.count >= 16,
+            "fixture: a rectangular selection of four lines (\(editor.selectionIsRectangular), \(editor.selectionCount))")
+        let rectangle = place(editor)
+        tab.goToLine(nil)
+        try keys("300", into: field)
+        try require(!editor.selectionIsRectangular && editor.statusInfo.line == 300, "fixture: line 300 is shown")
+        try keyDown("\u{1B}", code: 53, in: field)
+        window.contentView?.layoutSubtreeIfNeeded()
+        check(
+            editor.selectionIsRectangular && editor.selectionCount == 4 && place(editor) == rectangle,
+            "and a rectangular selection is rectangular again, corner for corner")
+        _ = editor.executeCommand(TTEditorCommandIdentifier(rawValue: "streamSelection"))
+        _ = editor.setSelectionRanges([TTSelectionRange(anchor: 10, caret: 25)])
+
+        tab.goToLine(nil)
+        try keys("12:4", into: field)
+        try keyDown("\r", code: 36, in: field)
+        check(
+            !tab.goToLineBarVisible && editor.statusInfo.line == 12
                 && editor.statusInfo.column == 4 && editor.selectionAnchor == editor.selectionCaret
                 && keyboard(in: editor, of: host),
             "“12:4” and Return go to line 12, column 4, close the field and return to the text")
@@ -603,6 +760,40 @@ import EditorBridge
         other.updateChangeCount(.changeCleared)
         other.close()
         check(!otherTab.goToLineBarVisible, "closing the document closes its Go to Line")
+
+        // Folded text: showing a line never unfolds; Return does.
+        let code = "void f() {\n  if (a) {\n    b();\n    c();\n  }\n}\nint tail;\n"
+        let (folding, foldTab) = try open("fold.cpp", code, in: folder)
+        defer { folding.close() }
+        let folded = foldTab.primaryEditor, foldField = foldTab.goToLineBar.field
+        folded.setLanguage("cpp")
+        try require(
+            folded.goToLine(3) && folded.executeCommand(TTEditorCommandIdentifier(rawValue: "foldCurrent"))
+                && !folded.lineIsVisible(3) && !folded.lineIsVisible(4) && folded.lineIsVisible(2)
+                && folded.lineIsVisible(6), "fixture: lines 3 to 5 are folded under line 2")
+        try require(folded.setSelectionAnchor(code.utf8.count - 4, caret: code.utf8.count - 1), "fixture: a selection on line 7")
+        window.contentView?.layoutSubtreeIfNeeded()
+        let foldedPlace = place(folded)
+        foldTab.goToLine(nil)
+        try keys("4", into: foldField)
+        check(
+            !folded.lineIsVisible(4) && !folded.lineIsVisible(3) && folded.statusInfo.line == 2,
+            "typing a line that is inside folded text does not unfold it: the fold's own line is shown")
+        check(
+            foldTab.goToLineBar.message.stringValue == "Line 4 is in folded text. Press Return to unfold it and go there."
+                && !foldTab.goToLineBar.entryIsMarked, "and the field says why, in words")
+        try keyDown("\u{1B}", code: 53, in: foldField)
+        window.contentView?.layoutSubtreeIfNeeded()
+        check(
+            !folded.lineIsVisible(4) && !folded.lineIsVisible(3) && place(folded) == foldedPlace,
+            "Escape leaves the folding as it was, with the caret, selection and scroll position back")
+        foldTab.goToLine(nil)
+        try keys("4", into: foldField)
+        try keyDown("\r", code: 36, in: foldField)
+        check(
+            !foldTab.goToLineBarVisible && folded.lineIsVisible(4) && folded.statusInfo.line == 4
+                && folded.selectionAnchor == folded.selectionCaret,
+            "Return unfolds the line and goes there")
 
         // A Preview-alone tab shows its source first, and going back to Preview closes the field.
         let (notes, notesTab) = try open("notes.md", "# Notes\n\none\ntwo\nthree\n", in: folder)
