@@ -9,6 +9,21 @@ final class PreviewWebView: WKWebView {
     private nonisolated static let passedOn: Set<String> = ["undo:", "redo:"]
     private static let keptMenuItems: Set<String> = ["WKMenuItemIdentifierCopy", "WKMenuItemIdentifierCopyLink"]
 
+    // WebKit registers for file drops itself. Give those to the workspace before WebKit can
+    // treat one as navigation; keep all its usual drag handling for other pasteboard types.
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        WorkspaceFileDrop.containsFiles(sender) ? WorkspaceFileDrop.operation(sender, in: self) : super.draggingEntered(sender)
+    }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        WorkspaceFileDrop.containsFiles(sender) ? WorkspaceFileDrop.operation(sender, in: self) : super.draggingUpdated(sender)
+    }
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        WorkspaceFileDrop.containsFiles(sender) ? WorkspaceFileDrop.operation(sender, in: self) == .copy : super.prepareForDragOperation(sender)
+    }
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        WorkspaceFileDrop.containsFiles(sender) ? WorkspaceFileDrop.perform(sender, in: self) : super.performDragOperation(sender)
+    }
+
     nonisolated override func responds(to selector: Selector!) -> Bool {
         if let selector, Self.passedOn.contains(NSStringFromSelector(selector)) { return false }
         return super.responds(to: selector)

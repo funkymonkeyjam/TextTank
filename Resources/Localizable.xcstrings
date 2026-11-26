@@ -3279,13 +3279,35 @@
         }
       }
     },
-    "emptyGroup.prompt": {
+    "emptyGroup.start": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Open a document or create a new one."
+            "value": "Open a document"
+          }
+        }
+      }
+    },
+    "emptyGroup.dropPrompt": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Drop files here to open them."
+          }
+        }
+      }
+    },
+    "emptyGroup.shortcuts": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keyboard shortcuts"
           }
         }
       }

@@ -95,7 +95,7 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         window.collectionBehavior.insert(.fullScreenPrimary)
         window.contentMinSize = NSSize(width: 800, height: 500)
         window.routeCloseButtonToQuit()
-        let root = NSView()
+        let root = WorkspaceFileDropView()
         window.contentView = root
         sidebarSplit.frame = root.bounds
         sidebarSplit.autoresizingMask = [.width, .height]
