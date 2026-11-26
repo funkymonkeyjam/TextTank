@@ -1098,15 +1098,20 @@ import EditorBridge
         let dragInfo = unsafeBitCast(drag, to: NSDraggingInfo.self)
         drag.draggingLocation = surface.convert(NSPoint(x: surface.bounds.midX, y: surface.bounds.midY), to: nil)
         drag.draggingPasteboard.setString("/a/path/as/plain-text", forType: .string)
-        check(destination.draggingEntered(dragInfo).isEmpty && !destination.performDragOperation(dragInfo),
+        let textOperation = destination.draggingEntered(dragInfo)
+        let acceptedText = destination.performDragOperation(dragInfo)
+        check(textOperation.isEmpty && !acceptedText,
               "workspace leaves plain text to its normal drag destination")
         drag.draggingPasteboard.clearContents()
         _ = drag.draggingPasteboard.writeObjects([existing[0] as NSURL, existing[2] as NSURL])
         drag.draggingSourceOperationMask = .move
-        check(destination.draggingUpdated(dragInfo).isEmpty, "opening files never promises a Finder move")
+        let moveOperation = destination.draggingUpdated(dragInfo)
+        check(moveOperation.isEmpty, "opening files never promises a Finder move")
         drag.draggingSourceOperationMask = .copy
         host.activate(keptTab)
-        check(destination.draggingEntered(dragInfo) == .copy && destination.performDragOperation(dragInfo),
+        let fileOperation = destination.draggingEntered(dragInfo)
+        let acceptedFiles = destination.performDragOperation(dragInfo)
+        check(fileOperation == .copy && acceptedFiles,
               "dropping two file URLs into an inactive empty group is accepted")
         spinUntil("both dropped files opened through the document controller") {
             host.model.groups.first { $0.slot == .second }?.tabs.count == 2
@@ -1136,7 +1141,9 @@ import EditorBridge
                 receiver = candidate.superview
             }
             let target = try requireValue(receiver, "hit-tested drop target has a registered file type")
-            check(target.draggingEntered(dragInfo) == .copy && target.performDragOperation(dragInfo),
+            let operation = target.draggingEntered(dragInfo)
+            let accepted = target.performDragOperation(dragInfo)
+            check(operation == .copy && accepted,
                   "the native drop destination opens a file from " + NSStringFromClass(type(of: hit)))
             spinUntil("hit-tested target opens the dropped document") {
                 NSDocumentController.shared.document(for: url) != nil
