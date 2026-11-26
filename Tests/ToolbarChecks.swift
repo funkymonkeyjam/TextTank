@@ -72,7 +72,7 @@ import NativeSearch
         composition.noteActive(controller)
         let window = try requireValue(controller.hostWindow, "DT fixture: document window")
         let toolbar = try requireValue(window.toolbar, "DT fixture: native toolbar")
-        let core = ["TextTank.New", "TextTank.Open", "TextTank.Save", "TextTank.Find", "TextTank.Split"]
+        let core = ["TextTank.New", "TextTank.Open", "TextTank.Save", "TextTank.Find", "TextTank.Split", "TextTank.Wrap"]
         let native = nativeTree(window)
         for item in toolbar.items where item.itemIdentifier != .flexibleSpace {
             let exposed = native.first {
@@ -82,7 +82,7 @@ import NativeSearch
             check(exposed != nil, "DT-R5 actual native toolbar accessibility element has scoped action: \(item.label)")
         }
         let identifiers = toolbar.items.map { $0.itemIdentifier.rawValue }
-        check(core.allSatisfy(identifiers.contains), "DT-R1 default toolbar contains all five standard commands")
+        check(core.allSatisfy(identifiers.contains), "DT-R1 default toolbar contains all standard commands")
         check(
             toolbar.allowsUserCustomization && toolbar.displayMode == .iconAndLabel,
             "DT-R4/R5 toolbar is customizable and defaults to icons with labels")
@@ -136,6 +136,19 @@ import NativeSearch
         document.editor.readOnly = false
         let split = try requireValue(
             toolbar.items.first { $0.itemIdentifier.rawValue == "TextTank.Split" }, "DT fixture: Split")
+        let wrap = try requireValue(toolbar.items.first { $0.itemIdentifier == EditorToolbarCommand.wrap.identifier },
+                                    "fixture: Wrap Lines")
+        let startingWrap = controller.activeEditor.wrap
+        let revisionBeforeWrap = document.editor.revision
+        check(identifiers.firstIndex(of: "TextTank.Wrap") == identifiers.firstIndex(of: "TextTank.Split").map { $0 + 1 },
+              "Wrap Lines is immediately after Split Tab View")
+        for expected in [!startingWrap, startingWrap] {
+            check(NSApp.sendAction(EditorToolbarCommand.wrap.action, to: controller, from: wrap)
+                    && controller.activeEditor.wrap == expected && controller.validateToolbarItem(wrap)
+                    && wrap.menuFormRepresentation?.state == (expected ? .on : .off)
+                    && document.editor.revision == revisionBeforeWrap,
+                  "Wrap Lines toggles the view and overflow state without editing the document")
+        }
         let splitMenu = try requireValue(menuItem(split.action!, in: NSApp.mainMenu), "DT fixture: menu Split")
         let splitOverflow = try requireValue(split.menuFormRepresentation, "DT fixture: Clone overflow")
         let singleViewHelp = split.toolTip

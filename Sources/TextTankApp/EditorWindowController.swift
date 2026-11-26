@@ -959,6 +959,9 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     func validateToolbarItem(_ item: NSToolbarItem) -> Bool {
         let menu = NSMenuItem(title: item.label, action: item.action, keyEquivalent: "")
         let enabled = validateMenuItem(menu)
+        if item.itemIdentifier == EditorToolbarCommand.wrap.identifier {
+            EditorToolbarCommand.updateWrapItem(item, wrapped: menu.state == .on)
+        }
         if item.action == #selector(clone(_:)) {
             item.menuFormRepresentation?.state = menu.state
             let help =
@@ -2002,6 +2005,7 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     @objc func toggleWrap(_ sender: Any?) {
         guard !CompareCommandScope.blocksWorkspace else { return }
         activeEditor.wrap.toggle()
+        host.validateToolbar()
     }
     @objc func comment(_ sender: NSMenuItem) {
         guard !CompareCommandScope.blocksWorkspace else { return }

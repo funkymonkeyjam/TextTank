@@ -6,7 +6,7 @@ import AppKit
 /// The same selectors and responder-chain targets used by the menu bar.
 enum EditorToolbarCommand: String, CaseIterable {
     case new = "TextTank.New", open = "TextTank.Open", save = "TextTank.Save"
-    case find = "TextTank.Find", split = "TextTank.Split"
+    case find = "TextTank.Find", split = "TextTank.Split", wrap = "TextTank.Wrap"
     var identifier: NSToolbarItem.Identifier { .init(rawValue) }
     var title: String {
         switch self {
@@ -15,6 +15,7 @@ enum EditorToolbarCommand: String, CaseIterable {
         case .save: return Strings.text("toolbar.save", "Save")
         case .find: return Strings.text("toolbar.find", "Find…")
         case .split: return Strings.text("toolbar.split", "Split Tab View")
+        case .wrap: return Strings.text("toolbar.wrap", "Wrap Lines")
         }
     }
     var action: Selector {
@@ -24,6 +25,7 @@ enum EditorToolbarCommand: String, CaseIterable {
         case .save: return #selector(NSDocument.save(_:))
         case .find: return #selector(EditorWindowController.showFind(_:))
         case .split: return #selector(EditorWindowController.clone(_:))
+        case .wrap: return #selector(EditorWindowController.toggleWrap(_:))
         }
     }
     var symbol: String {
@@ -33,6 +35,7 @@ enum EditorToolbarCommand: String, CaseIterable {
         case .save: return "square.and.arrow.down"
         case .find: return "magnifyingglass"
         case .split: return "rectangle.split.2x1"
+        case .wrap: return "arrow.turn.down.left"
         }
     }
     var scope: String {
@@ -41,9 +44,19 @@ enum EditorToolbarCommand: String, CaseIterable {
         case .open: return Strings.text("toolbar.open.help", "Choose a document to open.")
         case .save: return Strings.text("toolbar.save.help", "Save the current document.")
         case .find: return Strings.text("toolbar.find.help", "Find text in the current document.")
+        case .wrap: return Strings.text("toolbar.wrap.help", "Wrap long lines to fit the active editor.")
         case .split:
             return Strings.text(
                 "toolbar.split.help", "Split this tab into two views of the same document, or return to one view.")
+        }
+    }
+    @MainActor static func updateWrapItem(_ item: NSToolbarItem, wrapped: Bool) {
+        item.menuFormRepresentation?.state = wrapped ? .on : .off
+        let help = wrapped ? Strings.text("toolbar.wrap.disable.help", "Turn off line wrapping in the active editor.") : wrap.scope
+        if item.toolTip != help {
+            item.toolTip = help
+            item.image = NSImage(systemSymbolName: wrapped ? "arrow.uturn.backward.circle.fill" : wrap.symbol,
+                                 accessibilityDescription: help)
         }
     }
     @MainActor func makeItem() -> NSToolbarItem {
@@ -124,6 +137,18 @@ enum EditorToolbarCommand: String, CaseIterable {
         let last = toolbar.items.lastIndex { EditorToolbarCommand(rawValue: $0.itemIdentifier.rawValue) != nil }
         toolbar.insertItem(
             withItemIdentifier: EditorLayoutToolbarItem.identifier, at: last.map { $0 + 1 } ?? toolbar.items.count)
+    }
+    /// Existing toolbars get Wrap Lines next to Split once. Preserve an arrangement that
+    /// omits Split, and respect moving or removing Wrap Lines after the first offer.
+    static func offerWrapItemOnce(in toolbar: NSToolbar, defaults: UserDefaults?) {
+        let key = "TextTank.ToolbarWrapItemOffered.v1"
+        guard let defaults, !defaults.bool(forKey: key) else { return }
+        defaults.set(true, forKey: key)
+        let identifiers = toolbar.items.map(\.itemIdentifier)
+        guard !identifiers.contains(EditorToolbarCommand.wrap.identifier),
+            let split = identifiers.firstIndex(of: EditorToolbarCommand.split.identifier)
+        else { return }
+        toolbar.insertItem(withItemIdentifier: EditorToolbarCommand.wrap.identifier, at: split + 1)
     }
     static func load() -> Arrangement? {
         guard let data = isolatedDefaults?.data(forKey: key), data.count <= SizePolicy.standard.toolbarArrangement,

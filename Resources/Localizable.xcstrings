@@ -1713,6 +1713,36 @@
         }
       }
     },
+    "toolbar.wrap": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wrap Lines"
+          }
+        }
+      }
+    },
+    "toolbar.wrap.help": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wrap long lines to fit the active editor."
+          }
+        }
+      }
+    },
+    "toolbar.wrap.disable.help": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turn off line wrapping in the active editor."
+          }
+        }
+      }
+    },
     "toolbar.split": {
       "localizations": {
         "en": {

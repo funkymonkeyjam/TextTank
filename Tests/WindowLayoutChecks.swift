@@ -182,7 +182,7 @@ import EditorBridge
         check(
             offeredAt != nil
                 && offeredAt
-                    == (toolbar.items.lastIndex { $0.itemIdentifier.rawValue == "TextTank.Split" }).map { $0 + 1 },
+                    == (toolbar.items.lastIndex { $0.itemIdentifier == EditorToolbarCommand.wrap.identifier }).map { $0 + 1 },
             "a toolbar arranged before DS-D12 gains Editor Layout once, after the standard commands")
         EditorToolbarPreferences.offerLayoutItemOnce(in: toolbar, defaults: defaults)
         check(

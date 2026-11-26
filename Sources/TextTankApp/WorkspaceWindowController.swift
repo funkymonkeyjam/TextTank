@@ -121,9 +121,9 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         toolbar.autosavesConfiguration = EditorToolbarPreferences.nativeAutosaveAllowed
         window.toolbar = toolbar
         restoreToolbarArrangement()
-        EditorToolbarPreferences.offerLayoutItemOnce(
-            in: toolbar,
-            defaults: EditorToolbarPreferences.nativeAutosaveAllowed ? RuntimeEnvironment.legacyDefaults : nil)
+        let toolbarDefaults = EditorToolbarPreferences.nativeAutosaveAllowed ? RuntimeEnvironment.legacyDefaults : nil
+        EditorToolbarPreferences.offerLayoutItemOnce(in: toolbar, defaults: toolbarDefaults)
+        EditorToolbarPreferences.offerWrapItemOnce(in: toolbar, defaults: toolbarDefaults)
         refreshAutomationToolbar()
         observations = [
             toolbar.observe(\.displayMode) { [weak self] _, _ in MainActor.assumeIsolated { self?.scheduleSave() } },
@@ -876,6 +876,9 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         // The layout can be chosen with no document open; its menu items validate themselves.
         if item.itemIdentifier == EditorLayoutToolbarItem.identifier { return groupCommands.commandsAvailable }
         guard let active else {
+            if item.itemIdentifier == EditorToolbarCommand.wrap.identifier {
+                EditorToolbarCommand.updateWrapItem(item, wrapped: false)
+            }
             if item.action == #selector(EditorWindowController.clone(_:)) {
                 item.menuFormRepresentation?.state = .off
                 if item.toolTip != EditorToolbarCommand.split.scope {
