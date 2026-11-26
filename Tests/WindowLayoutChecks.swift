@@ -1115,6 +1115,10 @@ import EditorBridge
         host.activate(keptTab)
         let fileOperation = destination.draggingEntered(dragInfo)
         let acceptedFiles = destination.performDragOperation(dragInfo)
+        check(NSDocumentController.shared.document(for: existing[0]) == nil,
+              "the target stays in place until the drag concludes")
+        destination.concludeDragOperation(dragInfo)
+        destination.draggingEnded(dragInfo)
         check(fileOperation == .copy && acceptedFiles,
               "dropping two file URLs into an inactive empty group is accepted")
         spinUntil("both dropped files opened through the document controller") {
@@ -1146,8 +1150,11 @@ import EditorBridge
             }
             let target = try requireValue(receiver, "hit-tested drop target has a registered file type")
             let operation = target.draggingEntered(dragInfo)
+            let prepared = target.prepareForDragOperation(dragInfo)
             let accepted = target.performDragOperation(dragInfo)
-            check(operation == .copy && accepted,
+            target.concludeDragOperation(dragInfo)
+            target.draggingEnded(dragInfo)
+            check(operation == .copy && prepared && accepted,
                   "the native drop destination opens a file from " + NSStringFromClass(type(of: hit)))
             spinUntil("hit-tested target opens the dropped document") {
                 NSDocumentController.shared.document(for: url) != nil
@@ -1169,8 +1176,8 @@ import EditorBridge
         }
         let previewView = try requireValue(sourceTab.previewCoordinator?.pane.webPresenter?.webView,
                                             "rendered preview underneath drop point")
-        check(previewView.registeredDraggedTypes.isEmpty,
-              "the read-only web view leaves incoming file drag tracking to the workspace")
+        check(previewView.registeredDraggedTypes == [.fileURL],
+              "the read-only preview accepts only workspace file drops as an incoming destination")
         try drop(existing[4], onto: previewView)
         check(sourceDoc.editor.text == "# Source\n" && !sourceDoc.isDocumentEdited,
               "drops on the source and preview leave the original document intact")
