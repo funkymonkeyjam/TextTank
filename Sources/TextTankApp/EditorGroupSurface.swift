@@ -1,6 +1,14 @@
 import AppKit
 import TextTankCore
 
+/// A static illustration has no mouse or drag interaction of its own.
+private final class StartDocumentSymbol: NSImageView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func registerForDraggedTypes(_ newTypes: [NSPasteboard.PasteboardType]) {
+        super.unregisterDraggedTypes()
+    }
+}
+
 /// Native group chrome and split geometry (DS-14,41-43,70-74). No document ownership.
 ///
 /// The surface is an ancestor of its tab strip, of the mounted tab's status row and of the
@@ -17,7 +25,7 @@ final class EditorGroupSurface: NSView {
     private let heading = NSButton()
     /// The single empty workspace gets a centered start area; split groups use a compact layout.
     private let placeholder = NSView()
-    private let startIcon = NSImageView()
+    private let startIcon = StartDocumentSymbol()
     private let startTitle = NSTextField(labelWithString: Strings.text("emptyGroup.start", "Open a document"))
     private let shortcutDisclosure = NSButton()
     private let emptyPrompt = NSTextField(

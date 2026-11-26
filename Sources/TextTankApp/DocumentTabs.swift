@@ -26,15 +26,18 @@ import AppKit
         // Capture the group under the pointer; the sidebar and other chrome use the focused group.
         let position = drag.draggingLocation
         let group = host.groupSurfaces.values.first { $0.bounds.contains($0.convert(position, from: nil)) }?.slot
-        // Panels (including the encoding chooser) must open after native drag tracking ends.
-        Task { @MainActor in
-            if let group { host.focusGroup(group) }
-            for url in urls {
-                do { _ = try await NSDocumentController.shared.openDocument(withContentsOf: url, display: true) }
-                catch {
-                    let failure = error as NSError
-                    if failure.domain != NSCocoaErrorDomain || failure.code != NSUserCancelledError {
-                        NSApp.presentError(error)
+        // Wait for native tracking to leave its event-tracking mode before opening a window:
+        // replacing the tab underneath a live Finder or WebKit drag can discard its destination.
+        RunLoop.main.perform(inModes: [.default]) {
+            Task { @MainActor in
+                if let group { host.focusGroup(group) }
+                for url in urls {
+                    do { _ = try await NSDocumentController.shared.openDocument(withContentsOf: url, display: true) }
+                    catch {
+                        let failure = error as NSError
+                        if failure.domain != NSCocoaErrorDomain || failure.code != NSUserCancelledError {
+                            NSApp.presentError(error)
+                        }
                     }
                 }
             }

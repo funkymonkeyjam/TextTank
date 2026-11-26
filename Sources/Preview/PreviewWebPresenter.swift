@@ -9,19 +9,12 @@ final class PreviewWebView: WKWebView {
     private nonisolated static let passedOn: Set<String> = ["undo:", "redo:"]
     private static let keptMenuItems: Set<String> = ["WKMenuItemIdentifierCopy", "WKMenuItemIdentifierCopyLink"]
 
-    // WebKit registers for file drops itself. Give those to the workspace before WebKit can
-    // treat one as navigation; keep all its usual drag handling for other pasteboard types.
-    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        WorkspaceFileDrop.containsFiles(sender) ? WorkspaceFileDrop.operation(sender, in: self) : super.draggingEntered(sender)
-    }
-    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-        WorkspaceFileDrop.containsFiles(sender) ? WorkspaceFileDrop.operation(sender, in: self) : super.draggingUpdated(sender)
-    }
-    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        WorkspaceFileDrop.containsFiles(sender) ? WorkspaceFileDrop.operation(sender, in: self) == .copy : super.prepareForDragOperation(sender)
-    }
-    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        WorkspaceFileDrop.containsFiles(sender) ? WorkspaceFileDrop.perform(sender, in: self) : super.performDragOperation(sender)
+    // This is a read-only renderer. Registering it as a destination lets WebKit consume Finder
+    // drops and starts WebKit drag tracking on a view that can disappear as its tab changes.
+    // Leave incoming file drags to the workspace; selecting, copying and dragging text out
+    // of the page do not use destination registration.
+    override func registerForDraggedTypes(_ newTypes: [NSPasteboard.PasteboardType]) {
+        super.unregisterDraggedTypes()
     }
 
     nonisolated override func responds(to selector: Selector!) -> Bool {
