@@ -853,11 +853,14 @@ import EditorBridge
             _ = host.setEditorLayout(.single)
             window.setContentSize(originalSize)
         }
-        // Exercise the single-group layout with a fresh empty surface, without closing the other
+        // A separate empty workspace exercises the native key loop without closing the other
         // suites' documents or borrowing any recent files from the person using this Mac.
-        let start = EditorGroupSurface(slot: .first, host: host)
-        start.frame = NSRect(x: 0, y: 0, width: 1080, height: 720)
-        start.mount(nil)
+        let startHost = WorkspaceWindowController()
+        let startWindow = try requireValue(startHost.window, "empty workspace window")
+        let start = try requireValue(startHost.groupSurfaces[.first], "empty workspace editor group")
+        startWindow.setContentSize(NSSize(width: 1080, height: 720))
+        startWindow.contentView?.layoutSubtreeIfNeeded()
+        start.refreshHint()
         start.layoutSubtreeIfNeeded()
         let page = try requireValue(start.emptyGroupArea, "single empty workspace start area")
         let title = try requireValue(
@@ -871,15 +874,20 @@ import EditorBridge
             "shortcut disclosure")
         check(
             !title.isHidden && title.stringValue == "Open a document"
-                && title.font!.pointSize > dropPrompt.font!.pointSize
+                && (title.font?.pointSize ?? 0) > (dropPrompt.font?.pointSize ?? 0)
                 && dropPrompt.stringValue == "Drop files here to open them."
                 && abs(page.frame.midX - start.content.bounds.midX) <= 1 && page.bounds.width < start.bounds.width / 2,
             "the large empty workspace centers a readable column with a heading and a Finder drop invitation")
         check(!disclosure.isHidden && start.hintRows.allSatisfy(\.isHidden), "shortcut hints start collapsed")
-        disclosure.performClick(nil)
-        check(start.hintRows.allSatisfy { !$0.isHidden }, "the disclosure reveals all four live shortcuts")
-        disclosure.performClick(nil)
-        check(start.hintRows.allSatisfy(\.isHidden), "closing the disclosure returns to the quiet start layout")
+        let firstControl = try requireValue(start.emptyGroupFocusView, "first empty workspace control")
+        check(startWindow.makeFirstResponder(firstControl), "New takes the keyboard in a fresh empty workspace")
+        for _ in 0..<2 { start.keyDown(with: try key(48, "\t", in: startWindow)) }
+        check(startWindow.firstResponder === disclosure, "Tab moves through New and Open to Keyboard shortcuts")
+        start.keyDown(with: try key(36, "\r", in: startWindow))
+        check(start.hintRows.allSatisfy { !$0.isHidden }, "Return reveals all four live shortcuts")
+        start.keyDown(with: try key(49, " ", in: startWindow))
+        check(start.hintRows.allSatisfy(\.isHidden) && startWindow.firstResponder === disclosure,
+              "Space collapses the hints and keeps keyboard focus on the disclosure")
 
         let (_, keptTab) = try open("kept.txt", "kept\n", in: folder)
         host.activate(keptTab)
@@ -1101,6 +1109,51 @@ import EditorBridge
             check(doc.editor.text == names[index] + "\n", "native file open preserved its text")
             doc.close()
         }
+
+        // Resolve the destination from the window's actual view tree at the drag location,
+        // including nested WebKit and Scintilla views, before invoking its AppKit drag callbacks.
+        func drop(_ url: URL, onto view: NSView) throws {
+            window.contentView?.layoutSubtreeIfNeeded()
+            let point = NSPoint(x: view.bounds.midX, y: view.bounds.midY)
+            drag.draggingLocation = view.convert(point, to: nil)
+            drag.draggingPasteboard.clearContents()
+            _ = drag.draggingPasteboard.writeObjects([url as NSURL])
+            let hit = try requireValue(destination.hitTest(view.convert(point, to: destination.superview)),
+                                       "drop point hits the window content")
+            check(hit.isDescendant(of: view), "drop point hits the intended view or its native child")
+            var receiver: NSView? = hit
+            while let candidate = receiver,
+                drag.draggingPasteboard.availableType(from: candidate.registeredDraggedTypes) == nil
+            {
+                receiver = candidate.superview
+            }
+            let target = try requireValue(receiver, "hit-tested drop target has a registered file type")
+            check(target.draggingEntered(dragInfo) == .copy && target.performDragOperation(dragInfo),
+                  "the native drop destination opens a file from " + NSStringFromClass(type(of: hit)))
+            spinUntil("hit-tested target opens the dropped document") {
+                NSDocumentController.shared.document(for: url) != nil
+            }
+            let opened = try requireValue(NSDocumentController.shared.document(for: url) as? TextDocument,
+                                          "opened dropped document")
+            check(opened.editor.checkedUTF8Data == (try Data(contentsOf: url)),
+                  "the drop opens a separate document with the original file bytes")
+            opened.close()
+        }
+        let (sourceDoc, sourceTab) = try open("drop-source.md", "# Source\n", in: folder)
+        host.activate(sourceTab)
+        _ = sourceTab.setViewMode(.source)
+        try drop(existing[3], onto: sourceTab.activeEditor)
+        host.activate(sourceTab)
+        check(sourceTab.setViewMode(.preview), "fixture: Markdown is in Preview")
+        spinUntil("the read-only web page rendered") {
+            sourceTab.previewCoordinator?.pane.webPresenter?.isSettled == true
+        }
+        let previewView = try requireValue(sourceTab.previewCoordinator?.pane.webPresenter?.webView,
+                                            "rendered preview underneath drop point")
+        try drop(existing[4], onto: previewView)
+        check(sourceDoc.editor.text == "# Source\n" && !sourceDoc.isDocumentEdited,
+              "drops on the source and preview leave the original document intact")
+        sourceDoc.close()
 
         // A grid set up in a wide window and then shrunk keeps its columns in line and no group
         // below its minimum (the two rows used to be left at different divider positions).
