@@ -78,10 +78,11 @@ package enum MarkdownRenderer {
                 blocks.reserveCapacity(parsed.lineRanges.count)
                 for range in parsed.lineRanges {
                     try poll.checkpoint()
-                    blocks.append(
-                        PreviewScrollMap.Block(
+                    var block = PreviewScrollMap.Block(
                             firstLine: range.lowerBound, lineCount: range.count,
-                            fingerprint: PreviewScrollMap.fingerprint(of: lines[range])))
+                            fingerprint: PreviewScrollMap.fingerprint(of: lines[range]))
+                    block.sourceBytes = lines[range.lowerBound].startIndex..<lines[range.upperBound - 1].endIndex
+                    blocks.append(block)
                 }
                 map = PreviewScrollMap(blocks: blocks)
             }

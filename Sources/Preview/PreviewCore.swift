@@ -366,6 +366,7 @@ package struct PreviewScrollMap: Sendable, Equatable {
         package var lineCount: Int
         /// A hash of the block's source lines. Two blocks with the same text have the same
         /// value, in this map and in the map of a later rendering.
+        package var sourceBytes: Range<Int>? = nil
         package var fingerprint: UInt64
 
         package init(firstLine: Int, lineCount: Int, fingerprint: UInt64) {

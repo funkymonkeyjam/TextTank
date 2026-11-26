@@ -29,6 +29,7 @@ struct PreviewPage: Sendable, Equatable {
     /// For rendered Markdown: the source lines of each top-level block, which is each child of
     /// the page's body. Nil for HTML and SVG, which are not followed (docs/preview-model.md).
     var scrollMap: PreviewScrollMap?
+    var selectionSource: Data?
 }
 
 /// What a preview pane shows after one render.
@@ -163,7 +164,7 @@ enum PreviewRenderer {
             }
             let page = StaticHTMLPolicy.wrapFragment(fragment, title: request.title, stylesheet: request.stylesheet)
             return .page(
-                PreviewPage(pagePath: pagePath(), html: Data(page.utf8), report: report, scrollMap: scrollMap))
+                PreviewPage(pagePath: pagePath(), html: Data(page.utf8), report: report, scrollMap: scrollMap, selectionSource: request.source))
         }
     }
 
@@ -172,7 +173,7 @@ enum PreviewRenderer {
         case .cancelled: return nil
         case .limited(let limit): return .message(limit.message)
         case .prepared(let prepared):
-            return .page(PreviewPage(pagePath: pagePath(), html: Data(prepared.html.utf8), report: prepared.report))
+            return .page(PreviewPage(pagePath: pagePath(), html: Data(prepared.html.utf8), report: prepared.report, selectionSource: request.source))
         }
     }
 
@@ -212,5 +213,97 @@ enum PreviewRenderer {
             if partial.root == nil { return .message(limit.message) }
             return .tree(partial, error: nil, limit: limit)
         }
+    }
+}
+
+/// Source locations for WebKit text do not survive Markdown rendering or HTML parsing. Check
+/// candidate byte boundaries by rendering marked source offscreen. Only a mark at the original
+/// DOM node and UTF-16 offset can move the editor. The displayed page is never modified.
+struct PreviewSelectionProbe: Sendable {
+    struct Endpoint: Codable, Sendable {
+        var block: Int
+        var before: String
+        var after: String
+    }
+
+    var html: String
+    var positions: [Int]
+
+    static func make(_ endpoint: Endpoint, page: PreviewPage, marker: String) -> Self? {
+        guard let source = page.selectionSource else { return nil }
+        let scope: Range<Int>
+        if let blocks = page.scrollMap?.blocks {
+            guard blocks.indices.contains(endpoint.block), let bytes = blocks[endpoint.block].sourceBytes
+            else { return nil }
+            scope = bytes
+        } else {
+            scope = source.startIndex..<source.endIndex
+        }
+        // Markdown bounds are per block. Never give WebKit a large synchronous second parse.
+        guard scope.count <= 512 * 1024, !Task.isCancelled else { return nil }
+        let left = Data(endpoint.before.utf8), right = Data(endpoint.after.utf8)
+        var candidates = Set<Int>()
+        func find(_ needle: Data, offset: Int) {
+            guard !needle.isEmpty else { return }
+            var remaining = scope, found: [Int] = []
+            while let hit = source.range(of: needle, in: remaining) {
+                found.append(hit.lowerBound + offset)
+                guard found.count <= 128 else { return }
+                remaining = hit.lowerBound + 1..<scope.upperBound
+            }
+            candidates.formUnion(found)
+        }
+        // Keep input on scalar boundaries when a nearby entity, escape or CRLF makes the
+        // longer context differ from the rendered text.
+        for n in [1, 8] {
+            let suffix = String(String.UnicodeScalarView(endpoint.before.unicodeScalars.suffix(n)))
+            let prefix = String(String.UnicodeScalarView(endpoint.after.unicodeScalars.prefix(n)))
+            find(Data(suffix.utf8), offset: suffix.utf8.count)
+            find(Data(prefix.utf8), offset: 0)
+        }
+        find(left + right, offset: left.count)
+        find(left, offset: left.count)
+        find(right, offset: 0)
+        // A visible character can stand for a whole reference (&amp; or &#x1f642;).
+        // The marker proof below decides whether either end actually produced the selection.
+        if let ampersand = source[scope].firstIndex(of: 38) {
+            var references: [Int] = []
+            var i = ampersand
+            while i < scope.upperBound {
+                if source[i] == 38 {
+                    var j = i + 1
+                    while j < min(scope.upperBound, i + 34) {
+                        let b = source[j]
+                        if b == 59 {
+                            // A mark inside an entity would turn it into different visible text.
+                            for position in (i + 1)...j { candidates.remove(position) }
+                            references.append(contentsOf: [i, j + 1])
+                            break
+                        }
+                        guard (48...57).contains(b) || (65...90).contains(b) || (97...122).contains(b) || b == 35 else { break }
+                        j += 1
+                    }
+                    if references.count > 128 { references.removeLast(2) }
+                }
+                i += 1
+            }
+            candidates.formUnion(references)
+        }
+        guard !candidates.isEmpty, candidates.count <= 512, !Task.isCancelled else { return nil }
+        let positions = page.scrollMap == nil
+            ? StaticHTMLPolicy.textBoundaries(candidates.sorted(), in: source) : candidates.sorted()
+        guard !positions.isEmpty else { return nil }
+        var marked = Data(), start = scope.lowerBound
+        for (index, position) in positions.enumerated() {
+            marked.append(source[start..<position])
+            marked.append(contentsOf: (marker + String(index) + "Z").utf8)
+            start = position
+        }
+        marked.append(source[start..<scope.upperBound])
+        if page.scrollMap != nil {
+            guard case .rendered(let fragment) = MarkdownRenderer.render(marked) else { return nil }
+            return Self(html: fragment, positions: positions)
+        }
+        return Self(html: String(decoding: marked, as: UTF8.self), positions: positions)
     }
 }

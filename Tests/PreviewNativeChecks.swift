@@ -379,6 +379,7 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
 
         Checks.section("eligibility and commands") { try eligibility(root: root, app: app, host: host) }
         Checks.section("mode round trip") { try modeRoundTrip(root: root, app: app) }
+        Checks.section("preview selection maps to source") { try previewSelection(root: root, listener: listener) }
         Checks.section("unsaved Markdown") { try unsavedMarkdown(root: root, listener: listener) }
         Checks.section("static HTML") { try staticHTML(root: root, listener: listener, opened: opened) }
         Checks.section("scheme handler responses") { try schemeHandlerResponses(root: root) }
@@ -1203,6 +1204,58 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
 
     // MARK: Delimited text
 
+    private static func previewSelection(root: URL, listener: LoopbackListener) throws {
+        let folder = root.appendingPathComponent("preview-selection")
+        func checkPage(_ name: String, text: String, selector: String, start: Int, end: Int,
+                       expectedPrefix: String, expected: String) throws {
+            let (document, tab) = try open(name, text, in: folder)
+            defer { document.close() }
+            let editor = tab.primaryEditor, revision = editor.revision, undo = editor.historyName(redo: false)
+            _ = tab.setViewMode(.preview)
+            waitCurrent(tab, "selection fixture " + name)
+            let web = try requireValue(tab.previewCoordinator?.pane.webPresenter?.webView, "selection web view")
+            tab.hostWindow?.makeFirstResponder(web)
+            let focus = tab.hostWindow?.firstResponder
+            _ = script(web, """
+                (() => { const node = document.querySelector('\(selector)').firstChild, r = document.createRange();
+                  r.setStart(node,\(start)); r.setEnd(node,\(end));
+                  const s = getSelection(); s.removeAllRanges(); s.addRange(r); return s.toString(); })()
+                """)
+            let from = expectedPrefix.utf8.count, to = from + expected.utf8.count
+            wait("preview selection reaches its exact source bytes: " + name, timeout: 5) {
+                editor.selectionStart == from && editor.selectionEnd == to
+            }
+            check(tab.viewMode == .both && tab.hostWindow?.firstResponder === focus,
+                  "revealing Source alongside Preview preserves its responder: " + name)
+            check(editor.utf8Data == Data(text.utf8) && editor.revision == revision
+                    && editor.historyName(redo: false) == undo && !editor.modified,
+                  "a preview selection changes only the view: " + name)
+        }
+        let prefix = "same\r\n\r\n🦊 and **same** then **"
+        try checkPage("repeat.md", text: prefix + "same**\r\n", selector: "p:nth-of-type(2) strong:last-child",
+                      start: 1, end: 3, expectedPrefix: prefix + "s", expected: "am")
+        let html = "<html><head><title>copy</title></head><body><p>🌲 &amp; x</p><p title='🌲 &amp; x'>"
+        try checkPage("entity.html", text: html + "🌲 &amp; x</p><img src='http://127.0.0.1:\(listener.port)/proof'></body></html>",
+                      selector: "p:nth-of-type(2)", start: 0, end: 4,
+                      expectedPrefix: html, expected: "🌲 &amp;")
+
+        let (document, tab) = try open("stale.md", "old text\n", in: folder)
+        defer { document.close() }
+        tab.setViewMode(.both)
+        waitCurrent(tab, "stale selection fixture")
+        let coordinator = try requireValue(tab.previewCoordinator, "selection coordinator")
+        coordinator.debounceInterval = { _ in 60 }
+        let editor = tab.primaryEditor
+        _ = editor.setSelectionAnchor(0, caret: 0)
+        _ = editor.replaceSelection("added ")
+        _ = script(coordinator.pane.webPresenter?.webView, """
+            getSelection().selectAllChildren(document.body.querySelector('p')); true
+            """)
+        settle(0.3)
+        check(editor.selectionStart == 6 && editor.selectionEnd == 6,
+              "a selection from the page before the edit leaves the source caret alone")
+    }
+
     private static func delimited(root: URL) throws {
         let folder = root.appendingPathComponent("tables")
         let csv =
@@ -1252,7 +1305,12 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
                 == "Row 7 opens a quoted value that is never closed. The rest of the document is shown as one value.",
             "the message row reports the quote that is never closed: \(message)")
         picture(tab, "csv")
+        check(tab.keyboardFocusView === presenter.tableView, "the table takes the keyboard in Preview")
         presenter.tableView.selectRowIndexes([1, 2], byExtendingSelection: false)
+        let start = "name,value,note\n".utf8.count
+        let end = start + "\"a,b\",00123,=SUM(A1)\n\"line1\nline2\",+1,1e5".utf8.count
+        check(tab.viewMode == .both && tab.primaryEditor.selectionStart == start && tab.primaryEditor.selectionEnd == end,
+              "selected CSV rows map to the original quoted and multiline records")
         check(
             presenter.selectedRowsText() == "a,b\t00123\t=SUM(A1)\n\"line1\nline2\"\t+1\t1e5",
             "Copy gives the selected rows as tab-separated text")
@@ -1261,7 +1319,6 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
                 && presenter.tableView.accessibilityLabel() == "Preview of data.csv"
                 && presenter.tableView.accessibilityRole() == .table,
             "the table answers Copy, has the table role and is labelled after its document")
-        check(tab.keyboardFocusView === presenter.tableView, "the table takes the keyboard in Preview")
         tab.setViewMode(.both)
         tab.hostWindow?.makeFirstResponder(presenter.tableView)
         tab.hostWindow?.selectKeyView(following: presenter.tableView)
@@ -1346,6 +1403,12 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
                 item: outline.item(atRow: deepRow)!, mouseLocation: .zero) == "\"x\\u00e9\"",
             "the tooltip is the literal as written")
         outline.selectRowIndexes([deepRow], byExtendingSelection: false)
+        let literal = Data(#""deep": "x\u00e9""#.utf8)
+        let expected = try requireValue(Data(text.utf8).range(of: literal), "source spelling of JSON member")
+        check(tab.viewMode == .both && tab.primaryEditor.selectionStart == expected.lowerBound
+                && tab.primaryEditor.selectionEnd == expected.upperBound,
+              "the selected JSON member shows its escaped original bytes")
+        tab.setViewMode(.preview)
         check(
             outline.accessibilityRole() == .outline && outline.accessibilityLabel() == "Preview of data.json",
             "the tree has the outline role and is labelled after its document")

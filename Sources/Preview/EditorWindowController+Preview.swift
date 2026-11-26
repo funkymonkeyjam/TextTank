@@ -212,6 +212,18 @@ extension EditorWindowController {
 
     private func makePreviewCoordinator() -> PreviewCoordinator {
         let pane = PreviewPane(frame: viewContainer.bounds)
+        pane.onSelection = { [weak self] ranges in
+            guard let self, self.isPresented, self.previewCoordinator?.isCurrent == true,
+                !self.statusClosed, !self.isRetired, !ranges.isEmpty
+            else { return }
+            let editor = self.activeEditor
+            // Native byte boundaries are validated together before any selection is changed.
+            guard editor.setSelectionRanges(ranges.map { TTSelectionRange(anchor: $0.lowerBound, caret: $0.upperBound) })
+            else { return }
+            if self.viewMode == .preview { _ = self.setViewMode(.both, movingFocus: false) }
+            editor.scrollCaretIntoView()
+            self.refreshStatusDetails()
+        }
         pane.onGoToError = { [weak self] error in self?.goToPreviewError(error) }
         pane.onDocumentCommand = { [weak self] command in try? self?.perform(command: command) }
         let tab = PreviewCoordinator.Tab(

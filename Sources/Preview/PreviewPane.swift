@@ -26,6 +26,8 @@ import TextTankCore
     private(set) var tablePresenter: PreviewTablePresenter?
     private(set) var outlinePresenter: PreviewOutlinePresenter?
 
+    var onSelection: (([Range<Int>]) -> Void)?
+
     /// Selects the place of a JSON error in the source.
     var onGoToError: ((JSONSyntaxError) -> Void)?
     /// Undo or Redo was chosen while the preview had the keyboard focus; it applies to the document.
@@ -210,6 +212,7 @@ import TextTankCore
 
     private func makeWebPresenter() -> PreviewWebPresenter {
         let presenter = PreviewWebPresenter()
+        presenter.onSelection = { [weak self] ranges in self?.onSelection?(ranges) }
         presenter.setAccessibilityName(accessibilityName)
         presenter.onSummaryChanged = { [weak self, weak presenter] summary in
             guard let self, let presenter, presenter.view.isHidden == false else { return }
@@ -232,6 +235,7 @@ import TextTankCore
 
     private func makeTablePresenter() -> PreviewTablePresenter {
         let presenter = PreviewTablePresenter()
+        presenter.onSelection = { [weak self] ranges in self?.onSelection?(ranges) }
         presenter.tableView.setAccessibilityLabel(accessibilityName)
         host(presenter.scrollView)
         tablePresenter = presenter
@@ -240,6 +244,7 @@ import TextTankCore
 
     private func makeOutlinePresenter() -> PreviewOutlinePresenter {
         let presenter = PreviewOutlinePresenter()
+        presenter.onSelection = { [weak self] ranges in self?.onSelection?(ranges) }
         presenter.outlineView.setAccessibilityLabel(accessibilityName)
         host(presenter.scrollView)
         outlinePresenter = presenter
@@ -298,6 +303,7 @@ import TextTankCore
         tablePresenter = nil
         outlinePresenter = nil
         contentHost.subviews.filter { $0 !== explanationLabel }.forEach { $0.removeFromSuperview() }
+        onSelection = nil
         onGoToError = nil
         onDocumentCommand = nil
         onContentLost = nil
