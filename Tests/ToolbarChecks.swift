@@ -149,6 +149,17 @@ import NativeSearch
                     && document.editor.revision == revisionBeforeWrap,
                   "Wrap Lines toggles the view and overflow state without editing the document")
         }
+        let wrapIndex = try requireValue(toolbar.items.firstIndex { $0.itemIdentifier == wrap.itemIdentifier },
+                                         "fixture: installed wrap item")
+        toolbar.removeItem(at: wrapIndex)
+        EditorToolbarPreferences.offerWrapItemOnce(in: toolbar, defaults: preferences)
+        check(toolbar.items[wrapIndex].itemIdentifier == wrap.itemIdentifier,
+              "an existing arrangement gains Wrap Lines immediately after Split")
+        toolbar.removeItem(at: wrapIndex)
+        EditorToolbarPreferences.offerWrapItemOnce(in: toolbar, defaults: preferences)
+        check(!toolbar.items.contains { $0.itemIdentifier == wrap.itemIdentifier },
+              "a user who removes Wrap Lines keeps that choice")
+        toolbar.insertItem(withItemIdentifier: wrap.itemIdentifier, at: wrapIndex)
         let splitMenu = try requireValue(menuItem(split.action!, in: NSApp.mainMenu), "DT fixture: menu Split")
         let splitOverflow = try requireValue(split.menuFormRepresentation, "DT fixture: Clone overflow")
         let singleViewHelp = split.toolTip
