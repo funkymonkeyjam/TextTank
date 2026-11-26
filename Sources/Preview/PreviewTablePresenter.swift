@@ -24,6 +24,19 @@ final class PreviewTableView: NSTableView {
     let tableView = PreviewTableView()
     private(set) var table: DelimitedTable?
 
+    var onSelection: (([Range<Int>]) -> Void)?
+    private var restoring = false
+
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        guard !restoring, !scrollView.isHidden, let table else { return }
+        let ranges = tableView.selectedRowIndexes.rangeView.compactMap { rows -> Range<Int>? in
+            guard rows.lowerBound >= 0, rows.upperBound <= table.rowCount else { return nil }
+            return table.rowSourceRanges[rows.lowerBound]
+                .lowerBound..<table.rowSourceRanges[rows.upperBound - 1].upperBound
+        }
+        if !ranges.isEmpty { onSelection?(ranges) }
+    }
+
     /// The longest text put in a cell or a tooltip. The table itself keeps the whole value.
     static let displayLimit = 1_000
     /// Shown in place of a line break inside a cell, which is drawn on one line.
@@ -49,6 +62,8 @@ final class PreviewTableView: NSTableView {
 
     /// Replaces the table. The selection and scroll position are kept where the rows still exist.
     func show(_ newTable: DelimitedTable) {
+        restoring = true
+        defer { restoring = false }
         let selection = tableView.selectedRowIndexes
         let columnsChanged = table?.columnCount != newTable.columnCount || tableView.tableColumns.isEmpty
         table = newTable

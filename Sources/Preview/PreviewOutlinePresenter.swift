@@ -75,6 +75,16 @@ private struct JSONNodeMatcher {
     let scrollView = NSScrollView()
     let outlineView = NSOutlineView()
     private(set) var tree: JSONTree?
+    var onSelection: (([Range<Int>]) -> Void)?
+    private var restoring = false
+
+    func outlineViewSelectionDidChange(_ notification: Notification) {
+        guard !restoring, !scrollView.isHidden, let node = selectedNode, let tree else { return }
+        let value = tree.nodes[node]
+        let start = value.keyRange?.lowerBound ?? value.byteRange.lowerBound
+        onSelection?([start..<value.byteRange.upperBound])
+    }
+
     /// The row objects made so far, by node. Most stay nil: a row exists once its parent is opened.
     private var items: [JSONOutlineItem?] = []
     /// The nodes whose rows are open, kept in step by the outline view's notifications. A new
@@ -135,6 +145,8 @@ private struct JSONNodeMatcher {
     /// which is what text that is not JSON from its first byte gives, has no row to keep open
     /// or closed, so the tree after it starts open too.
     func show(_ newTree: JSONTree) {
+        restoring = true
+        defer { restoring = false }
         let oldTree = tree
         let open = oldTree.map(openRowNodes(in:)) ?? []
         let selected = selectedNode

@@ -20,6 +20,14 @@ Every entry point is a pure function of its input. Each one
 Timings printed by that suite are from the unoptimized Debug build and are not a speed claim
 (DS-101).
 
+## Selecting source from a preview
+
+Selecting text in a current Markdown or HTML preview highlights its source bytes in the tab's active editor pane. Preview mode opens Both and keeps the keyboard in the preview. Selecting CSV or TSV rows highlights complete source records, including quoted embedded line breaks. Selecting a JSON tree row highlights its original member or value. SVG is displayed as one image and has no selectable page text.
+
+WebKit reports selection boundaries from an application script isolated from page content. The mapper tests candidate UTF-8 boundaries against the original rendered text node and its DOM path, including repeated words and character references. The comparison uses an inert detached template document. It never inserts probes into the displayed page. Markdown uses the rendered block's original source range and reference definitions. Nonempty selections are checked after a pointer drag ends or a keyboard selection settles. Clearing the selection leaves the source caret in place.
+
+Mapping is bounded to 512 KiB per Markdown endpoint block (source and rendered probe), or 512 KiB of HTML source. For highly repetitive text, the mapper bounds the number of candidates tested per boundary. If either boundary cannot be verified, the tab reports this in its status bar and preserves its source selection. Events from superseded renders or hidden tabs are ignored.
+
 ## Which documents have a preview
 
 `PreviewKind.kind(languageID:fileExtension:)` decides, in this order:

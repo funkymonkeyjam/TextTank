@@ -24,6 +24,18 @@ final class PreviewWebView: WKWebView {
     }
 }
 
+/// AppKit negotiates an incoming Finder drag with this sibling before entering WebKit.
+/// Ordinary events, accessibility and outbound drags stay with the native web content.
+final class PreviewFileDropView: WorkspaceFileDropView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let workspace = window as? DocumentTabWindow, !workspace.dispatchingPointerEvent,
+            NSEvent.pressedMouseButtons & 1 != 0,
+            NSPasteboard(name: .drag).availableType(from: [.fileURL]) != nil
+        else { return nil }
+        return super.hitTest(point)
+    }
+}
+
 /// Receives a clicked link from the application's own script in the preview page. The web
 /// view's content controller keeps this object, so it refers to the presenter weakly.
 private final class PreviewLinkReceiver: NSObject, WKScriptMessageHandler {
@@ -46,6 +58,13 @@ private final class PreviewScrollReceiver: NSObject, WKScriptMessageHandler {
     }
 }
 
+private final class PreviewSelectionReceiver: NSObject, WKScriptMessageHandler {
+    weak var presenter: PreviewWebPresenter?
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        presenter?.receivedSelection(message)
+    }
+}
+
 /// Shows rendered Markdown, static HTML and SVG in one web view per tab.
 ///
 /// The web view runs no page script, keeps no website data, and can load nothing but the preview
@@ -62,6 +81,7 @@ private final class PreviewScrollReceiver: NSObject, WKScriptMessageHandler {
     /// The view to place in the pane. It holds the web view once there is one.
     let view = NSView()
     private(set) var webView: PreviewWebView?
+    private let fileDropView = PreviewFileDropView(frame: .zero)
     let handler = PreviewSchemeHandler()
 
     /// A sentence to show instead of the page, or nil when the page is shown.
@@ -135,6 +155,7 @@ private final class PreviewScrollReceiver: NSObject, WKScriptMessageHandler {
     /// Shows `page`. `documentURL` is the saved document's location, or nil for an untitled
     /// document, which may load no local file.
     func show(_ page: PreviewPage, documentURL: URL?) {
+        selectionWork?.cancel()
         waiting = (page, documentURL)
         PreviewContentRules.shared.whenSettled { [weak self] in self?.loadWaitingPage() }
         if case .compiling = PreviewContentRules.shared.state { onUnavailable?(PreviewMessages.notReady) }
@@ -222,6 +243,149 @@ private final class PreviewScrollReceiver: NSObject, WKScriptMessageHandler {
     }
 
     private var report = PreviewContentReport()
+
+    private static let selectionMessageName = "textTankPreviewSelection"
+
+    /// Receives only a small context around each boundary. The browser remembers the live DOM
+    /// endpoints in the isolated world, so a reply for a superseded selection cannot be applied.
+    static let selectionScript = """
+        (() => {
+          let serial = 0, dragging = false, last = null, queued = false;
+          function endpoint(node, offset, end) {
+            if (node.nodeType !== Node.TEXT_NODE) {
+              node = node.childNodes[end ? offset - 1 : offset];
+              if (!node) return null;
+              while (node.nodeType !== Node.TEXT_NODE) {
+                node = end ? node.lastChild : node.firstChild;
+                if (!node) return null;
+              }
+              offset = end ? node.length : 0;
+            }
+            if (!document.body?.contains(node)) return null;
+            let top = node;
+            while (top.parentNode !== document.body) top = top.parentNode;
+            const block = Array.prototype.indexOf.call(document.body.children, top);
+            let start = Math.max(0, offset - 24), finish = Math.min(node.length, offset + 24);
+            if (start > 0 && /[\\uDC00-\\uDFFF]/.test(node.data[start])) start--;
+            if (finish < node.length && /[\\uDC00-\\uDFFF]/.test(node.data[finish])) finish++;
+            return {node, offset, top, context: {block,
+              before: node.data.slice(start, offset), after: node.data.slice(offset, finish)}};
+          }
+          function selection() {
+            const sel = getSelection();
+            if (!sel || sel.rangeCount !== 1 || sel.isCollapsed) return null;
+            const r = sel.getRangeAt(0);
+            const a = endpoint(r.startContainer, r.startOffset, false), b = endpoint(r.endContainer, r.endOffset, true);
+            return a && b ? [a,b] : null;
+          }
+          const same = (a,b) => a && b && a.every((p,i) => p.node === b[i].node && p.offset === b[i].offset);
+          function report() {
+            queued = false;
+            if (dragging) return;
+            const pair = selection();
+            if (same(pair,last)) return;
+            last = pair; serial++;
+            if (pair) window.webkit.messageHandlers.textTankPreviewSelection.postMessage(
+              { ticket: serial, bounds: pair.map(p => p.context) });
+          }
+          const schedule = () => { if (!queued) { queued = true; setTimeout(report, 0); } };
+          document.addEventListener('pointerdown', () => { dragging = true; }, true);
+          document.addEventListener('pointerup', () => { dragging = false; schedule(); }, true);
+          document.addEventListener('pointercancel', () => { dragging = false; }, true);
+          document.addEventListener('selectionchange', schedule, true);
+
+          // Parse in the template's inert document. Neither probe is attached to an active
+          // document. Compare the DOM path and the entire text node before accepting a mark.
+          globalThis.textTankVerifySelection = (ticket, marker, markdown, probes) => {
+            if (dragging || ticket !== serial || !same(last,selection())) return null;
+            if (probes.length !== 2) return [-1,-1];
+            function verify(point, html) {
+              const template = document.createElement('template');
+              let liveRoot, probeRoot;
+              if (markdown) {
+                template.innerHTML = html;
+                if (template.content.childElementCount !== 1) return -1;
+                liveRoot = point.top; probeRoot = template.content.firstElementChild;
+              } else {
+                const root = template.content.ownerDocument.createElement('html');
+                root.innerHTML = html;
+                liveRoot = document.body; probeRoot = root.querySelector('body');
+              }
+              if (!probeRoot || probeRoot.nodeName !== liveRoot.nodeName) return -1;
+              const path = [];
+              for (let n = point.node; n !== liveRoot; n = n.parentNode) {
+                if (!n || path.length > 512) return -1;
+                path.push([Array.prototype.indexOf.call(n.parentNode.childNodes, n), n.nodeName]);
+              }
+              let node = probeRoot;
+              for (const [i,name] of path.reverse()) {
+                node = node.childNodes[i]; if (!node || node.nodeName !== name) return -1;
+              }
+              const pattern = new RegExp(marker + '([0-9]+)Z', 'g');
+              let clean = '', from = 0, result = -1, match;
+              while ((match = pattern.exec(node.data)) !== null) {
+                clean += node.data.slice(from, match.index); from = pattern.lastIndex;
+                if (clean.length === point.offset) {
+                  if (result !== -1) return -1;
+                  result = Number(match[1]);
+                }
+              }
+              return clean + node.data.slice(from) === point.node.data ? result : -1;
+            }
+            return last.map((p,i) => verify(p, probes[i]));
+          };
+        })()
+        """
+
+    private struct SelectionRequest: Decodable, Sendable {
+        var ticket: Int
+        var bounds: [PreviewSelectionProbe.Endpoint]
+    }
+    private var selectionWork: Task<Void, Never>?
+    var onSelection: (([Range<Int>]) -> Void)?
+    var onUnmappedSelection: (() -> Void)?
+
+    fileprivate func receivedSelection(_ message: WKScriptMessage) {
+        selectionWork?.cancel()
+        guard message.frameInfo.isMainFrame, !view.isHidden, isSettled,
+            let page = handler.site?.page, page.selectionSource != nil,
+            let address = pageURL, message.frameInfo.request.url == address,
+            JSONSerialization.isValidJSONObject(message.body),
+            let data = try? JSONSerialization.data(withJSONObject: message.body), data.count <= 4096,
+            let request = try? JSONDecoder().decode(SelectionRequest.self, from: data),
+            request.bounds.count == 2, request.ticket > 0
+        else { return }
+        let marker = "TTSEL" + UUID().uuidString.replacingOccurrences(of: "-", with: "") + "Q"
+        let work = Task.detached(priority: .userInitiated) {
+            request.bounds.compactMap { PreviewSelectionProbe.make($0, page: page, marker: marker) }
+        }
+        selectionWork = Task { [weak self] in
+            let probes = await withTaskCancellationHandler {
+                await work.value
+            } onCancel: {
+                work.cancel()
+            }
+            guard !Task.isCancelled, let self, !self.view.isHidden,
+                self.pageURL == address, self.isSettled, let webView = self.webView
+            else { return }
+            do {
+                let reply = try await webView.callAsyncJavaScript(
+                    "return globalThis.textTankVerifySelection(ticket, marker, markdown, probes)",
+                    arguments: [
+                        "ticket": request.ticket, "marker": marker, "markdown": page.scrollMap != nil,
+                        "probes": probes.map(\.html)
+                    ], in: nil, contentWorld: .defaultClient)
+                guard !Task.isCancelled, !self.view.isHidden, self.isSettled, self.pageURL == address,
+                    let indexes = reply as? [Int], indexes.count == 2
+                else { return }
+                guard probes.count == 2, probes[0].positions.indices.contains(indexes[0]),
+                    probes[1].positions.indices.contains(indexes[1])
+                else { self.onUnmappedSelection?(); return }
+                let start = probes[0].positions[indexes[0]], end = probes[1].positions[indexes[1]]
+                if start < end { self.onSelection?([start..<end]) } else { self.onUnmappedSelection?() }
+            } catch { /* The page or the selection went away. */  }
+        }
+    }
 
     private static let linkMessageName = "textTankPreviewLink"
     /// Runs in the application's own script world, which page scripts being off does not affect.
@@ -408,8 +572,12 @@ private final class PreviewScrollReceiver: NSObject, WKScriptMessageHandler {
     /// see a registration there.
     static func installScripts(
         on controller: WKUserContentController, linkReceiver: any WKScriptMessageHandler,
-        scrollReceiver: any WKScriptMessageHandler, world: WKContentWorld = scriptWorld
+        scrollReceiver: any WKScriptMessageHandler, selectionReceiver: any WKScriptMessageHandler,
+        world: WKContentWorld = scriptWorld
     ) {
+        controller.add(selectionReceiver, contentWorld: world, name: selectionMessageName)
+        controller.addUserScript(
+            WKUserScript(source: selectionScript, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: world))
         controller.add(linkReceiver, contentWorld: world, name: linkMessageName)
         controller.addUserScript(
             WKUserScript(source: linkScript, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: world))
@@ -427,12 +595,15 @@ private final class PreviewScrollReceiver: NSObject, WKScriptMessageHandler {
         configuration.mediaTypesRequiringUserActionForPlayback = .all
         configuration.allowsAirPlayForMediaPlayback = false
         configuration.userContentController.add(rules)
+        let selectionReceiver = PreviewSelectionReceiver()
+        selectionReceiver.presenter = self
         let receiver = PreviewLinkReceiver()
         receiver.presenter = self
         let scrollReceiver = PreviewScrollReceiver()
         scrollReceiver.presenter = self
         Self.installScripts(
-            on: configuration.userContentController, linkReceiver: receiver, scrollReceiver: scrollReceiver)
+            on: configuration.userContentController, linkReceiver: receiver, scrollReceiver: scrollReceiver,
+            selectionReceiver: selectionReceiver)
         configuration.setURLSchemeHandler(handler, forURLScheme: PreviewScheme.name)
         let created = PreviewWebView(frame: view.bounds, configuration: configuration)
         created.navigationDelegate = self
@@ -442,6 +613,10 @@ private final class PreviewScrollReceiver: NSObject, WKScriptMessageHandler {
         created.autoresizingMask = [.width, .height]
         created.setAccessibilityLabel(accessibilityName)
         view.addSubview(created)
+        fileDropView.frame = view.bounds
+        fileDropView.autoresizingMask = [.width, .height]
+        fileDropView.setAccessibilityElement(false)
+        view.addSubview(fileDropView, positioned: .above, relativeTo: created)
         webView = created
         onWebViewCreated?()
         return created
@@ -458,8 +633,10 @@ private final class PreviewScrollReceiver: NSObject, WKScriptMessageHandler {
     /// Stops loading and lets go of the web view and everything it was serving.
     func tearDown() {
         waiting = nil
+        selectionWork?.cancel()
         webView?.stopLoading()
         webView?.navigationDelegate = nil
+        fileDropView.removeFromSuperview()
         webView?.removeFromSuperview()
         webView = nil
         handler.site = nil

@@ -22,6 +22,26 @@ package enum HTMLPreparation: Sendable, Equatable {
 /// with every response. The `<meta>` tag written here is a second copy of it, and markup can
 /// defeat a `<meta>` (see `prepare`), so nothing may rely on the tag alone.
 package enum StaticHTMLPolicy {
+    /// Keep selection probes outside markup. A marker inside a tag name or quoted attribute
+    /// would change the browser's parse of the surrounding document.
+    package static func textBoundaries(_ sorted: [Int], in source: Data) -> [Int] {
+        var reader = MarkupTokenizer(Array(source), isXML: false, poll: CancellationPoll { Task.isCancelled })
+        var i = 0, result: [Int] = []
+        do {
+            while i < sorted.count, let token = try reader.next() {
+                let range: Range<Int>
+                switch token {
+                case .tag(let tag): range = tag.range
+                case .rawText(_, let bytes), .doctype(let bytes): range = bytes
+                }
+                while i < sorted.count, sorted[i] <= range.lowerBound { result.append(sorted[i]); i += 1 }
+                while i < sorted.count, sorted[i] < range.upperBound { i += 1 }
+            }
+        } catch { return [] }
+        result.append(contentsOf: sorted[i...])
+        return result
+    }
+
     /// The content security policy for every previewed page. Images and stylesheets load only
     /// from `scheme`; inline styles are allowed; everything else is refused.
     package static func contentSecurityPolicy(scheme: String = PreviewScheme.name) -> String {

@@ -50,6 +50,14 @@ package enum MarkdownRenderer {
         return (rendering, map)
     }
 
+    /// Re-render one marked block using the link definitions of the document that produced it.
+    package static func renderSelectionBlock(_ source: Data, using map: PreviewScrollMap) -> MarkdownRendering {
+        var unused: PreviewScrollMap?
+        return render(
+            bytes: Array(source), limits: .standard, isCancelled: { Task.isCancelled }, map: &unused,
+            wantsMap: false, references: map.markdownReferences)
+    }
+
     private static func render(bytes: [UInt8], limits: PreviewLimits, isCancelled: @escaping () -> Bool)
         -> MarkdownRendering
     {
@@ -59,7 +67,7 @@ package enum MarkdownRenderer {
 
     private static func render(
         bytes: [UInt8], limits: PreviewLimits, isCancelled: @escaping () -> Bool, map: inout PreviewScrollMap?,
-        wantsMap: Bool = true
+        wantsMap: Bool = true, references: [String: MarkdownReference]? = nil
     ) -> MarkdownRendering {
         guard bytes.count <= limits.maxSourceBytes else {
             return .limited(.sourceTooLarge(maxBytes: limits.maxSourceBytes))
@@ -70,7 +78,7 @@ package enum MarkdownRenderer {
             let lines = MarkdownText.lines(of: bytes)
             let parsed = try parser.parse(lines, depth: 0)
             var writer = MarkdownHTMLWriter(
-                inline: MarkdownInlineRenderer(references: parser.references, poll: poll),
+                inline: MarkdownInlineRenderer(references: references ?? parser.references, poll: poll),
                 maxOutputBytes: limits.maxOutputBytes, poll: poll)
             try writer.write(parsed.blocks, isTight: false)
             if wantsMap {
@@ -78,12 +86,14 @@ package enum MarkdownRenderer {
                 blocks.reserveCapacity(parsed.lineRanges.count)
                 for range in parsed.lineRanges {
                     try poll.checkpoint()
-                    blocks.append(
-                        PreviewScrollMap.Block(
+                    var block = PreviewScrollMap.Block(
                             firstLine: range.lowerBound, lineCount: range.count,
-                            fingerprint: PreviewScrollMap.fingerprint(of: lines[range])))
+                        fingerprint: PreviewScrollMap.fingerprint(of: lines[range]))
+                    block.sourceBytes = lines[range.lowerBound].startIndex..<lines[range.upperBound - 1].endIndex
+                    blocks.append(block)
                 }
                 map = PreviewScrollMap(blocks: blocks)
+                map?.markdownReferences = parser.references
             }
             return .rendered(String(decoding: writer.output, as: UTF8.self))
         } catch PreviewStop.outputTooLarge {

@@ -182,7 +182,7 @@ import EditorBridge
         check(
             offeredAt != nil
                 && offeredAt
-                    == (toolbar.items.lastIndex { $0.itemIdentifier.rawValue == "TextTank.Split" }).map { $0 + 1 },
+                    == (toolbar.items.lastIndex { $0.itemIdentifier == EditorToolbarCommand.wrap.identifier }).map { $0 + 1 },
             "a toolbar arranged before DS-D12 gains Editor Layout once, after the standard commands")
         EditorToolbarPreferences.offerLayoutItemOnce(in: toolbar, defaults: defaults)
         check(
@@ -853,6 +853,54 @@ import EditorBridge
             _ = host.setEditorLayout(.single)
             window.setContentSize(originalSize)
         }
+        // A separate empty workspace exercises the native key loop without closing the other
+        // suites' documents or borrowing any recent files from the person using this Mac.
+        let startHost = WorkspaceWindowController()
+        let startWindow = try requireValue(startHost.window, "empty workspace window")
+        let start = try requireValue(startHost.groupSurfaces[.first], "empty workspace editor group")
+        startWindow.setContentSize(NSSize(width: 1080, height: 720))
+        startWindow.contentView?.layoutSubtreeIfNeeded()
+        start.refreshHint()
+        start.layoutSubtreeIfNeeded()
+        let page = try requireValue(start.emptyGroupArea, "single empty workspace start area")
+        let title = try requireValue(
+            descendants(page).first { $0.identifier?.rawValue == "groups.start.title" } as? NSTextField,
+            "start title")
+        let dropPrompt = try requireValue(
+            descendants(page).first { $0.identifier?.rawValue == "groups.start.drop" } as? NSTextField,
+            "Finder drop hint")
+        let disclosure = try requireValue(
+            descendants(page).first { $0.identifier?.rawValue == "groups.start.shortcuts" } as? NSButton,
+            "shortcut disclosure")
+        check(
+            !title.isHidden && title.stringValue == "Open a document"
+                && (title.font?.pointSize ?? 0) > (dropPrompt.font?.pointSize ?? 0)
+                && dropPrompt.stringValue == "Drop files here to open them."
+                && abs(page.frame.midX - start.content.bounds.midX) <= 1 && page.bounds.width < start.bounds.width / 2,
+            "the large empty workspace centers a readable column with a heading and a Finder drop invitation")
+        let icon = try requireValue(page.subviews.compactMap { $0 as? NSImageView }.first, "document symbol")
+        let symbolCenter = icon.convert(NSPoint(x: icon.bounds.midX, y: icon.bounds.midY), to: page)
+        check(icon.registeredDraggedTypes.isEmpty && page.hitTest(page.convert(symbolCenter, to: page.superview)) !== icon,
+              "the decorative symbol leaves the center of the empty workspace available for Finder drops")
+        check(!disclosure.isHidden && start.hintRows.allSatisfy(\.isHidden), "shortcut hints start collapsed")
+        let primaryActions = try requireValue(descendants(page).compactMap { $0 as? NSStackView }.first,
+                                              "New and Open action row")
+        check(title.alignment == .center && dropPrompt.alignment == .center
+              && abs(primaryActions.frame.midX - page.bounds.midX) <= 1
+              && abs(disclosure.frame.midX - page.bounds.midX) <= 1
+              && primaryActions.views.compactMap { ($0 as? NSButton)?.title } == ["New Document", "Open File…"]
+              && primaryActions.views.compactMap { $0 as? NSButton }.allSatisfy { $0.controlSize == .large },
+              "the visible start actions share the window centerline with the invitation")
+        let firstControl = try requireValue(start.emptyGroupFocusView, "first empty workspace control")
+        check(startWindow.makeFirstResponder(firstControl), "New takes the keyboard in a fresh empty workspace")
+        for _ in 0..<2 { start.keyDown(with: try key(48, "\t", in: startWindow)) }
+        check(startWindow.firstResponder === disclosure, "Tab moves through New and Open to Keyboard shortcuts")
+        start.keyDown(with: try key(36, "\r", in: startWindow))
+        check(start.hintRows.allSatisfy { !$0.isHidden }, "Return reveals all four live shortcuts")
+        start.keyDown(with: try key(49, " ", in: startWindow))
+        check(start.hintRows.allSatisfy(\.isHidden) && startWindow.firstResponder === disclosure,
+              "Space collapses the hints and keeps keyboard focus on the disclosure")
+
         let (_, keptTab) = try open("kept.txt", "kept\n", in: folder)
         host.activate(keptTab)
         check(host.setEditorLayout(.twoColumns), "fixture: two editor groups, the second with no tabs")
@@ -1039,6 +1087,105 @@ import EditorBridge
         opened.close()
         window.contentView?.layoutSubtreeIfNeeded()
         check(surface.emptyGroupArea != nil, "fixture: the second group is empty again")
+
+        // Finder supplies file URLs. A named private pasteboard and a drag object with its
+        // location over the empty group exercise the real root destination and document opener.
+        final class FileDrag: NSObject {
+            @objc let draggingPasteboard = NSPasteboard.withUniqueName()
+            @objc var draggingLocation = NSPoint.zero
+            @objc var draggingSourceOperationMask = NSDragOperation.copy
+        }
+        let destination = try requireValue(window.contentView as? WorkspaceFileDropView, "workspace drop root")
+        check(destination.registeredDraggedTypes.contains(.fileURL), "workspace registers for Finder files")
+        let drag = FileDrag()
+        defer { drag.draggingPasteboard.releaseGlobally() }
+        let dragInfo = unsafeBitCast(drag, to: NSDraggingInfo.self)
+        drag.draggingLocation = surface.convert(NSPoint(x: surface.bounds.midX, y: surface.bounds.midY), to: nil)
+        drag.draggingPasteboard.setString("/a/path/as/plain-text", forType: .string)
+        let textOperation = destination.draggingEntered(dragInfo)
+        let acceptedText = destination.performDragOperation(dragInfo)
+        check(textOperation.isEmpty && !acceptedText,
+              "workspace leaves plain text to its normal drag destination")
+        drag.draggingPasteboard.clearContents()
+        _ = drag.draggingPasteboard.writeObjects([existing[0] as NSURL, existing[2] as NSURL])
+        drag.draggingSourceOperationMask = .move
+        let moveOperation = destination.draggingUpdated(dragInfo)
+        check(moveOperation.isEmpty, "opening files never promises a Finder move")
+        drag.draggingSourceOperationMask = .copy
+        host.activate(keptTab)
+        let fileOperation = destination.draggingEntered(dragInfo)
+        let acceptedFiles = destination.performDragOperation(dragInfo)
+        check(NSDocumentController.shared.document(for: existing[0]) == nil,
+              "the target stays in place until the drag concludes")
+        destination.concludeDragOperation(dragInfo)
+        destination.draggingEnded(dragInfo)
+        check(fileOperation == .copy && acceptedFiles,
+              "dropping two file URLs into an inactive empty group is accepted")
+        spinUntil("both dropped files opened through the document controller") {
+            host.model.groups.first { $0.slot == .second }?.tabs.count == 2
+        }
+        for index in [0, 2] {
+            let doc = try requireValue(
+                NSDocumentController.shared.document(for: existing[index]) as? TextDocument, "dropped file opened")
+            check(doc.editor.text == names[index] + "\n", "native file open preserved its text")
+            doc.close()
+        }
+
+        // Resolve the destination from the window's actual view tree at the drag location,
+        // including nested WebKit and Scintilla views, before invoking its AppKit drag callbacks.
+        func drop(_ url: URL, onto view: NSView, fileReceiver: NSView? = nil) throws {
+            window.contentView?.layoutSubtreeIfNeeded()
+            let point = NSPoint(x: view.bounds.midX, y: view.bounds.midY)
+            drag.draggingLocation = view.convert(point, to: nil)
+            drag.draggingPasteboard.clearContents()
+            _ = drag.draggingPasteboard.writeObjects([url as NSURL])
+            let hit = try requireValue(destination.hitTest(view.convert(point, to: destination.superview)),
+                                       "drop point hits the window content")
+            check(hit.isDescendant(of: view), "drop point hits the intended view or its native child")
+            // The named test pasteboard is intentionally separate from the global Finder drag
+            // board. An ordinary hit must reach WebKit; AppKit file callbacks go to its sibling.
+            var receiver: NSView? = fileReceiver ?? hit
+            while let candidate = receiver,
+                drag.draggingPasteboard.availableType(from: candidate.registeredDraggedTypes) == nil
+            {
+                receiver = candidate.superview
+            }
+            let target = try requireValue(receiver, "hit-tested drop target has a registered file type")
+            let operation = target.draggingEntered(dragInfo)
+            let prepared = target.prepareForDragOperation(dragInfo)
+            let accepted = target.performDragOperation(dragInfo)
+            target.concludeDragOperation(dragInfo)
+            target.draggingEnded(dragInfo)
+            check(operation == .copy && prepared && accepted,
+                  "the native drop destination opens a file from " + NSStringFromClass(type(of: hit)))
+            spinUntil("hit-tested target opens the dropped document") {
+                NSDocumentController.shared.document(for: url) != nil
+            }
+            let opened = try requireValue(NSDocumentController.shared.document(for: url) as? TextDocument,
+                                          "opened dropped document")
+            check(opened.editor.checkedUTF8Data == (try Data(contentsOf: url)),
+                  "the drop opens a separate document with the original file bytes")
+            opened.close()
+        }
+        let (sourceDoc, sourceTab) = try open("drop-source.md", "# Source\n", in: folder)
+        host.activate(sourceTab)
+        _ = sourceTab.setViewMode(.source)
+        try drop(existing[3], onto: sourceTab.activeEditor)
+        host.activate(sourceTab)
+        check(sourceTab.setViewMode(.preview), "fixture: Markdown is in Preview")
+        spinUntil("the read-only web page rendered") {
+            sourceTab.previewCoordinator?.pane.webPresenter?.isSettled == true
+        }
+        let previewView = try requireValue(sourceTab.previewCoordinator?.pane.webPresenter?.webView,
+                                            "rendered preview underneath drop point")
+        let dropSibling = try requireValue(previewView.superview?.subviews.last as? PreviewFileDropView,
+                                           "a separate native file destination is above the rendered content")
+        check(dropSibling.registeredDraggedTypes == [.fileURL] && dropSibling.frame == previewView.frame,
+              "the file-only destination covers the preview without changing its content")
+        try drop(existing[4], onto: previewView, fileReceiver: dropSibling)
+        check(sourceDoc.editor.text == "# Source\n" && !sourceDoc.isDocumentEdited,
+              "drops on the source and preview leave the original document intact")
+        sourceDoc.close()
 
         // A grid set up in a wide window and then shrunk keeps its columns in line and no group
         // below its minimum (the two rows used to be left at different divider positions).

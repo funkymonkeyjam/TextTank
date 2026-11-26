@@ -57,6 +57,9 @@ package struct DelimitedTable: Sendable, Equatable {
     private var rowStarts: [Int] = [0]
     /// For each row, the 1-based source line it starts on.
     package private(set) var rowLines: [Int] = []
+    /// The original bytes of each record, including field quoting and embedded line endings,
+    /// excluding the record terminator. Set by the parser, even for a truncated final table.
+    package fileprivate(set) var rowSourceRanges: [Range<Int>] = []
     /// The widest row, in cells. Narrower rows read as empty text in their missing columns.
     package private(set) var columnCount = 0
     package private(set) var diagnostics: [DelimitedDiagnostic] = []
@@ -186,6 +189,7 @@ private struct DelimitedReader {
     }
 
     private mutating func readRow() throws {
+        let rowStart = position
         table.beginRow(line: line)
         var column = 0
         var end = FieldEnd.delimiter
@@ -199,6 +203,12 @@ private struct DelimitedReader {
             }
             column += 1
         }
+        var rowEnd = position
+        if end == .lineBreak {
+            rowEnd -= 1
+            if bytes[rowEnd] == 10, rowEnd > rowStart, bytes[rowEnd - 1] == 13 { rowEnd -= 1 }
+        }
+        table.rowSourceRanges.append(rowStart..<rowEnd)
         table.endRow()
     }
 

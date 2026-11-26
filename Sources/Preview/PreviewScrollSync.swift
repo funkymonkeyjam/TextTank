@@ -216,6 +216,15 @@ import TextTankCore
         checkRecord.sourceScrolls += 1
     }
 
+    /// Showing a range selected in Preview is a programmatic source scroll. Leave the reader's
+    /// end of the selection visible in the preview, even with scroll following enabled.
+    func showSelection(in editor: TTEditor) {
+        isScrolling = true
+        editor.scrollCaretIntoView()
+        isScrolling = false
+        if isWatching { settledSourceLine[ObjectIdentifier(editor)] = editor.firstVisibleDocumentLine }
+    }
+
     // MARK: The preview
 
     /// The table or the tree, which are both rows over source lines.

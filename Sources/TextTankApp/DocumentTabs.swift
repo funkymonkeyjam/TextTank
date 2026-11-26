@@ -3,6 +3,76 @@ import EditorBridge
 import NativeSearch
 import AppKit
 
+/// Finder file URLs open documents through the same controller as File > Open. Read only
+/// the declared file flavor; dragging selected text or a web link keeps its native behavior.
+@MainActor final class WorkspaceFileDrop {
+    private var openAfterDrag: (@MainActor @Sendable () async -> Void)?
+    static func containsFiles(_ drag: NSDraggingInfo) -> Bool {
+        drag.draggingPasteboard.types?.contains(.fileURL) == true
+    }
+    static func operation(_ drag: NSDraggingInfo, in view: NSView) -> NSDragOperation {
+        guard containsFiles(drag), drag.draggingSourceOperationMask.contains(.copy),
+            let host = view.window?.windowController as? WorkspaceWindowController,
+            host.acceptsDocumentCreation, host.window?.attachedSheet == nil, NSApp.modalWindow == nil
+        else { return [] }
+        return .copy
+    }
+    func capture(_ drag: NSDraggingInfo, in view: NSView) -> Bool {
+        guard Self.operation(drag, in: view) == .copy,
+            let host = view.window?.windowController as? WorkspaceWindowController,
+            let urls = drag.draggingPasteboard.readObjects(
+                forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
+            !urls.isEmpty
+        else { return false }
+        // Capture the group under the pointer; the sidebar and other chrome use the focused group.
+        let position = drag.draggingLocation
+        let group = host.groupSurfaces.values.first { $0.bounds.contains($0.convert(position, from: nil)) }?.slot
+        openAfterDrag = {
+            if let group { host.focusGroup(group) }
+            for url in urls {
+                do { _ = try await NSDocumentController.shared.openDocument(withContentsOf: url, display: true) }
+                catch {
+                    let failure = error as NSError
+                    if failure.domain != NSCocoaErrorDomain || failure.code != NSUserCancelledError {
+                        NSApp.presentError(error)
+                    }
+                }
+            }
+        }
+        return true
+    }
+
+    // AppKit has concluded the drop. Only now may opening a document unmount the view under
+    // the pointer. Both completion callbacks can arrive; a captured drop is consumed once.
+    func finish() {
+        guard let open = openAfterDrag else { return }
+        openAfterDrag = nil
+        RunLoop.main.perform(inModes: [.default]) {
+            Task { @MainActor in await open() }
+        }
+    }
+}
+
+/// AppKit picks the nearest registered destination above the hit view. This fallback covers
+/// the empty workspace, tab chrome, sidebar, and margins. A source editor handles its own drops.
+class WorkspaceFileDropView: NSView {
+    private let fileDrop = WorkspaceFileDrop()
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        registerForDraggedTypes([.fileURL])
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        WorkspaceFileDrop.operation(sender, in: self)
+    }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { draggingEntered(sender) }
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        fileDrop.capture(sender, in: self)
+    }
+    override func concludeDragOperation(_ sender: NSDraggingInfo?) { fileDrop.finish() }
+    override func draggingEnded(_ sender: NSDraggingInfo) { fileDrop.finish() }
+}
+
 /// Native workspace chrome. This window never represents a document's lifetime.
 final class DocumentTabWindow: NSWindow {
     var host: WorkspaceWindowController? { windowController as? WorkspaceWindowController }
@@ -40,7 +110,21 @@ final class DocumentTabWindow: NSWindow {
         if item.action == #selector(performClose(_:)) { return hasCloseTarget }
         return super.validateUserInterfaceItem(item)
     }
+    // An incoming drag from another app is negotiated out of band. Ordinary mouse events
+    // that the workspace actually dispatches must always reach the web content underneath.
+    private(set) var dispatchingPointerEvent = false
     override func sendEvent(_ event: NSEvent) {
+        let previous = dispatchingPointerEvent
+        switch event.type {
+        case .leftMouseDown, .leftMouseUp, .leftMouseDragged, .rightMouseDown, .rightMouseUp,
+            .rightMouseDragged, .otherMouseDown, .otherMouseUp, .otherMouseDragged, .mouseMoved,
+            .mouseEntered, .mouseExited, .scrollWheel, .cursorUpdate, .pressure, .magnify, .rotate, .swipe:
+            dispatchingPointerEvent = true
+        default:
+            break
+        }
+        defer { dispatchingPointerEvent = previous }
+
         if event.type == .keyDown, event.keyCode == 53, host?.tabStrips.contains(where: { $0.isReordering }) == true {
             host?.tabStrips.forEach { $0.cancelReorder() }
             return

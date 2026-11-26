@@ -727,6 +727,29 @@
         }
       }
     },
+    "preview.selection.macro": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preview selections are not recorded in macros yet."
+          }
+        }
+      }
+    },
+
+    "preview.selection.unmapped": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "TextTank couldn’t locate this selection in Source."
+          }
+        }
+      }
+    },
     "preview.json.nameColumn": {
       "extractionState": "manual",
       "localizations": {
@@ -1709,6 +1732,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "Find…"
+          }
+        }
+      }
+    },
+    "toolbar.wrap": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wrap Lines"
+          }
+        }
+      }
+    },
+    "toolbar.wrap.help": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wrap long lines to fit the active editor."
+          }
+        }
+      }
+    },
+    "toolbar.wrap.disable.help": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Turn off line wrapping in the active editor."
           }
         }
       }
@@ -3249,13 +3302,57 @@
         }
       }
     },
-    "emptyGroup.prompt": {
+    "emptyGroup.start": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Open a document or create a new one."
+            "value": "Open a document"
+          }
+        }
+      }
+    },
+    "emptyGroup.dropPrompt": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Drop files here to open them."
+          }
+        }
+      }
+    },
+    "emptyGroup.shortcuts": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keyboard shortcuts"
+          }
+        }
+      }
+    },
+    "emptyGroup.newDocument": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New Document"
+          }
+        }
+      }
+    },
+    "emptyGroup.openFile": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open File…"
           }
         }
       }

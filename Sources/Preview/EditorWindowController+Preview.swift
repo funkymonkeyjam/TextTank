@@ -212,6 +212,33 @@ extension EditorWindowController {
 
     private func makePreviewCoordinator() -> PreviewCoordinator {
         let pane = PreviewPane(frame: viewContainer.bounds)
+        pane.onUnmappedSelection = { [weak self] in
+            guard let self, self.isPresented, self.previewCoordinator?.isCurrent == true else { return }
+            self.showTransientStatus(
+                Strings.text("preview.selection.unmapped", "TextTank couldn’t locate this selection in Source."))
+        }
+        pane.onSelection = { [weak self] ranges in
+            guard let self, self.isPresented, self.previewCoordinator?.isCurrent == true,
+                !self.statusClosed, !self.isRetired, !ranges.isEmpty
+            else { return }
+            let editor = self.activeEditor
+            // Native byte boundaries are validated together before any selection is changed.
+            let selections = ranges.map { TTSelectionRange(anchor: $0.lowerBound, caret: $0.upperBound) }
+            let select = { editor.setSelectionRanges(selections) }
+            let moved =
+                EditorServices.current?.macros?.unrecordedJump(
+                    in: editor,
+                    reason: Strings.text(
+                        "preview.selection.macro", "Preview selections are not recorded in macros yet."), select)
+                ?? select()
+            guard moved else {
+                self.previewCoordinator?.pane.onUnmappedSelection?()
+                return
+            }
+            if self.viewMode == .preview { _ = self.setViewMode(.both, movingFocus: false) }
+            self.previewCoordinator?.scrollSync.showSelection(in: editor)
+            self.refreshStatusDetails()
+        }
         pane.onGoToError = { [weak self] error in self?.goToPreviewError(error) }
         pane.onDocumentCommand = { [weak self] command in try? self?.perform(command: command) }
         let tab = PreviewCoordinator.Tab(
