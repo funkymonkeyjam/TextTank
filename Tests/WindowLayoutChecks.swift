@@ -878,6 +878,10 @@ import EditorBridge
                 && dropPrompt.stringValue == "Drop files here to open them."
                 && abs(page.frame.midX - start.content.bounds.midX) <= 1 && page.bounds.width < start.bounds.width / 2,
             "the large empty workspace centers a readable column with a heading and a Finder drop invitation")
+        let icon = try requireValue(page.subviews.compactMap { $0 as? NSImageView }.first, "document symbol")
+        let symbolCenter = icon.convert(NSPoint(x: icon.bounds.midX, y: icon.bounds.midY), to: page)
+        check(icon.registeredDraggedTypes.isEmpty && page.hitTest(page.convert(symbolCenter, to: page.superview)) !== icon,
+              "the decorative symbol leaves the center of the empty workspace available for Finder drops")
         check(!disclosure.isHidden && start.hintRows.allSatisfy(\.isHidden), "shortcut hints start collapsed")
         let primaryActions = try requireValue(descendants(page).compactMap { $0 as? NSStackView }.first,
                                               "New and Open action row")
@@ -1165,6 +1169,8 @@ import EditorBridge
         }
         let previewView = try requireValue(sourceTab.previewCoordinator?.pane.webPresenter?.webView,
                                             "rendered preview underneath drop point")
+        check(previewView.registeredDraggedTypes.isEmpty,
+              "the read-only web view leaves incoming file drag tracking to the workspace")
         try drop(existing[4], onto: previewView)
         check(sourceDoc.editor.text == "# Source\n" && !sourceDoc.isDocumentEdited,
               "drops on the source and preview leave the original document intact")
