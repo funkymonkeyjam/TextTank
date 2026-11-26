@@ -6,7 +6,7 @@ import AppKit
 /// Finder file URLs open documents through the same controller as File > Open. Read only
 /// the declared file flavor; dragging selected text or a web link keeps its native behavior.
 @MainActor final class WorkspaceFileDrop {
-    private var openAfterDrag: (@MainActor () async -> Void)?
+    private var openAfterDrag: (@MainActor @Sendable () async -> Void)?
     static func containsFiles(_ drag: NSDraggingInfo) -> Bool {
         drag.draggingPasteboard.types?.contains(.fileURL) == true
     }
