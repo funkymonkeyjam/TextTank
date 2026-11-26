@@ -464,7 +464,7 @@ Inside an area the group surface handles the keys its controls pass up:
 ## Empty group
 
 DS-10/20/67/70/73/84/85/100 apply. With one empty group, the workspace centers a start area
-with a Finder drop invitation, New and Open… buttons, and recent files. Keyboard shortcuts
+with a Finder drop invitation, New Document and Open File… buttons, and recent files. Keyboard shortcuts
 expand on request. In a split layout each empty group keeps its compact arrangement, with the
 shortcut hints directly below the buttons and any status message. Finder file drops open
 through the normal document controller, including on an empty group, the tab strip, the
