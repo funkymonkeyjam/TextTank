@@ -9,13 +9,28 @@ final class PreviewWebView: WKWebView {
     private nonisolated static let passedOn: Set<String> = ["undo:", "redo:"]
     private static let keptMenuItems: Set<String> = ["WKMenuItemIdentifierCopy", "WKMenuItemIdentifierCopyLink"]
 
-    // This is a read-only renderer. Registering it as a destination lets WebKit consume Finder
-    // drops and starts WebKit drag tracking on a view that can disappear as its tab changes.
-    // Leave incoming file drags to the workspace; selecting, copying and dragging text out
-    // of the page do not use destination registration.
+    // WebKit owns this hit region even when it unregisters its drag types. Accept only files
+    // here and own the entire incoming AppKit session. A read-only preview has no incoming
+    // WebKit edits or navigation. Outbound drags of a selection still use WebKit's source API.
+    private let fileDrop = WorkspaceFileDrop()
+
     override func registerForDraggedTypes(_ newTypes: [NSPasteboard.PasteboardType]) {
-        super.unregisterDraggedTypes()
+        super.registerForDraggedTypes([.fileURL])
     }
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        WorkspaceFileDrop.operation(sender, in: self)
+    }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { draggingEntered(sender) }
+    override func draggingExited(_ sender: NSDraggingInfo?) {}
+    override func updateDraggingItemsForDrag(_ sender: NSDraggingInfo?) {}
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        WorkspaceFileDrop.operation(sender, in: self) == .copy
+    }
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        fileDrop.capture(sender, in: self)
+    }
+    override func concludeDragOperation(_ sender: NSDraggingInfo?) { fileDrop.finish() }
+    override func draggingEnded(_ sender: NSDraggingInfo) { fileDrop.finish() }
 
     nonisolated override func responds(to selector: Selector!) -> Bool {
         if let selector, Self.passedOn.contains(NSStringFromSelector(selector)) { return false }
