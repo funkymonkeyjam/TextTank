@@ -1133,7 +1133,7 @@ import EditorBridge
 
         // Resolve the destination from the window's actual view tree at the drag location,
         // including nested WebKit and Scintilla views, before invoking its AppKit drag callbacks.
-        func drop(_ url: URL, onto view: NSView) throws {
+        func drop(_ url: URL, onto view: NSView, fileReceiver: NSView? = nil) throws {
             window.contentView?.layoutSubtreeIfNeeded()
             let point = NSPoint(x: view.bounds.midX, y: view.bounds.midY)
             drag.draggingLocation = view.convert(point, to: nil)
@@ -1142,7 +1142,9 @@ import EditorBridge
             let hit = try requireValue(destination.hitTest(view.convert(point, to: destination.superview)),
                                        "drop point hits the window content")
             check(hit.isDescendant(of: view), "drop point hits the intended view or its native child")
-            var receiver: NSView? = hit
+            // The named test pasteboard is intentionally separate from the global Finder drag
+            // board. An ordinary hit must reach WebKit; AppKit file callbacks go to its sibling.
+            var receiver: NSView? = fileReceiver ?? hit
             while let candidate = receiver,
                 drag.draggingPasteboard.availableType(from: candidate.registeredDraggedTypes) == nil
             {
@@ -1176,9 +1178,11 @@ import EditorBridge
         }
         let previewView = try requireValue(sourceTab.previewCoordinator?.pane.webPresenter?.webView,
                                             "rendered preview underneath drop point")
-        check(previewView.registeredDraggedTypes == [.fileURL],
-              "the read-only preview accepts only workspace file drops as an incoming destination")
-        try drop(existing[4], onto: previewView)
+        let dropSibling = try requireValue(previewView.superview?.subviews.last as? PreviewFileDropView,
+                                           "a separate native file destination is above the rendered content")
+        check(dropSibling.registeredDraggedTypes == [.fileURL] && dropSibling.frame == previewView.frame,
+              "the file-only destination covers the preview without changing its content")
+        try drop(existing[4], onto: previewView, fileReceiver: dropSibling)
         check(sourceDoc.editor.text == "# Source\n" && !sourceDoc.isDocumentEdited,
               "drops on the source and preview leave the original document intact")
         sourceDoc.close()

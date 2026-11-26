@@ -9,29 +9,6 @@ final class PreviewWebView: WKWebView {
     private nonisolated static let passedOn: Set<String> = ["undo:", "redo:"]
     private static let keptMenuItems: Set<String> = ["WKMenuItemIdentifierCopy", "WKMenuItemIdentifierCopyLink"]
 
-    // WebKit owns this hit region even when it unregisters its drag types. Accept only files
-    // here and own the entire incoming AppKit session. A read-only preview has no incoming
-    // WebKit edits or navigation. Outbound drags of a selection still use WebKit's source API.
-    private let fileDrop = WorkspaceFileDrop()
-
-    override func registerForDraggedTypes(_ newTypes: [NSPasteboard.PasteboardType]) {
-        super.registerForDraggedTypes([.fileURL])
-    }
-    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        WorkspaceFileDrop.operation(sender, in: self)
-    }
-    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { draggingEntered(sender) }
-    override func draggingExited(_ sender: NSDraggingInfo?) {}
-    override func updateDraggingItemsForDrag(_ sender: NSDraggingInfo?) {}
-    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        WorkspaceFileDrop.operation(sender, in: self) == .copy
-    }
-    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        fileDrop.capture(sender, in: self)
-    }
-    override func concludeDragOperation(_ sender: NSDraggingInfo?) { fileDrop.finish() }
-    override func draggingEnded(_ sender: NSDraggingInfo) { fileDrop.finish() }
-
     nonisolated override func responds(to selector: Selector!) -> Bool {
         if let selector, Self.passedOn.contains(NSStringFromSelector(selector)) { return false }
         return super.responds(to: selector)
@@ -44,6 +21,18 @@ final class PreviewWebView: WKWebView {
             menu.removeItem(item)
         }
         super.willOpenMenu(menu, with: event)
+    }
+}
+
+/// AppKit negotiates an incoming Finder drag with this sibling before entering WebKit.
+/// Ordinary events, accessibility and outbound drags stay with the native web content.
+final class PreviewFileDropView: WorkspaceFileDropView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let workspace = window as? DocumentTabWindow, !workspace.dispatchingPointerEvent,
+            NSEvent.pressedMouseButtons & 1 != 0,
+            NSPasteboard(name: .drag).availableType(from: [.fileURL]) != nil
+        else { return nil }
+        return super.hitTest(point)
     }
 }
 
@@ -92,6 +81,7 @@ private final class PreviewSelectionReceiver: NSObject, WKScriptMessageHandler {
     /// The view to place in the pane. It holds the web view once there is one.
     let view = NSView()
     private(set) var webView: PreviewWebView?
+    private let fileDropView = PreviewFileDropView(frame: .zero)
     let handler = PreviewSchemeHandler()
 
     /// A sentence to show instead of the page, or nil when the page is shown.
@@ -623,6 +613,10 @@ private final class PreviewSelectionReceiver: NSObject, WKScriptMessageHandler {
         created.autoresizingMask = [.width, .height]
         created.setAccessibilityLabel(accessibilityName)
         view.addSubview(created)
+        fileDropView.frame = view.bounds
+        fileDropView.autoresizingMask = [.width, .height]
+        fileDropView.setAccessibilityElement(false)
+        view.addSubview(fileDropView, positioned: .above, relativeTo: created)
         webView = created
         onWebViewCreated?()
         return created
@@ -642,6 +636,7 @@ private final class PreviewSelectionReceiver: NSObject, WKScriptMessageHandler {
         selectionWork?.cancel()
         webView?.stopLoading()
         webView?.navigationDelegate = nil
+        fileDropView.removeFromSuperview()
         webView?.removeFromSuperview()
         webView = nil
         handler.site = nil

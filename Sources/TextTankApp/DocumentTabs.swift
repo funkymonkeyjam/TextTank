@@ -55,7 +55,7 @@ import AppKit
 
 /// AppKit picks the nearest registered destination above the hit view. This fallback covers
 /// the empty workspace, tab chrome, sidebar, and margins. A source editor handles its own drops.
-final class WorkspaceFileDropView: NSView {
+class WorkspaceFileDropView: NSView {
     private let fileDrop = WorkspaceFileDrop()
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -110,7 +110,21 @@ final class DocumentTabWindow: NSWindow {
         if item.action == #selector(performClose(_:)) { return hasCloseTarget }
         return super.validateUserInterfaceItem(item)
     }
+    // An incoming drag from another app is negotiated out of band. Ordinary mouse events
+    // that the workspace actually dispatches must always reach the web content underneath.
+    private(set) var dispatchingPointerEvent = false
     override func sendEvent(_ event: NSEvent) {
+        let previous = dispatchingPointerEvent
+        switch event.type {
+        case .leftMouseDown, .leftMouseUp, .leftMouseDragged, .rightMouseDown, .rightMouseUp,
+            .rightMouseDragged, .otherMouseDown, .otherMouseUp, .otherMouseDragged, .mouseMoved,
+            .mouseEntered, .mouseExited, .scrollWheel, .cursorUpdate, .pressure, .magnify, .rotate, .swipe:
+            dispatchingPointerEvent = true
+        default:
+            break
+        }
+        defer { dispatchingPointerEvent = previous }
+
         if event.type == .keyDown, event.keyCode == 53, host?.tabStrips.contains(where: { $0.isReordering }) == true {
             host?.tabStrips.forEach { $0.cancelReorder() }
             return
