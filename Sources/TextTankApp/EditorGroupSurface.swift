@@ -17,6 +17,7 @@ final class EditorGroupSurface: NSView {
     private let heading = NSButton()
     /// The single empty workspace gets a centered start area; split groups use a compact layout.
     private let placeholder = NSView()
+    private let startIcon = NSImageView()
     private let startTitle = NSTextField(labelWithString: Strings.text("emptyGroup.start", "Open a document"))
     private let shortcutDisclosure = NSButton()
     private let emptyPrompt = NSTextField(
@@ -25,6 +26,7 @@ final class EditorGroupSurface: NSView {
     let emptyStatus = AnnouncingLabel(labelWithString: "")
     private(set) weak var mounted: NSView?
     private weak var newButton: NSButton?
+    private weak var openButton: NSButton?
 
     // MARK: Empty-group hint
 
@@ -116,10 +118,16 @@ final class EditorGroupSurface: NSView {
         newButton = new
         let open = NSButton(
             title: Strings.text("emptyGroup.open", "Open…"), target: self, action: #selector(openGroupDocument(_:)))
+        openButton = open
         new.setAccessibilityLabel(Strings.text("emptyGroup.new.label", "New document in this group"))
         open.setAccessibilityLabel(Strings.text("emptyGroup.open.label", "Open a document in this group"))
+        startIcon.image = NSImage(systemSymbolName: "doc.text", accessibilityDescription: nil)
+        startIcon.imageScaling = .scaleProportionallyUpOrDown
+        startIcon.contentTintColor = .secondaryLabelColor
+        startIcon.setAccessibilityElement(false)
         startTitle.font = .preferredFont(forTextStyle: .title1)
         startTitle.identifier = .init("groups.start.title")
+        startTitle.alignment = .center
         emptyPrompt.identifier = .init("groups.start.drop")
         emptyPrompt.textColor = .secondaryLabelColor
         shortcutDisclosure.title = Strings.text("emptyGroup.shortcuts", "Keyboard shortcuts")
@@ -147,7 +155,7 @@ final class EditorGroupSurface: NSView {
         }
         recentHeading.font = small
         recentHeading.textColor = .secondaryLabelColor
-        ([startTitle, emptyPrompt, emptyActions, emptyStatus, shortcutDisclosure] + hintRows + [recentHeading]).forEach { placeholder.addSubview($0) }
+        ([startIcon, startTitle, emptyPrompt, emptyActions, emptyStatus, shortcutDisclosure] + hintRows + [recentHeading]).forEach { placeholder.addSubview($0) }
         [heading, strip, content].forEach { addSubview($0) }
         content.addSubview(placeholder)
         setAccessibilityElement(true)
@@ -487,13 +495,27 @@ final class EditorGroupSurface: NSView {
             width: columnWidth, height: content.bounds.height)
         guard !placeholder.isHidden else { return }
         let width = placeholder.bounds.width, gap: CGFloat = 8, rowGap: CGFloat = 3, margin: CGFloat = 8
+        let alignment: NSTextAlignment = start ? .center : .natural
+        if emptyPrompt.alignment != alignment { emptyPrompt.alignment = alignment }
+        let newTitle = start ? Strings.text("emptyGroup.newDocument", "New Document") : Strings.text("emptyGroup.new", "New")
+        let openTitle = start ? Strings.text("emptyGroup.openFile", "Open File…") : Strings.text("emptyGroup.open", "Open…")
+        if newButton?.title != newTitle { newButton?.title = newTitle }
+        if openButton?.title != openTitle { openButton?.title = openTitle }
+        let actionSize: NSControl.ControlSize = start ? .large : .regular
+        for case let button as NSButton in emptyActions.views where button.controlSize != actionSize {
+            button.controlSize = actionSize
+        }
         func height(_ label: NSTextField) -> CGFloat {
             ceil(label.sizeThatFits(NSSize(width: width, height: .greatestFiniteMagnitude)).height)
         }
         emptyStatus.isHidden = emptyStatus.stringValue.isEmpty
+        startIcon.isHidden = !start
         startTitle.isHidden = !start
         var rows: [(view: NSView, height: CGFloat, gap: CGFloat)] = []
-        if start { rows.append((startTitle, height(startTitle), 0)) }
+        if start {
+            rows.append((startIcon, 38, 0))
+            rows.append((startTitle, height(startTitle), 10))
+        }
         rows.append((emptyPrompt, height(emptyPrompt), start ? 4 : 0))
         rows.append((emptyActions, ceil(emptyActions.fittingSize.height), start ? 14 : gap))
         if !emptyStatus.isHidden { rows.append((emptyStatus, height(emptyStatus), gap)) }
@@ -547,14 +569,24 @@ final class EditorGroupSurface: NSView {
             }
         }
         // Center the entire group of visible items, keeping a margin in small panes.
+        let actionWidth = ceil(emptyActions.fittingSize.width)
+        let recentWidth = recentButtons.reduce(actionWidth) { max($0, ceil($1.intrinsicContentSize.width)) }
         var y = placeholder.bounds.height - max(margin, (placeholder.bounds.height - used) / 2)
         for row in rows {
             y -= row.gap + row.height
             let fitting: CGFloat
-            if row.view === emptyActions { fitting = ceil(emptyActions.fittingSize.width) }
-            else if row.view === shortcutDisclosure { fitting = ceil(shortcutDisclosure.intrinsicContentSize.width) }
-            else { fitting = width }
-            row.view.frame = NSRect(x: 0, y: y, width: min(width, fitting), height: row.height)
+            if row.view === emptyActions {
+                fitting = actionWidth
+            } else if row.view === shortcutDisclosure {
+                fitting = ceil(shortcutDisclosure.intrinsicContentSize.width)
+            } else if start && (row.view === recentHeading || recentButtons.contains(where: { $0 === row.view })) {
+                fitting = recentWidth
+            } else {
+                fitting = width
+            }
+            let rowWidth = min(width, fitting)
+            let x = start ? floor((width - rowWidth) / 2) : 0
+            row.view.frame = NSRect(x: x, y: y, width: rowWidth, height: row.height)
         }
     }
     deinit {

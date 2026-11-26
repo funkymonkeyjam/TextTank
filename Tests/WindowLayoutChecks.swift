@@ -879,6 +879,14 @@ import EditorBridge
                 && abs(page.frame.midX - start.content.bounds.midX) <= 1 && page.bounds.width < start.bounds.width / 2,
             "the large empty workspace centers a readable column with a heading and a Finder drop invitation")
         check(!disclosure.isHidden && start.hintRows.allSatisfy(\.isHidden), "shortcut hints start collapsed")
+        let primaryActions = try requireValue(descendants(page).compactMap { $0 as? NSStackView }.first,
+                                              "New and Open action row")
+        check(title.alignment == .center && dropPrompt.alignment == .center
+              && abs(primaryActions.frame.midX - page.bounds.midX) <= 1
+              && abs(disclosure.frame.midX - page.bounds.midX) <= 1
+              && primaryActions.views.compactMap { ($0 as? NSButton)?.title } == ["New Document", "Open File…"]
+              && primaryActions.views.compactMap { $0 as? NSButton }.allSatisfy { $0.controlSize == .large },
+              "the visible start actions share the window centerline with the invitation")
         let firstControl = try requireValue(start.emptyGroupFocusView, "first empty workspace control")
         check(startWindow.makeFirstResponder(firstControl), "New takes the keyboard in a fresh empty workspace")
         for _ in 0..<2 { start.keyDown(with: try key(48, "\t", in: startWindow)) }

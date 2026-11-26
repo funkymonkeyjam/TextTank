@@ -3312,6 +3312,28 @@
         }
       }
     },
+    "emptyGroup.newDocument": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New Document"
+          }
+        }
+      }
+    },
+    "emptyGroup.openFile": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open File…"
+          }
+        }
+      }
+    },
     "emptyGroup.new": {
       "extractionState": "manual",
       "localizations": {
