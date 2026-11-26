@@ -387,6 +387,7 @@ package struct PreviewScrollMap: Sendable, Equatable {
         }
     }
 
+    var markdownReferences: [String: MarkdownReference] = [:]
     package private(set) var blocks: [Block]
     package var count: Int { blocks.count }
 

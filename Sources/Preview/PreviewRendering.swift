@@ -164,7 +164,9 @@ enum PreviewRenderer {
             }
             let page = StaticHTMLPolicy.wrapFragment(fragment, title: request.title, stylesheet: request.stylesheet)
             return .page(
-                PreviewPage(pagePath: pagePath(), html: Data(page.utf8), report: report, scrollMap: scrollMap, selectionSource: request.source))
+                PreviewPage(
+                    pagePath: pagePath(), html: Data(page.utf8), report: report, scrollMap: scrollMap,
+                    selectionSource: request.source))
         }
     }
 
@@ -173,7 +175,10 @@ enum PreviewRenderer {
         case .cancelled: return nil
         case .limited(let limit): return .message(limit.message)
         case .prepared(let prepared):
-            return .page(PreviewPage(pagePath: pagePath(), html: Data(prepared.html.utf8), report: prepared.report, selectionSource: request.source))
+            return .page(
+                PreviewPage(
+                    pagePath: pagePath(), html: Data(prepared.html.utf8), report: prepared.report,
+                    selectionSource: request.source))
         }
     }
 
@@ -253,17 +258,18 @@ struct PreviewSelectionProbe: Sendable {
             }
             candidates.formUnion(found)
         }
-        // Keep input on scalar boundaries when a nearby entity, escape or CRLF makes the
-        // longer context differ from the rendered text.
-        for n in [1, 8] {
-            let suffix = String(String.UnicodeScalarView(endpoint.before.unicodeScalars.suffix(n)))
-            let prefix = String(String.UnicodeScalarView(endpoint.after.unicodeScalars.prefix(n)))
-            find(Data(suffix.utf8), offset: suffix.utf8.count)
-            find(Data(prefix.utf8), offset: 0)
-        }
         find(left + right, offset: left.count)
-        find(left, offset: left.count)
-        find(right, offset: 0)
+        if candidates.isEmpty {
+            find(left, offset: left.count)
+            find(right, offset: 0)
+            // Entities, escapes and normalized line endings can break both longer contexts.
+            for n in [8, 1] where candidates.isEmpty {
+                let suffix = String(String.UnicodeScalarView(endpoint.before.unicodeScalars.suffix(n)))
+                let prefix = String(String.UnicodeScalarView(endpoint.after.unicodeScalars.prefix(n)))
+                find(Data(suffix.utf8), offset: suffix.utf8.count)
+                find(Data(prefix.utf8), offset: 0)
+            }
+        }
         // A visible character can stand for a whole reference (&amp; or &#x1f642;).
         // The marker proof below decides whether either end actually produced the selection.
         if let ampersand = source[scope].firstIndex(of: 38) {
@@ -280,7 +286,9 @@ struct PreviewSelectionProbe: Sendable {
                             references.append(contentsOf: [i, j + 1])
                             break
                         }
-                        guard (48...57).contains(b) || (65...90).contains(b) || (97...122).contains(b) || b == 35 else { break }
+                        guard (48...57).contains(b) || (65...90).contains(b) || (97...122).contains(b) || b == 35 else {
+                            break
+                        }
                         j += 1
                     }
                     if references.count > 128 { references.removeLast(2) }
@@ -290,7 +298,8 @@ struct PreviewSelectionProbe: Sendable {
             candidates.formUnion(references)
         }
         guard !candidates.isEmpty, candidates.count <= 512, !Task.isCancelled else { return nil }
-        let positions = page.scrollMap == nil
+        let positions =
+            page.scrollMap == nil
             ? StaticHTMLPolicy.textBoundaries(candidates.sorted(), in: source) : candidates.sorted()
         guard !positions.isEmpty else { return nil }
         var marked = Data(), start = scope.lowerBound
@@ -300,8 +309,10 @@ struct PreviewSelectionProbe: Sendable {
             start = position
         }
         marked.append(source[start..<scope.upperBound])
-        if page.scrollMap != nil {
-            guard case .rendered(let fragment) = MarkdownRenderer.render(marked) else { return nil }
+        if let map = page.scrollMap {
+            guard case .rendered(let fragment) = MarkdownRenderer.renderSelectionBlock(marked, using: map),
+                fragment.utf8.count <= 512 * 1024
+            else { return nil }
             return Self(html: fragment, positions: positions)
         }
         return Self(html: String(decoding: marked, as: UTF8.self), positions: positions)

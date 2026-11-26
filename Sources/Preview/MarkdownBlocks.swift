@@ -41,7 +41,7 @@ struct MarkdownTable {
 }
 
 /// The target of a reference link, from a `[label]: destination "title"` line.
-struct MarkdownReference {
+struct MarkdownReference: Equatable, Sendable {
     var destination: [UInt8]
     var title: [UInt8]?
 }

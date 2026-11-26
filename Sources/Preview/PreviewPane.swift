@@ -27,6 +27,7 @@ import TextTankCore
     private(set) var outlinePresenter: PreviewOutlinePresenter?
 
     var onSelection: (([Range<Int>]) -> Void)?
+    var onUnmappedSelection: (() -> Void)?
 
     /// Selects the place of a JSON error in the source.
     var onGoToError: ((JSONSyntaxError) -> Void)?
@@ -226,6 +227,7 @@ import TextTankCore
             // Like `.message`: the sentence stands in place of the page, so it is announced (DS-72).
             if isNew, let sentence { Announce.say(sentence, from: self.window) }
         }
+        presenter.onUnmappedSelection = { [weak self] in self?.onUnmappedSelection?() }
         presenter.onContentLost = { [weak self] in self?.onContentLost?() }
         presenter.onWebViewCreated = { [weak self] in self?.passFocusToPresenter() }
         host(presenter.view)
@@ -303,6 +305,7 @@ import TextTankCore
         tablePresenter = nil
         outlinePresenter = nil
         contentHost.subviews.filter { $0 !== explanationLabel }.forEach { $0.removeFromSuperview() }
+        onUnmappedSelection = nil
         onSelection = nil
         onGoToError = nil
         onDocumentCommand = nil

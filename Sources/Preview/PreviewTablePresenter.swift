@@ -31,7 +31,8 @@ final class PreviewTableView: NSTableView {
         guard !restoring, !scrollView.isHidden, let table else { return }
         let ranges = tableView.selectedRowIndexes.rangeView.compactMap { rows -> Range<Int>? in
             guard rows.lowerBound >= 0, rows.upperBound <= table.rowCount else { return nil }
-            return table.rowSourceRanges[rows.lowerBound].lowerBound..<table.rowSourceRanges[rows.upperBound - 1].upperBound
+            return table.rowSourceRanges[rows.lowerBound]
+                .lowerBound..<table.rowSourceRanges[rows.upperBound - 1].upperBound
         }
         if !ranges.isEmpty { onSelection?(ranges) }
     }

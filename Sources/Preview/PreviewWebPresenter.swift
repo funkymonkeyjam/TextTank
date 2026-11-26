@@ -293,6 +293,7 @@ private final class PreviewSelectionReceiver: NSObject, WKScriptMessageHandler {
           // document. Compare the DOM path and the entire text node before accepting a mark.
           globalThis.textTankVerifySelection = (ticket, marker, markdown, probes) => {
             if (dragging || ticket !== serial || !same(last,selection())) return null;
+            if (probes.length !== 2) return [-1,-1];
             function verify(point, html) {
               const template = document.createElement('template');
               let liveRoot, probeRoot;
@@ -337,6 +338,7 @@ private final class PreviewSelectionReceiver: NSObject, WKScriptMessageHandler {
     }
     private var selectionWork: Task<Void, Never>?
     var onSelection: (([Range<Int>]) -> Void)?
+    var onUnmappedSelection: (() -> Void)?
 
     fileprivate func receivedSelection(_ message: WKScriptMessage) {
         selectionWork?.cancel()
@@ -353,22 +355,30 @@ private final class PreviewSelectionReceiver: NSObject, WKScriptMessageHandler {
             request.bounds.compactMap { PreviewSelectionProbe.make($0, page: page, marker: marker) }
         }
         selectionWork = Task { [weak self] in
-            let probes = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
-            guard probes.count == 2, !Task.isCancelled, let self, !self.view.isHidden,
+            let probes = await withTaskCancellationHandler {
+                await work.value
+            } onCancel: {
+                work.cancel()
+            }
+            guard !Task.isCancelled, let self, !self.view.isHidden,
                 self.pageURL == address, self.isSettled, let webView = self.webView
             else { return }
             do {
                 let reply = try await webView.callAsyncJavaScript(
                     "return globalThis.textTankVerifySelection(ticket, marker, markdown, probes)",
-                    arguments: ["ticket": request.ticket, "marker": marker, "markdown": page.scrollMap != nil,
-                                "probes": probes.map(\.html)], in: nil, contentWorld: .defaultClient)
+                    arguments: [
+                        "ticket": request.ticket, "marker": marker, "markdown": page.scrollMap != nil,
+                        "probes": probes.map(\.html)
+                    ], in: nil, contentWorld: .defaultClient)
                 guard !Task.isCancelled, !self.view.isHidden, self.isSettled, self.pageURL == address,
-                    let indexes = reply as? [Int], indexes.count == 2,
-                    probes[0].positions.indices.contains(indexes[0]), probes[1].positions.indices.contains(indexes[1])
+                    let indexes = reply as? [Int], indexes.count == 2
                 else { return }
+                guard probes.count == 2, probes[0].positions.indices.contains(indexes[0]),
+                    probes[1].positions.indices.contains(indexes[1])
+                else { self.onUnmappedSelection?(); return }
                 let start = probes[0].positions[indexes[0]], end = probes[1].positions[indexes[1]]
-                if start < end { self.onSelection?([start..<end]) }
-            } catch { /* The page or the selection went away. */ }
+                if start < end { self.onSelection?([start..<end]) } else { self.onUnmappedSelection?() }
+            } catch { /* The page or the selection went away. */  }
         }
     }
 
@@ -557,8 +567,12 @@ private final class PreviewSelectionReceiver: NSObject, WKScriptMessageHandler {
     /// see a registration there.
     static func installScripts(
         on controller: WKUserContentController, linkReceiver: any WKScriptMessageHandler,
-        scrollReceiver: any WKScriptMessageHandler, world: WKContentWorld = scriptWorld
+        scrollReceiver: any WKScriptMessageHandler, selectionReceiver: any WKScriptMessageHandler,
+        world: WKContentWorld = scriptWorld
     ) {
+        controller.add(selectionReceiver, contentWorld: world, name: selectionMessageName)
+        controller.addUserScript(
+            WKUserScript(source: selectionScript, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: world))
         controller.add(linkReceiver, contentWorld: world, name: linkMessageName)
         controller.addUserScript(
             WKUserScript(source: linkScript, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: world))
@@ -578,15 +592,13 @@ private final class PreviewSelectionReceiver: NSObject, WKScriptMessageHandler {
         configuration.userContentController.add(rules)
         let selectionReceiver = PreviewSelectionReceiver()
         selectionReceiver.presenter = self
-        configuration.userContentController.add(selectionReceiver, contentWorld: Self.scriptWorld, name: Self.selectionMessageName)
-        configuration.userContentController.addUserScript(
-            WKUserScript(source: Self.selectionScript, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: Self.scriptWorld))
         let receiver = PreviewLinkReceiver()
         receiver.presenter = self
         let scrollReceiver = PreviewScrollReceiver()
         scrollReceiver.presenter = self
         Self.installScripts(
-            on: configuration.userContentController, linkReceiver: receiver, scrollReceiver: scrollReceiver)
+            on: configuration.userContentController, linkReceiver: receiver, scrollReceiver: scrollReceiver,
+            selectionReceiver: selectionReceiver)
         configuration.setURLSchemeHandler(handler, forURLScheme: PreviewScheme.name)
         let created = PreviewWebView(frame: view.bounds, configuration: configuration)
         created.navigationDelegate = self

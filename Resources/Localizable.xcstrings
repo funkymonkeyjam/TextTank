@@ -727,6 +727,29 @@
         }
       }
     },
+    "preview.selection.macro": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Preview selections are not recorded in macros yet."
+          }
+        }
+      }
+    },
+
+    "preview.selection.unmapped": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "TextTank couldn’t locate this selection in Source."
+          }
+        }
+      }
+    },
     "preview.json.nameColumn": {
       "extractionState": "manual",
       "localizations": {

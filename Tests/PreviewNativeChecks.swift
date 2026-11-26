@@ -1206,8 +1206,10 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
 
     private static func previewSelection(root: URL, listener: LoopbackListener) throws {
         let folder = root.appendingPathComponent("preview-selection")
-        func checkPage(_ name: String, text: String, selector: String, start: Int, end: Int,
-                       expectedPrefix: String, expected: String) throws {
+        func checkPage(
+            _ name: String, text: String, selector: String, start: Int, end: Int,
+            expectedPrefix: String, expected: String, endSelector: String? = nil
+        ) throws {
             let (document, tab) = try open(name, text, in: folder)
             defer { document.close() }
             let editor = tab.primaryEditor, revision = editor.revision, undo = editor.historyName(redo: false)
@@ -1216,28 +1218,59 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
             let web = try requireValue(tab.previewCoordinator?.pane.webPresenter?.webView, "selection web view")
             tab.hostWindow?.makeFirstResponder(web)
             let focus = tab.hostWindow?.firstResponder
-            _ = script(web, """
+            _ = script(
+                web,
+                """
                 (() => { const node = document.querySelector('\(selector)').firstChild, r = document.createRange();
-                  r.setStart(node,\(start)); r.setEnd(node,\(end));
+                  r.setStart(node,\(start)); r.setEnd(document.querySelector('\(endSelector ?? selector)').firstChild,\(end));
                   const s = getSelection(); s.removeAllRanges(); s.addRange(r); return s.toString(); })()
                 """)
             let from = expectedPrefix.utf8.count, to = from + expected.utf8.count
             wait("preview selection reaches its exact source bytes: " + name, timeout: 5) {
                 editor.selectionStart == from && editor.selectionEnd == to
             }
-            check(tab.viewMode == .both && tab.hostWindow?.firstResponder === focus,
-                  "revealing Source alongside Preview preserves its responder: " + name)
-            check(editor.utf8Data == Data(text.utf8) && editor.revision == revision
+            check(
+                tab.viewMode == .both && tab.hostWindow?.firstResponder === focus,
+                "revealing Source alongside Preview preserves its responder: " + name)
+            check(
+                editor.utf8Data == Data(text.utf8) && editor.revision == revision
                     && editor.historyName(redo: false) == undo && !editor.modified,
-                  "a preview selection changes only the view: " + name)
+                "a preview selection changes only the view: " + name)
         }
         let prefix = "same\r\n\r\n🦊 and **same** then **"
-        try checkPage("repeat.md", text: prefix + "same**\r\n", selector: "p:nth-of-type(2) strong:last-child",
-                      start: 1, end: 3, expectedPrefix: prefix + "s", expected: "am")
+        try checkPage(
+            "repeat.md", text: prefix + "same**\r\n", selector: "p:nth-of-type(2) strong:last-child",
+            start: 1, end: 3, expectedPrefix: prefix + "s", expected: "am")
+        let richPrefix = "Details: **"
+        try checkPage(
+            "format.md", text: richPrefix + "one** and [two][ref]\n\n[ref]: /local\n",
+            selector: "strong", start: 0, end: 3, expectedPrefix: richPrefix, expected: "one** and [two",
+            endSelector: "a")
+        let initialConnections = listener.connections
         let html = "<html><head><title>copy</title></head><body><p>🌲 &amp; x</p><p title='🌲 &amp; x'>"
-        try checkPage("entity.html", text: html + "🌲 &amp; x</p><img src='http://127.0.0.1:\(listener.port)/proof'></body></html>",
-                      selector: "p:nth-of-type(2)", start: 0, end: 4,
-                      expectedPrefix: html, expected: "🌲 &amp;")
+        try checkPage(
+            "entity.html",
+            text: html + "🌲 &amp; x</p><img src='http://127.0.0.1:\(listener.port)/proof'></body></html>",
+            selector: "p:nth-of-type(2)", start: 0, end: 4,
+            expectedPrefix: html, expected: "🌲 &amp;")
+
+        settle(0.15)
+        check(listener.connections == initialConnections, "the detached selection proof never loads remote resources")
+
+        let large = "<!--" + String(repeating: "x", count: 512 * 1024) + "--><p>choose</p>"
+        let (largeDocument, largeTab) = try open("large.html", large, in: folder)
+        defer { largeDocument.close() }
+        largeTab.setViewMode(.preview)
+        waitCurrent(largeTab, "bounded selection fixture")
+        _ = script(
+            largeTab.previewCoordinator?.pane.webPresenter?.webView,
+            "getSelection().selectAllChildren(document.querySelector('p')); true")
+        wait("an unresolvable selection explains why Source did not move", timeout: 5) {
+            largeTab.statusText == "TextTank couldn’t locate this selection in Source."
+        }
+        check(
+            largeTab.viewMode == .preview && largeTab.primaryEditor.selectionCaret == 0,
+            "an unresolvable selection preserves the mode and caret")
 
         let (document, tab) = try open("stale.md", "old text\n", in: folder)
         defer { document.close() }
@@ -1248,12 +1281,15 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         let editor = tab.primaryEditor
         _ = editor.setSelectionAnchor(0, caret: 0)
         _ = editor.replaceSelection("added ")
-        _ = script(coordinator.pane.webPresenter?.webView, """
+        _ = script(
+            coordinator.pane.webPresenter?.webView,
+            """
             getSelection().selectAllChildren(document.body.querySelector('p')); true
             """)
         settle(0.3)
-        check(editor.selectionStart == 6 && editor.selectionEnd == 6,
-              "a selection from the page before the edit leaves the source caret alone")
+        check(
+            editor.selectionStart == 6 && editor.selectionEnd == 6,
+            "a selection from the page before the edit leaves the source caret alone")
     }
 
     private static func delimited(root: URL) throws {
@@ -1309,8 +1345,9 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         presenter.tableView.selectRowIndexes([1, 2], byExtendingSelection: false)
         let start = "name,value,note\n".utf8.count
         let end = start + "\"a,b\",00123,=SUM(A1)\n\"line1\nline2\",+1,1e5".utf8.count
-        check(tab.viewMode == .both && tab.primaryEditor.selectionStart == start && tab.primaryEditor.selectionEnd == end,
-              "selected CSV rows map to the original quoted and multiline records")
+        check(
+            tab.viewMode == .both && tab.primaryEditor.selectionStart == start && tab.primaryEditor.selectionEnd == end,
+            "selected CSV rows map to the original quoted and multiline records")
         check(
             presenter.selectedRowsText() == "a,b\t00123\t=SUM(A1)\n\"line1\nline2\"\t+1\t1e5",
             "Copy gives the selected rows as tab-separated text")
@@ -1405,9 +1442,10 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         outline.selectRowIndexes([deepRow], byExtendingSelection: false)
         let literal = Data(#""deep": "x\u00e9""#.utf8)
         let expected = try requireValue(Data(text.utf8).range(of: literal), "source spelling of JSON member")
-        check(tab.viewMode == .both && tab.primaryEditor.selectionStart == expected.lowerBound
+        check(
+            tab.viewMode == .both && tab.primaryEditor.selectionStart == expected.lowerBound
                 && tab.primaryEditor.selectionEnd == expected.upperBound,
-              "the selected JSON member shows its escaped original bytes")
+            "the selected JSON member shows its escaped original bytes")
         tab.setViewMode(.preview)
         check(
             outline.accessibilityRole() == .outline && outline.accessibilityLabel() == "Preview of data.json",
@@ -3436,7 +3474,7 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         // Nothing of the page ran, and nothing was fetched, with sync on.
         let world = Box<String?>(nil), worldDone = Box(false)
         web.evaluateJavaScript(
-            "typeof globalThis.textTankPreviewSync + ' ' + typeof (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.textTankPreviewSync)",
+            "typeof globalThis.textTankPreviewSync + ' ' + typeof (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.textTankPreviewSync) + ' ' + typeof globalThis.textTankVerifySelection + ' ' + typeof window.webkit?.messageHandlers?.textTankPreviewSelection",
             in: nil, in: .page
         ) { result in
             if case .success(let value) = result { world.value = value as? String }
@@ -3445,19 +3483,19 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         wait("the page's own world answered or refused") { worldDone.value }
         print("NOTE the page's own script world sees: \(world.value ?? "nothing; no script runs there")")
         check(
-            world.value == "undefined undefined",
+            world.value == "undefined undefined undefined undefined",
             "the page's own script world answers, and has neither the sync object nor its message handler: \(world.value ?? "no answer")"
         )
         check(
             PreviewWebPresenter.scriptWorld === WKContentWorld.defaultClient
                 && PreviewWebPresenter.scriptWorld !== WKContentWorld.page
-                && web.configuration.userContentController.userScripts.count == 2
+                && web.configuration.userContentController.userScripts.count == 3
                 && web.configuration.userContentController.userScripts.allSatisfy(\.isForMainFrameOnly),
-            "both scripts and both handlers are registered by one function, in the application's own world")
+            "all three scripts and their handlers are registered by one function, in the application's own world")
         // Negative control: the same registration made in the page's world of a throwaway web
         // view, also with page JavaScript off, is seen by the same probe.
         let probe =
-            "typeof globalThis.textTankPreviewSync + ' ' + typeof (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.textTankPreviewSync)"
+            "typeof globalThis.textTankPreviewSync + ' ' + typeof (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.textTankPreviewSync) + ' ' + typeof globalThis.textTankVerifySelection + ' ' + typeof window.webkit?.messageHandlers?.textTankPreviewSelection"
         final class Ignoring: NSObject, WKScriptMessageHandler {
             func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {}
         }
@@ -3466,6 +3504,7 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         exposedConfiguration.defaultWebpagePreferences.allowsContentJavaScript = false
         PreviewWebPresenter.installScripts(
             on: exposedConfiguration.userContentController, linkReceiver: Ignoring(), scrollReceiver: Ignoring(),
+            selectionReceiver: Ignoring(),
             world: .page)
         let exposed = WKWebView(frame: NSRect(x: 0, y: 0, width: 50, height: 50), configuration: exposedConfiguration)
         exposed.loadHTMLString("<p>control</p>", baseURL: nil)
@@ -3478,7 +3517,8 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         wait("control world answered") { exposedDone.value }
         print("NOTE with the registration in the page's world the probe sees: \(exposedWorld.value ?? "no answer")")
         check(
-            exposedWorld.value?.hasSuffix(" object") == true,
+            exposedWorld.value == "object object function object"
+                || exposedWorld.value == "undefined object undefined object",
             "control: registered in the page's world instead, the handler is there for the page and the probe says so: \(exposedWorld.value ?? "no answer")"
         )
         check(
