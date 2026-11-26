@@ -853,6 +853,34 @@ import EditorBridge
             _ = host.setEditorLayout(.single)
             window.setContentSize(originalSize)
         }
+        // Exercise the single-group layout with a fresh empty surface, without closing the other
+        // suites' documents or borrowing any recent files from the person using this Mac.
+        let start = EditorGroupSurface(slot: .first, host: host)
+        start.frame = NSRect(x: 0, y: 0, width: 1080, height: 720)
+        start.mount(nil)
+        start.layoutSubtreeIfNeeded()
+        let page = try requireValue(start.emptyGroupArea, "single empty workspace start area")
+        let title = try requireValue(
+            descendants(page).first { $0.identifier?.rawValue == "groups.start.title" } as? NSTextField,
+            "start title")
+        let dropPrompt = try requireValue(
+            descendants(page).first { $0.identifier?.rawValue == "groups.start.drop" } as? NSTextField,
+            "Finder drop hint")
+        let disclosure = try requireValue(
+            descendants(page).first { $0.identifier?.rawValue == "groups.start.shortcuts" } as? NSButton,
+            "shortcut disclosure")
+        check(
+            !title.isHidden && title.stringValue == "Open a document"
+                && title.font!.pointSize > dropPrompt.font!.pointSize
+                && dropPrompt.stringValue == "Drop files here to open them."
+                && abs(page.frame.midX - start.content.bounds.midX) <= 1 && page.bounds.width < start.bounds.width / 2,
+            "the large empty workspace centers a readable column with a heading and a Finder drop invitation")
+        check(!disclosure.isHidden && start.hintRows.allSatisfy(\.isHidden), "shortcut hints start collapsed")
+        disclosure.performClick(nil)
+        check(start.hintRows.allSatisfy { !$0.isHidden }, "the disclosure reveals all four live shortcuts")
+        disclosure.performClick(nil)
+        check(start.hintRows.allSatisfy(\.isHidden), "closing the disclosure returns to the quiet start layout")
+
         let (_, keptTab) = try open("kept.txt", "kept\n", in: folder)
         host.activate(keptTab)
         check(host.setEditorLayout(.twoColumns), "fixture: two editor groups, the second with no tabs")
@@ -1039,6 +1067,40 @@ import EditorBridge
         opened.close()
         window.contentView?.layoutSubtreeIfNeeded()
         check(surface.emptyGroupArea != nil, "fixture: the second group is empty again")
+
+        // Finder supplies file URLs. A named private pasteboard and a drag object with its
+        // location over the empty group exercise the real root destination and document opener.
+        final class FileDrag: NSObject {
+            @objc let draggingPasteboard = NSPasteboard.withUniqueName()
+            @objc var draggingLocation = NSPoint.zero
+            @objc var draggingSourceOperationMask = NSDragOperation.copy
+        }
+        let destination = try requireValue(window.contentView as? WorkspaceFileDropView, "workspace drop root")
+        check(destination.registeredDraggedTypes.contains(.fileURL), "workspace registers for Finder files")
+        let drag = FileDrag()
+        defer { drag.draggingPasteboard.releaseGlobally() }
+        let dragInfo = unsafeBitCast(drag, to: NSDraggingInfo.self)
+        drag.draggingLocation = surface.convert(NSPoint(x: surface.bounds.midX, y: surface.bounds.midY), to: nil)
+        drag.draggingPasteboard.setString("/a/path/as/plain-text", forType: .string)
+        check(destination.draggingEntered(dragInfo).isEmpty && !destination.performDragOperation(dragInfo),
+              "workspace leaves plain text to its normal drag destination")
+        drag.draggingPasteboard.clearContents()
+        _ = drag.draggingPasteboard.writeObjects([existing[0] as NSURL, existing[2] as NSURL])
+        drag.draggingSourceOperationMask = .move
+        check(destination.draggingUpdated(dragInfo).isEmpty, "opening files never promises a Finder move")
+        drag.draggingSourceOperationMask = .copy
+        host.activate(keptTab)
+        check(destination.draggingEntered(dragInfo) == .copy && destination.performDragOperation(dragInfo),
+              "dropping two file URLs into an inactive empty group is accepted")
+        spinUntil("both dropped files opened through the document controller") {
+            host.model.groups.first { $0.slot == .second }?.tabs.count == 2
+        }
+        for index in [0, 2] {
+            let doc = try requireValue(
+                NSDocumentController.shared.document(for: existing[index]) as? TextDocument, "dropped file opened")
+            check(doc.editor.text == names[index] + "\n", "native file open preserved its text")
+            doc.close()
+        }
 
         // A grid set up in a wide window and then shrunk keeps its columns in line and no group
         // below its minimum (the two rows used to be left at different divider positions).

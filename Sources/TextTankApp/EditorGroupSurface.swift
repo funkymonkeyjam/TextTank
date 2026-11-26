@@ -120,7 +120,6 @@ final class EditorGroupSurface: NSView {
         open.setAccessibilityLabel(Strings.text("emptyGroup.open.label", "Open a document in this group"))
         startTitle.font = .preferredFont(forTextStyle: .title1)
         startTitle.identifier = .init("groups.start.title")
-        startTitle.setAccessibilityRole(.heading)
         emptyPrompt.identifier = .init("groups.start.drop")
         emptyPrompt.textColor = .secondaryLabelColor
         shortcutDisclosure.title = Strings.text("emptyGroup.shortcuts", "Keyboard shortcuts")
@@ -477,10 +476,8 @@ final class EditorGroupSurface: NSView {
         mounted?.frame = content.bounds
         layoutPlaceholder()
     }
-    /// Stacks the placeholder from the top: the sentence, New and Open and any message always;
-    /// then as many hint rows and recent files as fit, in that order. A row that does not fit in
-    /// the height, or a sentence wider than the group, is hidden, never clipped (DS-67), and a
-    /// hidden row takes neither the keyboard nor VoiceOver.
+    /// The start area foregrounds actions and recent files; a small empty split keeps its shortcuts
+    /// visible. In either layout, entries that cannot fit are hidden from drawing and focus (DS-67).
     private func layoutPlaceholder() {
         let start = host?.model.layout == .single
         let availableWidth = max(0, content.bounds.width - 24)

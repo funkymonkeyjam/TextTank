@@ -463,8 +463,12 @@ Inside an area the group surface handles the keys its controls pass up:
 
 ## Empty group
 
-DS-10/20/67/70/73/84/85/100 apply. A group with no tabs shows, from the top: one sentence, the New
-and Open… buttons, a message when a command reported one there, then a hint.
+DS-10/20/67/70/73/84/85/100 apply. With one empty group, the workspace centers a start area
+with a Finder drop invitation, New and Open… buttons, and recent files. Keyboard shortcuts
+expand on request. In a split layout each empty group keeps its compact arrangement, with the
+shortcut hints directly below the buttons and any status message. Finder file drops open
+through the normal document controller, including on an empty group, the tab strip, the
+sidebar and a rendered web preview. Dragged text in the source editor keeps its editing behavior.
 
 The hint names up to four commands in secondary label style, one whole sentence each: New, Open,
 Quick Open and the Command Palette. Each sentence carries the key its menu item has at that moment,
@@ -473,7 +477,7 @@ what is shown; a command with no key is named by its menu instead ("Choose File 
 find a file by name."). VoiceOver hears the key in words. The rows are brought up to date when the
 group becomes empty, when tabs change and when the window becomes key again.
 
-Below the hint come up to five recent files, newest first, under the heading "Recent files". Each
+The list contains up to five recent files, newest first, under the heading "Recent files". Each
 is a button named for the file, with the path as its tooltip; two files with one name also show
 their folders. Activating one focuses that group and opens the file there by the Workspace Browser's
 route, the one File > Workspace > Reopen Recent File uses. The list is the one File > Open Recent
@@ -481,7 +485,7 @@ shows. Files that no longer exist, and folders, are left out: at most twenty ent
 on a utility queue, and an answer that arrives after a newer question is dropped. A host whose
 support directory is isolated reads no list of the person's and shows none unless it supplies one.
 
-Nothing is clipped. The sentence, the buttons and a message always stay. Hint rows, then recent
+In a compact group nothing is clipped. The sentence, the buttons and a message always stay. Hint rows, then recent
 files, are added while they fit the group's height; the first that does not fit, and everything
 after it, is hidden, and so is a sentence wider than the group. A hidden row takes neither the
 keyboard nor VoiceOver. At the least group size, 320 by 200 points, the four commands fit and no
