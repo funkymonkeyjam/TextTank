@@ -403,7 +403,9 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
             try switchingKeepsFocusAndScroll(root: root, app: app, host: host)
         }
         Checks.section("jumps into a Preview tab") { try jumpsRevealSource(root: root, app: app, host: host) }
-        Checks.section("settings routes for the preview") { try previewSettingsRoutes(root: root, app: app, host: host) }
+        Checks.section("settings routes for the preview") {
+            try previewSettingsRoutes(root: root, app: app, host: host)
+        }
         Checks.section("Control-Command-V from the preview") { try toggleKeyFromPreview(root: root, host: host) }
         Checks.section("scroll sync: Markdown") {
             try scrollSyncMarkdown(root: root, app: app, host: host, listener: listener)
@@ -611,9 +613,12 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         let preview = try previewMenu()
         check(
             view.items.first?.title == "Preview" && view.items[1].isSeparatorItem
-                && preview.items.map(\.title) == ["Source", "Preview", "Both", "Toggle Preview", "", "Sync Scrolling in Both"]
+                && preview.items.map(\.title) == [
+                    "Source", "Preview", "Both", "Toggle Preview", "", "Sync Scrolling in Both"
+                ]
                 && preview.items[4].isSeparatorItem,
-            "DS-D13 the Preview submenu opens the View menu with the three commands, Toggle Preview, a separator and Sync Scrolling in Both")
+            "DS-D13 the Preview submenu opens the View menu with the three commands, Toggle Preview, a separator and Sync Scrolling in Both"
+        )
 
         let document = DocumentFactory.makeUntitled()
         document.editor.text = "# Title\n\nplain so far\n"
@@ -971,7 +976,8 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         let web = try requireValue(presenter.webView, "web view")
         let handler = presenter.handler
         check(
-            tab.previewCoordinator?.renderCount == 1 && presenter.checkRecord.loadCount == 1 && presenter.checkRecord.contentLostCount == 0,
+            tab.previewCoordinator?.renderCount == 1 && presenter.checkRecord.loadCount == 1
+                && presenter.checkRecord.contentLostCount == 0,
             "showing Preview rendered and loaded the page once")
 
         picture(tab, "html")
@@ -1031,7 +1037,9 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         opened.value = []
         func unchanged(_ label: String) {
             settle(0.3)
-            let trace = presenter.checkRecord.recentDecisions.suffix(3).map { "\($0.url?.absoluteString ?? "nil") \($0.decision)" }
+            let trace = presenter.checkRecord.recentDecisions.suffix(3).map {
+                "\($0.url?.absoluteString ?? "nil") \($0.decision)"
+            }
             check(
                 (script(web, "location.href") as? String) == pageURL?.absoluteString && web.title == "Fixture"
                     && opened.value.isEmpty
@@ -1070,7 +1078,10 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         settle(0.4)
         check(listener.connections == 1, "a link's ping is not sent (\(listener.connections - 1))")
         _ = script(
-            web, press + "pointer('mousedown', 'external', 1); pointer('mouseup', 'external', 1); pointer('click', 'external', 1); 1")
+            web,
+            press
+                + "pointer('mousedown', 'external', 1); pointer('mouseup', 'external', 1); pointer('click', 'external', 1); 1"
+        )
         wait("external link routed") { !opened.value.isEmpty }
         settle(0.5)
         check(
@@ -1079,7 +1090,8 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         check(
             (script(web, "location.href") as? String)?.hasPrefix("texttank-preview:") == true
                 && handler.checkRecord.pageServeCount == 1 && listener.connections == 1,
-            "and the web view itself neither navigated nor made a connection for the click or its ping (\(listener.connections - 1))")
+            "and the web view itself neither navigated nor made a connection for the click or its ping (\(listener.connections - 1))"
+        )
         opened.value = []
         _ = script(web, "document.getElementById('external').click(); 1")
         settle(0.3)
@@ -1097,7 +1109,8 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
             settle(0.3)
             check(
                 opened.value == [URL(string: "\(base)/\(path)")!] && listener.connections == 1,
-                "a pressed SVG link is handed to the opener once and the web view makes no connection (\(id)): \(opened.value)")
+                "a pressed SVG link is handed to the opener once and the web view makes no connection (\(id)): \(opened.value)"
+            )
         }
         opened.value = []
         // An http: load started through the web view's own API is not checked against the
@@ -1719,8 +1732,12 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
                 retakes += 1
                 _ = tab.primaryEditor.setSelectionAnchor(editOffset, caret: editOffset)
                 _ = tab.primaryEditor.replaceSelection(" ")
-                wait("\(name) rendered again, retake \(retakes)", timeout: 180) { coordinator.isIdle && coordinator.isCurrent }
-                print("TIMING \(name): apply after an edit retaken (\(retakes)): \(coordinator.lastApplySeconds) s after \(secondApply) s")
+                wait("\(name) rendered again, retake \(retakes)", timeout: 180) {
+                    coordinator.isIdle && coordinator.isCurrent
+                }
+                print(
+                    "TIMING \(name): apply after an edit retaken (\(retakes)): \(coordinator.lastApplySeconds) s after \(secondApply) s"
+                )
                 secondApply = min(secondApply, coordinator.lastApplySeconds)
             }
             print(
@@ -1737,14 +1754,16 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
             if let outline, secondEdit == nil {
                 check(
                     outline.numberOfRows == rowsBefore && outline.isItemExpanded(outline.item(atRow: 0)),
-                    "\(name): the tree is as open after the edit as before it (\(outline.numberOfRows) of \(rowsBefore) rows)")
+                    "\(name): the tree is as open after the edit as before it (\(outline.numberOfRows) of \(rowsBefore) rows)"
+                )
             } else if let outline {
                 // Every member moved down one place, so each open row had to be found by name,
                 // until the allowance for that was used up.
                 let stillOpen = outline.numberOfRows - 2 - outline.numberOfChildren(ofItem: outline.item(atRow: 0)) + 1
                 check(
                     outline.isItemExpanded(outline.item(atRow: 0)) && (1..<openRows).contains(stillOpen),
-                    "\(name): after a member is added at the top, the outermost row stays open and as many rows inside as the allowance covers (\(stillOpen) of \(openRows))")
+                    "\(name): after a member is added at the top, the outermost row stays open and as many rows inside as the allowance covers (\(stillOpen) of \(openRows))"
+                )
             }
             check(typing < 0.25, "\(name): a keystroke in Both returned in \(String(format: "%.4f", typing)) s")
             document.close()
@@ -1881,7 +1900,9 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
     private static func tabButton(_ tab: EditorWindowController, in strip: DocumentTabStrip) throws -> NSButton {
         let id = try requireValue(tab.tabID, "fixture: tab identity")
         return try requireValue(
-            descendants(of: strip, as: NSButton.self).first { $0.identifier?.rawValue == "tab." + id.rawValue.uuidString },
+            descendants(of: strip, as: NSButton.self).first {
+                $0.identifier?.rawValue == "tab." + id.rawValue.uuidString
+            },
             "fixture: the tab's own button")
     }
     private static func markButton(_ tab: EditorWindowController, in strip: DocumentTabStrip) throws -> NSButton {
@@ -1917,8 +1938,9 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         let (notes, notesTab) = try open("notes.md", "# Notes\n\nfirst\n", in: folder)
         let (plain, plainTab) = try open("plain.txt", "plain text\n", in: folder)
         let commands = host.tabCommands
-        let notesID = try requireValue(notesTab.tabID, "fixture: notes tab"), plainID = try requireValue(
-            plainTab.tabID, "fixture: plain tab")
+        let notesID = try requireValue(notesTab.tabID, "fixture: notes tab"),
+            plainID = try requireValue(
+                plainTab.tabID, "fixture: plain tab")
         check(host.active === plainTab && notesTab.viewMode == .source, "fixture: the plain-text tab is the active one")
 
         var items = viewModeItems(in: commands.contextMenu(for: notesID))
@@ -1926,7 +1948,8 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
             items.map(\.title) == ["Source", "Preview", "Both"]
                 && items.map { $0.identifier?.rawValue ?? "" }
                     == ["tabs.command.viewMode.source", "tabs.command.viewMode.preview", "tabs.command.viewMode.both"],
-            "DS-20 a previewable tab's menu has Source, Preview and Both, titled as in the View menu, with stable identifiers")
+            "DS-20 a previewable tab's menu has Source, Preview and Both, titled as in the View menu, with stable identifiers"
+        )
         check(
             items.map(\.state) == [.on, .off, .off] && items.allSatisfy(\.isEnabled),
             "DS-22 the checkmark is on what that tab shows, and all three are enabled")
@@ -1935,7 +1958,8 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         check(
             first > 0 && menu.items[first - 1].isSeparatorItem
                 && menu.items.filter { !$0.isSeparatorItem }.count <= 20,
-            "the three items are a section of their own, and the menu stays within DS-23 (\(menu.items.filter { !$0.isSeparatorItem }.count) items)")
+            "the three items are a section of their own, and the menu stays within DS-23 (\(menu.items.filter { !$0.isSeparatorItem }.count) items)"
+        )
         check(
             viewModeItems(in: commands.contextMenu(for: plainID)).isEmpty,
             "DS-21 a tab whose document has no preview has no such section")
@@ -2048,14 +2072,18 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         check(try !layout(plainID).markShown, "the pointer over a tab with no preview brings up no mark")
         try hover(notesTab, in: strip)
         var mark = try markButton(notesTab, in: strip)
-        check(try layout(notesID).markShown && !mark.isHidden, "the pointer over a previewable tab in Source shows its mark")
         check(
-            mark.accessibilityLabel() == "Show preview beside source for notes.md" && mark.toolTip == mark.accessibilityLabel()
+            try layout(notesID).markShown && !mark.isHidden,
+            "the pointer over a previewable tab in Source shows its mark")
+        check(
+            mark.accessibilityLabel() == "Show preview beside source for notes.md"
+                && mark.toolTip == mark.accessibilityLabel()
                 && mark.accessibilityRole() == .button && mark.image != nil,
             "DS-70 the mark is a button that names the document and the result, with the same tooltip")
         var frames = try layout(notesID)
         check(
-            frames.mark.width == 28 && frames.mark.height == 28 && frames.close.width == 28 && frames.close.height == 28,
+            frames.mark.width == 28 && frames.mark.height == 28 && frames.close.width == 28
+                && frames.close.height == 28,
             "DS-74 the mark and the close button are 28 by 28 points")
         check(
             frames.mark.minX - frames.title.maxX == 4 && frames.close.minX - frames.mark.maxX == 4
@@ -2106,14 +2134,16 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         // Without a pointer: an action on the tab itself.
         var actions = try tabButton(notesTab, in: strip).accessibilityCustomActions() ?? []
         let show = try requireValue(
-            actions.first { $0.name == "Show Preview Beside Source" }, "DS-73 a Source tab offers the preview as an action")
+            actions.first { $0.name == "Show Preview Beside Source" },
+            "DS-73 a Source tab offers the preview as an action")
         check(
             show.handler?() == true && notesTab.viewMode == .both && host.active === plainTab,
             "the action shows Both without selecting the tab")
         actions = try tabButton(notesTab, in: strip).accessibilityCustomActions() ?? []
         let plainActions = try tabButton(plainTab, in: strip).accessibilityCustomActions() ?? []
         check(
-            actions.contains { $0.name == "Show Source" } && !actions.contains { $0.name == "Show Preview Beside Source" }
+            actions.contains { $0.name == "Show Source" }
+                && !actions.contains { $0.name == "Show Preview Beside Source" }
                 && !plainActions.contains { $0.name.hasPrefix("Show ") },
             "the action names what it will do next; a tab with no preview has none")
 
@@ -2171,7 +2201,8 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         strip.layout()
         check(
             try width(notesID) < DocumentTabStrip.hoverMarkMinimumTabWidth && width(notesID) >= 130,
-            "fixture: seven tabs in an 800-point window are below the width a pointer mark needs (\(try width(notesID)) pt)")
+            "fixture: seven tabs in an 800-point window are below the width a pointer mark needs (\(try width(notesID)) pt)"
+        )
         notesTab.setViewMode(.source)
         try hover(notesTab, in: strip)
         frames = try layout(notesID)
@@ -2231,7 +2262,9 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         check(
             holders(toggleKey) == [" > View > Preview > Toggle Preview"],
             "no other menu item uses Control-Command-V: \(holders(toggleKey))")
-        check(holders(formerKey).isEmpty, "Shift-Command-V is no longer bound to anything by default: \(holders(formerKey))")
+        check(
+            holders(formerKey).isEmpty,
+            "Shift-Command-V is no longer bound to anything by default: \(holders(formerKey))")
         let context = app.settings.shortcutContext
         let catalogDefaults =
             EditorCommand.allCases.compactMap { $0.extendedMenuShortcut }
@@ -2244,7 +2277,8 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
                     == ["toggleDocumentPreview:"]
                 && context.commands["toggleDocumentPreview:"]?.yields == true
                 && !context.commands.values.contains { $0.standard?.identity == formerKey.identity },
-            "Control-Command-V is not a system, fixed or editor-command key and is the default of this command alone; nothing has Shift-Command-V by default")
+            "Control-Command-V is not a system, fixed or editor-command key and is the default of this command alone; nothing has Shift-Command-V by default"
+        )
         // The person's own assignments win, for the new key and for the old one.
         let clean = app.settings.value
         var custom = clean
@@ -2253,7 +2287,8 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         check(
             toggle.keyEquivalent.isEmpty && app.settings.ignoredShortcutBindings.isEmpty
                 && holders(toggleKey) == [" > Edit > Convert Case > Uppercase"],
-            "a person's own Control-Command-V shortcut is kept, and Toggle Preview gives up the key: \(holders(toggleKey))")
+            "a person's own Control-Command-V shortcut is kept, and Toggle Preview gives up the key: \(holders(toggleKey))"
+        )
         try app.settings.save(clean)
         check(toggle.keyEquivalent == "v" && holders(toggleKey).count == 1, "fixture: the default shortcut returns")
         custom = clean
@@ -2261,15 +2296,20 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         try app.settings.save(custom)
         check(
             holders(formerKey) == [" > Edit > Convert Case > Uppercase"] && toggle.keyEquivalent == "v"
-                && toggle.keyEquivalentModifierMask == [.control, .command] && app.settings.ignoredShortcutBindings.isEmpty,
-            "a settings file that gives Shift-Command-V to another command still does, and Toggle Preview keeps its new key")
+                && toggle.keyEquivalentModifierMask == [.control, .command]
+                && app.settings.ignoredShortcutBindings.isEmpty,
+            "a settings file that gives Shift-Command-V to another command still does, and Toggle Preview keeps its new key"
+        )
         // A file written while Shift-Command-V was the default may hold it for Toggle Preview itself.
         let kept = try EditorSettings.load(
-            Data(#"{"version":2,"tabWidth":4,"useTabs":true,"wrap":false,"appearance":"system","shortcuts":{"toggleDocumentPreview:":"V"}}"#.utf8),
+            Data(
+                #"{"version":2,"tabWidth":4,"useTabs":true,"wrap":false,"appearance":"system","shortcuts":{"toggleDocumentPreview:":"V"}}"#
+                    .utf8),
             context: context)
         try app.settings.save(kept.settings)
         check(
-            kept.issues.isEmpty && holders(formerKey) == [" > View > Preview > Toggle Preview"] && holders(toggleKey).isEmpty,
+            kept.issues.isEmpty && holders(formerKey) == [" > View > Preview > Toggle Preview"]
+                && holders(toggleKey).isEmpty,
             "a person who assigned Shift-Command-V to Toggle Preview keeps it there: \(holders(formerKey))")
         try app.settings.save(clean)
         check(
@@ -2278,7 +2318,8 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
             "fixture: the defaults again")
         check(
             view.items.filter { !$0.isSeparatorItem && !$0.isHidden }.count <= 20,
-            "DS-23 View lists no more than twenty items (\(view.items.filter { !$0.isSeparatorItem && !$0.isHidden }.count))")
+            "DS-23 View lists no more than twenty items (\(view.items.filter { !$0.isSeparatorItem && !$0.isHidden }.count))"
+        )
 
         let untitled = DocumentFactory.makeUntitled()
         let plainTab = try requireValue(untitled.presentation, "untitled tab")
@@ -2296,7 +2337,9 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         check(tab.viewMode == .source && tab.previewCoordinator == nil, "from Both it returns to Source")
         let items = try viewModeItems()
         tab.setDocumentViewMode(items[1])
-        check(tab.viewMode == .preview && app.settings.toggledPreviewMode == .preview, "choosing View > Preview is remembered")
+        check(
+            tab.viewMode == .preview && app.settings.toggledPreviewMode == .preview,
+            "choosing View > Preview is remembered")
         tab.toggleDocumentPreview(toggle)
         check(tab.viewMode == .source, "from Preview it returns to Source")
         tab.toggleDocumentPreview(toggle)
@@ -2310,7 +2353,9 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         tab.setViewMode(.source)
         tab.setViewMode(.both)
         tab.revealSource()
-        check(app.settings.toggledPreviewMode == .preview, "a mode set by the app itself does not change what is remembered")
+        check(
+            app.settings.toggledPreviewMode == .preview,
+            "a mode set by the app itself does not change what is remembered")
         tab.setViewMode(.source)
         let id = try requireValue(tab.tabID, "fixture: tab identity")
         check(
@@ -2346,7 +2391,8 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         let folder = root.appendingPathComponent("open-in")
         let samples: [(PreviewFormat, String, String)] = [
             (.markdown, "page.md", "# Page\n"), (.html, "page.html", "<p>Page</p>\n"),
-            (.delimited, "rows.csv", "a,b\n1,2\n"), (.svg, "shape.svg", "<svg xmlns=\"http://www.w3.org/2000/svg\"/>\n"),
+            (.delimited, "rows.csv", "a,b\n1,2\n"),
+            (.svg, "shape.svg", "<svg xmlns=\"http://www.w3.org/2000/svg\"/>\n"),
             (.json, "data.json", "{\"a\": 1}\n")
         ]
         func openFresh(_ url: URL) throws -> (TextDocument, EditorWindowController) {
@@ -2436,7 +2482,9 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         let (kept, keptTab) = try openFresh(write("# Kept\n", "kept.md", in: folder))
         keptTab.setViewMode(.preview)
         controllerTab.setViewMode(.source)
-        check(keptTab.viewMode == .preview && controllerTab.viewMode == .source, "fixture: one tab in Preview, one in Source")
+        check(
+            keptTab.viewMode == .preview && controllerTab.viewMode == .source,
+            "fixture: one tab in Preview, one in Source")
         let session = try OpenSessionLayout(host).diskLayout()
         check(
             session.files.count == 2 && session.layout.groups.flatMap(\.tabs).compactMap(\.viewMode) == [.preview],
@@ -2444,8 +2492,11 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         kept.close()
         viaController.close()
         check(host.active == nil, "fixture: the workspace is empty before the session is reopened")
-        let reopened = AutomaticSession(url: folder.appendingPathComponent("last-session.json")).reopen(session, in: host)
-        check(reopened.notices.isEmpty && reopened.files.count == 2, "fixture: the session reopens both files \(reopened.notices)")
+        let reopened = AutomaticSession(url: folder.appendingPathComponent("last-session.json")).reopen(
+            session, in: host)
+        check(
+            reopened.notices.isEmpty && reopened.files.count == 2,
+            "fixture: the session reopens both files \(reopened.notices)")
         let restoredKept = try requireValue(
             reopened.files[TextDocument.canonicalDiskURL(folder.appendingPathComponent("kept.md"))]
                 ?? reopened.files.first { $0.key.lastPathComponent == "kept.md" }?.value, "fixture: kept.md reopened")
@@ -2525,12 +2576,14 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         }
         host.moveTabs([notesID], target: notesID, to: .second)
         let moved = try requireValue(
-            host.presentations.first { ($0.document as? TextDocument) === notes }, "fixture: notes.md in the second group")
+            host.presentations.first { ($0.document as? TextDocument) === notes },
+            "fixture: notes.md in the second group")
         let movedID = try requireValue(moved.tabID, "fixture: its tab")
         host.activate(moved)
         moved.showFind(nil)
         let first = try requireValue(
-            host.presentations.first { ($0.document as? TextDocument) === other }, "fixture: other.txt in the first group")
+            host.presentations.first { ($0.document as? TextDocument) === other },
+            "fixture: other.txt in the first group")
         host.activate(first)
         host.window?.makeFirstResponder(first.primaryEditor)
         responder = host.window?.firstResponder
@@ -2551,7 +2604,9 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         host.activate(moved)
         moved.setViewMode(.source)
         moved.showFind(nil)
-        check(moved.findBarVisible && !keyboard(in: moved.primaryEditor, of: host), "fixture: the keyboard is in the find field")
+        check(
+            moved.findBarVisible && !keyboard(in: moved.primaryEditor, of: host),
+            "fixture: the keyboard is in the find field")
         moved.setDocumentViewMode(try viewModeItems()[1])
         check(
             moved.viewMode == .preview && !moved.findBarVisible
@@ -2713,13 +2768,16 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         let plainOpen = try TextOpenRequest(path: url.path, line: nil).open()
         let plainTab = try requireValue(plainOpen.presentation, "fixture: tab")
         check(
-            plainTab.viewMode == .preview && plainTab.previewCoordinator.map { keyboard(in: $0.pane, of: host) } == true,
+            plainTab.viewMode == .preview
+                && plainTab.previewCoordinator.map { keyboard(in: $0.pane, of: host) } == true,
             "without a line the file opens in Preview alone, as Settings says")
 
         // A search result that activates the editor (Find in Folder, Find and Replace results).
         let (elsewhere, elsewhereTab) = try open("elsewhere.txt", "elsewhere\n", in: folder)
         host.window?.makeFirstResponder(elsewhereTab.primaryEditor)
-        check(plainTab.viewMode == .preview && host.active === elsewhereTab, "fixture: the Preview tab is in the background")
+        check(
+            plainTab.viewMode == .preview && host.active === elsewhereTab,
+            "fixture: the Preview tab is in the background")
         _ = plainTab.primaryEditor.setSelectionAnchor(10, caret: 14)
         EditorLifetime.activate(plainTab.primaryEditor)
         check(
@@ -2779,7 +2837,8 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         // The Settings window's two pop-ups. The window is an ordinary panel, not a dialog.
         app.settings.showSettings(nil)
         let form = try requireValue(
-            FormPanel.visible.last { $0.window.identifier?.rawValue == "TextTank.Settings" }, "fixture: Settings window")
+            FormPanel.visible.last { $0.window.identifier?.rawValue == "TextTank.Settings" }, "fixture: Settings window"
+        )
         defer { form.close() }
         let content = try requireValue(form.window.contentView, "fixture: Settings content")
         func popup(_ identifier: String) throws -> NSPopUpButton {
@@ -2796,9 +2855,11 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
             format.itemTitles == ["Markdown", "HTML", "CSV and TSV", "SVG", "JSON"]
                 && openIn.itemTitles == ["Source", "Preview", "Both"] && format.titleOfSelectedItem == "Markdown"
                 && openIn.titleOfSelectedItem == "Source",
-            "DS-24 Settings lists the five formats and Source, Preview and Both in words, starting at Markdown in Source")
+            "DS-24 Settings lists the five formats and Source, Preview and Both in words, starting at Markdown in Source"
+        )
         check(
-            format.accessibilityLabel() == "Preview format" && openIn.accessibilityLabel() == "Open Markdown documents in",
+            format.accessibilityLabel() == "Preview format"
+                && openIn.accessibilityLabel() == "Open Markdown documents in",
             "DS-70 both pop-ups are labelled, the second with the format it is for")
         pick(openIn, "both")
         check(
@@ -2831,7 +2892,9 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         let reopened = NSDocumentController.shared.documents.compactMap { $0 as? TextDocument }.first {
             $0.fileURL?.lastPathComponent == "page.md"
         }
-        check(reopened?.presentation?.viewMode == .both, "a reopened closed tab opens in the mode Settings gives its format")
+        check(
+            reopened?.presentation?.viewMode == .both,
+            "a reopened closed tab opens in the mode Settings gives its format")
 
         // A session reopened into a workspace that already has tabs does not apply its layout,
         // so nothing restores a mode; the session's tabs still do not take the setting.
@@ -2860,9 +2923,11 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         try Data(#"{"tabWidth":4,"wrap":false,"useTabs":true,"version":1,"appearance":"system","shortcuts":{}}"#.utf8)
             .write(to: url)
         let applied = Box<[(Int, Int?)]>([])
-        let controller = SettingsController(url: url, onApply: { value, previous in
-            applied.value.append((value.tabWidth, previous?.tabWidth))
-        })
+        let controller = SettingsController(
+            url: url,
+            onApply: { value, previous in
+                applied.value.append((value.tabWidth, previous?.tabWidth))
+            })
         try Data(#"{"tabWidth":7,"wrap":false,"useTabs":true,"version":1,"appearance":"system","shortcuts":{}}"#.utf8)
             .write(to: url)
         controller.noteRenderedMode(.preview)
@@ -2878,7 +2943,9 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         let bytes = Data("{\"version\":2}".utf8)
         try bytes.write(to: broken)
         let unreadable = SettingsController(url: broken)
-        check(unreadable.loadError != nil && unreadable.toggledPreviewMode == .both, "fixture: an unreadable settings file")
+        check(
+            unreadable.loadError != nil && unreadable.toggledPreviewMode == .both,
+            "fixture: an unreadable settings file")
         unreadable.noteRenderedMode(.preview)
         let untouched = try Data(contentsOf: broken)
         check(
@@ -2916,9 +2983,13 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
             window.makeFirstResponder(focus)
             check(keyboard(in: focus, of: host), "fixture: the keyboard is in the preview of \(name)")
             let swallowed = window.performKeyEquivalent(with: key)
-            print("NOTE \(name): the preview's views \(swallowed ? "answered" : "did not answer") Control-Command-V themselves")
+            print(
+                "NOTE \(name): the preview's views \(swallowed ? "answered" : "did not answer") Control-Command-V themselves"
+            )
             if !(focus is WKWebView), descendants(of: focus, as: WKWebView.self).isEmpty {
-                check(!swallowed, "no view of the \(name) preview takes Control-Command-V for itself, so it reaches the menu")
+                check(
+                    !swallowed,
+                    "no view of the \(name) preview takes Control-Command-V for itself, so it reaches the menu")
             }
             check(
                 reaches(tab) && tab.validateMenuItem(NSMenuItem(title: "", action: toggle, keyEquivalent: "")),
@@ -2929,7 +3000,9 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         }
         let (document, tab) = try open("find.md", "# Find\n", in: folder)
         tab.showFind(nil)
-        check(tab.findBarVisible && !keyboard(in: tab.primaryEditor, of: host), "fixture: the keyboard is in the find field")
+        check(
+            tab.findBarVisible && !keyboard(in: tab.primaryEditor, of: host),
+            "fixture: the keyboard is in the find field")
         check(
             !window.performKeyEquivalent(with: key),
             "the find field does not take Control-Command-V for itself")
@@ -3078,7 +3151,10 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
             ("a head tag inside an svg element", "<svg><head></svg>" + tail),
             ("a head tag that is never finished", tail + "<head"),
             ("a base tag before the head", "<html><base href=\"\(listener.base)/\"><head>" + tail),
-            ("an ordinary document", "<!DOCTYPE html><html><head><title>t</title></head><body>" + tail + "</body></html>")
+            (
+                "an ordinary document",
+                "<!DOCTYPE html><html><head><title>t</title></head><body>" + tail + "</body></html>"
+            )
         ]
         for (name, html) in cases {
             tab.primaryEditor.text = html
@@ -3103,7 +3179,8 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
                 violations.contains("frame-src") && violations.contains("object-src")
                     && !paths.contains { $0.hasSuffix("local.svg") }
                     && !handler.checkRecord.servedLocalFileNames.contains("local.svg"),
-                "\(name): the policy refused the frame and the object, and neither was asked for: \(paths.map { $0.split(separator: "/").last ?? "" })")
+                "\(name): the policy refused the frame and the object, and neither was asked for: \(paths.map { $0.split(separator: "/").last ?? "" })"
+            )
             let served = handler.checkRecord.pageServeCount
             _ = value("document.getElementById('form').submit(); 1")
             settle(0.2)
@@ -3330,8 +3407,9 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
             "DS-67 the button is under the sentence, whole and inside the pane: \(narrow.button)")
         let wide = frames(width: 600)
         check(
-            wide.button.minX >= wide.label.maxX && wide.button.maxX <= 600 && wide.label.intersects(
-                NSRect(x: 0, y: wide.button.minY, width: 600, height: wide.button.height)),
+            wide.button.minX >= wide.label.maxX && wide.button.maxX <= 600
+                && wide.label.intersects(
+                    NSRect(x: 0, y: wide.button.minY, width: 600, height: wide.button.height)),
             "in a pane with room the button stays beside the sentence: \(wide.label) \(wide.button)")
         // The same pane follows a change of width.
         wide.pane.setFrameSize(NSSize(width: minimum, height: 400))
@@ -3440,7 +3518,8 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
             [editor.selectionAnchor, editor.selectionCaret, Int(editor.revision)] == stateBefore && !editor.modified
                 && !document.isDocumentEdited && host.window?.firstResponder === keyboardBefore
                 && document.fileURL?.lastPathComponent == "long.md",
-            "sync moved neither the selection nor the caret nor the keyboard, and changed neither the text nor the file")
+            "sync moved neither the selection nor the caret nor the keyboard, and changed neither the text nor the file"
+        )
 
         // Reports are checked: only three numbers that name this page and a place in its map count.
         let generation = presenter.followGeneration
@@ -3546,12 +3625,14 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
             "## Section 2\n", with: "Inserted paragraph one.\n\nInserted paragraph two.\n\n## Section 2\n", in: editor)
         check(
             editor.firstVisibleDocumentLine == sourceTopBefore + 4,
-            "fixture: the source kept showing the same text, now four lines further down: \(editor.firstVisibleDocumentLine)")
+            "fixture: the source kept showing the same text, now four lines further down: \(editor.firstVisibleDocumentLine)"
+        )
         waitCurrent(tab, "after an edit above")
         wait("the reader's place is restored") { abs((blockTop(web, "Section 31") ?? 1e9) - topBefore) < 2 }
         let offsetAfter = number(web, "window.scrollY") ?? 0
         check(
-            pageText(tab).contains("Inserted paragraph two.") && abs((blockTop(web, "Section 31") ?? 1e9) - topBefore) < 2,
+            pageText(tab).contains("Inserted paragraph two.")
+                && abs((blockTop(web, "Section 31") ?? 1e9) - topBefore) < 2,
             "an edit above the visible area does not move what the reader is looking at: the next heading was at \(topBefore) and is at \(blockTop(web, "Section 31") ?? -1)"
         )
         check(
@@ -3564,7 +3645,8 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
             "the new page has its own map and its own number, so a report from the page before it is dropped")
         settle(0.3)
         check(
-            sync.checkRecord.sourceScrolls == counts.sourceScrolls && sync.checkRecord.previewScrolls == counts.previewScrolls,
+            sync.checkRecord.sourceScrolls == counts.sourceScrolls
+                && sync.checkRecord.previewScrolls == counts.previewScrolls,
             "restoring the place scrolled nothing through sync")
         // Typing where the caret is, in view: neither side moves.
         let sourceTop = editor.firstVisibleDocumentLine
@@ -3690,7 +3772,8 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
             "an HTML page has no map and is not followed")
         tab.primaryEditor.scrollTo(documentLine: 150, subline: 0)
         _ = script(web, "window.scrollTo(0, 2000); 0")
-        _ = script(web, "window.dispatchEvent(new Event('scroll')); document.body.dispatchEvent(new Event('scroll')); 0")
+        _ = script(
+            web, "window.dispatchEvent(new Event('scroll')); document.body.dispatchEvent(new Event('scroll')); 0")
         settle(0.5)
         check(
             web.title == "Sync fixture" && script(web, "document.documentElement.getAttribute('data-ran')") is NSNull,
@@ -3709,7 +3792,8 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         check(listener.connections == 1, "the page with scripts made no network connection with sync on")
         check(
             !PreviewWebPresenter.syncScript.contains("smooth") && PreviewWebPresenter.syncScript.contains("'instant'")
-                && !PreviewWebPresenter.syncScript.contains("fetch") && !PreviewWebPresenter.syncScript.contains("XMLHttp")
+                && !PreviewWebPresenter.syncScript.contains("fetch")
+                && !PreviewWebPresenter.syncScript.contains("XMLHttp")
                 && !PreviewWebPresenter.syncScript.contains("innerHTML"),
             "the sync script scrolls at once, never animated, and neither loads nor writes anything")
         document.close()
@@ -3731,9 +3815,10 @@ private final class RecordingSchemeTask: NSObject, WKURLSchemeTask {
         }
 
         // Row 10, 20, ... hold a value with a line break inside its quotation marks.
-        let csv = (1...400).map { row in
-            row % 10 == 0 ? "\"first \(row)\nsecond line\",b\(row),c\(row)" : "a\(row),b\(row),c\(row)"
-        }.joined(separator: "\n") + "\n"
+        let csv =
+            (1...400).map { row in
+                row % 10 == 0 ? "\"first \(row)\nsecond line\",b\(row),c\(row)" : "a\(row),b\(row),c\(row)"
+            }.joined(separator: "\n") + "\n"
         let (csvDocument, csvTab) = try open("rows.csv", csv, in: folder)
         check(csvTab.setViewMode(.both), "fixture: the CSV document shows Both")
         waitCurrent(csvTab, "CSV in Both")

@@ -24,18 +24,23 @@ import zlib
             }
             let rawJSON = #"{"x":[1.2300e+400,-0,"\uD83D\uDE00"],"x":" a  b "}"#
             let formattedJSON = try TextUtility.formatJSON.apply(rawJSON)
-            check(formattedJSON.contains("1.2300e+400") && formattedJSON.contains(#""\uD83D\uDE00""#)
-                && formattedJSON.components(separatedBy: #""x":"#).count == 3 && formattedJSON.contains(#"" a  b ""#),
+            check(
+                formattedJSON.contains("1.2300e+400") && formattedJSON.contains(#""\uD83D\uDE00""#)
+                    && formattedJSON.components(separatedBy: #""x":"#).count == 3
+                    && formattedJSON.contains(#"" a  b ""#),
                 "JSON formatting preserves numbers, escape bytes, duplicate keys and spaces inside strings")
             check(try TextUtility.formatJSON.apply(formattedJSON) == formattedJSON, "JSON formatting is idempotent")
-            check(try TextUtility.validateJSON.apply(rawJSON) == "Valid JSON.", "JSON validation accepts escaped strings")
+            check(
+                try TextUtility.validateJSON.apply(rawJSON) == "Valid JSON.", "JSON validation accepts escaped strings")
             for malformed in ["[1,]", "{\"x\":1,}", "01", "+1", "1e+", #"{"x":"\q"}"#, "true false", "\"x\ny\""] {
                 rejectsMalformed(.validateJSON, malformed)
                 rejectsMalformed(.formatJSON, malformed)
             }
             let inspection = try TextUtility.inspectUnicode.apply("雪\u{200B}\r\n\u{301}")
-            check(inspection.contains("Byte 3   U+200B   ZERO WIDTH SPACE") && inspection.contains("LINE FEED")
-                && inspection.contains("U+0301"), "Unicode inspector identifies invisible scalars at exact UTF-8 offsets")
+            check(
+                inspection.contains("Byte 3   U+200B   ZERO WIDTH SPACE") && inspection.contains("LINE FEED")
+                    && inspection.contains("U+0301"),
+                "Unicode inspector identifies invisible scalars at exact UTF-8 offsets")
             check(try TextUtility.base64Encode.apply("f") == "Zg", "unpadded")
             check(try TextUtility.base64EncodePadded.apply("f") == "Zg==", "padded")
             for value in ["", "f", "fo", "foo", "\u{feff}leading", "café 👩🏽‍💻", "\0\u{feff}\r\n"] {

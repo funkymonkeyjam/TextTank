@@ -539,7 +539,8 @@ package enum SearchCore {
     /// ascending order, must not overlap and must not split a surrogate pair (invalidReplacementRange).
     /// A cancelled token stops the pass with replacementCancelled and nothing is returned.
     static package func replacing(
-        _ text: String, with hits: [SearchHit], cancellation: TTSearchCancellation? = nil, maximumResultBytes: Int? = nil
+        _ text: String, with hits: [SearchHit], cancellation: TTSearchCancellation? = nil,
+        maximumResultBytes: Int? = nil
     )
         throws
         -> String

@@ -171,18 +171,19 @@ import EditorBridge
     }
 }
 
-
 /// One immutable receipt per document. Over the comparison ceiling only native counts are retained.
 struct BulkChangeReceipt: Sendable {
     let name: String
     let beforeBytes: Int, afterBytes: Int, beforeLines: Int, afterLines: Int
     let before: Data?, after: Data?
-    var counts: String { "\(beforeLines) → \(afterLines) lines, \(beforeBytes) → \(afterBytes) bytes"
+    var counts: String {
+        "\(beforeLines) → \(afterLines) lines, \(beforeBytes) → \(afterBytes) bytes"
     }
     var summary: String {
         // The follow-up is the Show Changes button in the status row, not an instruction here.
         return "\(name) · \(counts)."
-            + (before == nil ? " Comparison exceeds the \(SizePolicy.describe(SizePolicy.standard.reviewText)) limit." : "")
+            + (before == nil
+                ? " Comparison exceeds the \(SizePolicy.describe(SizePolicy.standard.reviewText)) limit." : "")
     }
 }
 @MainActor struct BulkChangeCapture {
@@ -207,7 +208,8 @@ struct BulkChangeReceipt: Sendable {
         let comparable = before != nil && afterBytes <= ReviewDiffPolicy.default.maximumInputBytes
         let after = comparable ? editor.utf8Data : nil
         if let before, let after, before == after { return }
-        let receipt = BulkChangeReceipt(name: name, beforeBytes: beforeBytes, afterBytes: afterBytes,
+        let receipt = BulkChangeReceipt(
+            name: name, beforeBytes: beforeBytes, afterBytes: afterBytes,
             beforeLines: beforeLines, afterLines: editor.lineCount, before: comparable ? before : nil, after: after)
         document.bulkReceipt = receipt
         document.presentation?.showBulkChange(receipt)

@@ -52,11 +52,14 @@ enum EditorToolbarCommand: String, CaseIterable {
     }
     @MainActor static func updateWrapItem(_ item: NSToolbarItem, wrapped: Bool) {
         item.menuFormRepresentation?.state = wrapped ? .on : .off
-        let help = wrapped ? Strings.text("toolbar.wrap.disable.help", "Turn off line wrapping in the active editor.") : wrap.scope
+        let help =
+            wrapped
+            ? Strings.text("toolbar.wrap.disable.help", "Turn off line wrapping in the active editor.") : wrap.scope
         if item.toolTip != help {
             item.toolTip = help
-            item.image = NSImage(systemSymbolName: wrapped ? "arrow.uturn.backward.circle.fill" : wrap.symbol,
-                                 accessibilityDescription: help)
+            item.image = NSImage(
+                systemSymbolName: wrapped ? "arrow.uturn.backward.circle.fill" : wrap.symbol,
+                accessibilityDescription: help)
         }
     }
     @MainActor func makeItem() -> NSToolbarItem {
@@ -159,7 +162,8 @@ enum EditorToolbarCommand: String, CaseIterable {
     }
     static func save(_ toolbar: NSToolbar) {
         guard let defaults = isolatedDefaults,
-            let data = try? JSONEncoder().encode(Arrangement.capture(toolbar)), data.count <= SizePolicy.standard.toolbarArrangement
+            let data = try? JSONEncoder().encode(Arrangement.capture(toolbar)),
+            data.count <= SizePolicy.standard.toolbarArrangement
         else { return }
         defaults.set(data, forKey: key)
     }

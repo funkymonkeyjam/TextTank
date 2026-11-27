@@ -441,8 +441,11 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
                     skipped: problems.count + excluded, cancelled: report.wasCancelled,
                     limitReached: report.reachedLimit != nil)
                 if report.reachedLimit == .inspectionBytes || report.reachedLimit == .totalBytes {
-                    let limit = report.reachedLimit == .inspectionBytes ? request.maximumInspectionBytes : request.maximumTotalBytes
-                    self.status.stringValue += " The \(SizePolicy.describe(limit)) budget was reached. Select fewer folders or narrow the filename filters."
+                    let limit =
+                        report.reachedLimit == .inspectionBytes
+                        ? request.maximumInspectionBytes : request.maximumTotalBytes
+                    self.status.stringValue +=
+                        " The \(SizePolicy.describe(limit)) budget was reached. Select fewer folders or narrow the filename filters."
                 }
                 self.details.string += "\n" + Self.skipDetails(report)
                 self.finish()
@@ -538,7 +541,8 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
                 guard let self, self.generation == token, !flag.isCancelled else { throw CancellationError() }
                 self.activePatch = patch
                 let count = patch.bytes.count
-                let excerpt = String(decoding: patch.bytes.prefix(SizePolicy.standard.folderPatchExcerpt), as: UTF8.self)
+                let excerpt = String(
+                    decoding: patch.bytes.prefix(SizePolicy.standard.folderPatchExcerpt), as: UTF8.self)
                 let mapping =
                     patch.roots.count > 1
                     ? patch.roots.enumerated().map { "folder-\($0.offset + 1) = \($0.element.path)" }.joined(
@@ -546,7 +550,9 @@ final class FolderSearchController: NSWindowController, NSWindowDelegate, NSTabl
                     : ""
                 self.details.string =
                     mapping + excerpt
-                    + (count > SizePolicy.standard.folderPatchExcerpt ? "\n… Preview limited to \(SizePolicy.describe(SizePolicy.standard.folderPatchExcerpt)). Export writes the complete patch." : "")
+                    + (count > SizePolicy.standard.folderPatchExcerpt
+                        ? "\n… Preview limited to \(SizePolicy.describe(SizePolicy.standard.folderPatchExcerpt)). Export writes the complete patch."
+                        : "")
                 self.status.stringValue =
                     "Preview: \(patch.changedFiles) changed files; \(patch.skippedOpenFiles) open files skipped. Source files untouched."
                     + (patch.textConversions > 0

@@ -277,7 +277,9 @@ import AppKit
             }
             guard editor.selectionCount == 1 else { throw UtilityFailure.multipleSelections }
             guard editor.selectionStart != editor.selectionEnd else { throw UtilityFailure.selectionRequired }
-            guard editor.selectionEnd - editor.selectionStart <= SizePolicy.standard.utilitySelection else { throw UtilityFailure.tooLarge }
+            guard editor.selectionEnd - editor.selectionStart <= SizePolicy.standard.utilitySelection else {
+                throw UtilityFailure.tooLarge
+            }
             let report = TTAlert()
             report.messageText = utility.title
             let result = try utility.apply(editor.selectedText)
@@ -298,7 +300,9 @@ import AppKit
             return
         }
         let editor = try editableEditor(requireNonEmpty: true)
-        guard editor.selectionEnd - editor.selectionStart <= SizePolicy.standard.utilitySelection else { throw UtilityFailure.tooLarge }
+        guard editor.selectionEnd - editor.selectionStart <= SizePolicy.standard.utilitySelection else {
+            throw UtilityFailure.tooLarge
+        }
         let input = editor.selectedText
         let transformed = try utility.apply(input)
         if utility == .formatJSON && transformed.utf8.elementsEqual(input.utf8) { return }

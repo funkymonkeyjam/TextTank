@@ -686,12 +686,15 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
     /// its wording can be checked without showing it.
     @objc func showBulkChanges(_ sender: Any?) {
         guard let receipt = (document as? TextDocument)?.bulkReceipt, let before = receipt.before,
-            let after = receipt.after, let compare = EditorServices.current?.compare else { return }
+            let after = receipt.after, let compare = EditorServices.current?.compare
+        else { return }
         Task { [weak self] in
             do {
                 let pair = try await Task.detached {
-                    try (TextSnapshot(bytes: before, source: .freeText(UUID()), label: receipt.name + " — Before"),
-                         TextSnapshot(bytes: after, source: .freeText(UUID()), label: receipt.name + " — After"))
+                    try (
+                        TextSnapshot(bytes: before, source: .freeText(UUID()), label: receipt.name + " — Before"),
+                        TextSnapshot(bytes: after, source: .freeText(UUID()), label: receipt.name + " — After")
+                    )
                 }.value
                 _ = try await compare.open(original: .snapshot(pair.0), modified: .snapshot(pair.1))
             } catch { self?.showTransientStatus(error.localizedDescription) }
@@ -1484,7 +1487,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             !goToLineBar.bounds.contains(goToLineBar.convert(event.locationInWindow, from: nil))
         {
             let placesCaret =
-                event.type == .leftMouseDown && jump.editor?.textAreaContains(windowPoint: event.locationInWindow) == true
+                event.type == .leftMouseDown
+                && jump.editor?.textAreaContains(windowPoint: event.locationInWindow) == true
             if !placesCaret {
                 jump.restoreSelection()
                 jump.restoreScroll()
@@ -1868,7 +1872,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         if let zoom { editor.zoomLevel = zoom }
     }
     private func wrapping(of editor: TTEditor) -> WorkspaceLayoutState.PaneWrapping {
-        editor.wrap ? .wrapped(documentLine: editor.sessionTopDocumentLine, subline: editor.sessionTopSubline)
+        editor.wrap
+            ? .wrapped(documentLine: editor.sessionTopDocumentLine, subline: editor.sessionTopSubline)
             : .unwrapped
     }
     func restoreSessionTab(_ tab: WorkspaceLayoutState.Tab) {
@@ -1890,7 +1895,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         } else {
             if let clone = secondary { removeClone(clone) }
             restoreSessionZoom(tab.zoom, in: active)
-            active.restoreClosedTabView(anchor: tab.anchorByte, caret: tab.caretByte, firstVisibleLine: tab.firstVisibleLine)
+            active.restoreClosedTabView(
+                anchor: tab.anchorByte, caret: tab.caretByte, firstVisibleLine: tab.firstVisibleLine)
         }
         lastEditor = active
         restoreViewMode(from: tab)
@@ -1913,7 +1919,8 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             if case let .wrapped(line, subline) = wrap {
                 pane.scrollTo(documentLine: line, subline: pane.wrap ? subline : 0)
             } else {
-                pane.restoreClosedTabView(anchor: pane.selectionAnchor, caret: pane.selectionCaret, firstVisibleLine: row)
+                pane.restoreClosedTabView(
+                    anchor: pane.selectionAnchor, caret: pane.selectionCaret, firstVisibleLine: row)
             }
             pane.horizontalScrollOffset = x
         }

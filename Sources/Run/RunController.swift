@@ -362,7 +362,10 @@ import AppKit
         let value = Invocation(
             argv: [command.executable] + command.arguments, workingDirectory: directory.path,
             mode: command.shellMode ? "Shell" : command.extensionMode ? "Text extension" : "Executable")
-        guard let bytes = try? encoder.encode(value) else { askingBeforeRun = false; return }
+        guard let bytes = try? encoder.encode(value) else {
+            askingBeforeRun = false
+            return
+        }
         let text = NSTextView()
         text.isEditable = false
         text.isSelectable = true
@@ -486,7 +489,10 @@ import AppKit
                     DispatchQueue.main.async { deliver(outcome) }
                 }
             }
-            guard !known else { try launch(); return }
+            guard !known else {
+                try launch()
+                return
+            }
             askingBeforeRun = true
             if let confirmFirstRun {
                 defer { askingBeforeRun = false }

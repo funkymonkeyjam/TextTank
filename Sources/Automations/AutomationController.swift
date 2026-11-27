@@ -179,7 +179,11 @@ private struct AutomationCheckboxEdits {
             return false
         }
         if (workflow.input == .document || workflow.input == .selection) && editor == nil { return false }
-        if (workflow.output == .editor || workflow.output == .previewChanges) && (editor == nil || editor?.readOnly == true) { return false }
+        if (workflow.output == .editor || workflow.output == .previewChanges)
+            && (editor == nil || editor?.readOnly == true)
+        {
+            return false
+        }
         return true
     }
     /// Every menu, shortcut, toolbar and palette resolves the current saved definition by UUID.
@@ -225,16 +229,18 @@ private struct AutomationCheckboxEdits {
         do {
             let bytes = try PrivateFileStore.read(AppStorage.url(.pasteThroughChoice), maximumBytes: 256)
             return try JSONDecoder().decode(UUID.self, from: bytes)
-        } catch where error.posixCode == .ENOENT { return nil }
+        } catch  where error.posixCode == .ENOENT { return nil }
     }
     private func rememberPasteChoice(_ id: UUID) {
         do {
             let previous = try savedPasteChoice()
             if previous == id { return }
-            try PrivateFileStore.write(try JSONEncoder().encode(id), to: AppStorage.url(.pasteThroughChoice),
-                                       maximumBytes: 256, beforeCommit: {
-                guard try self.savedPasteChoice() == previous else { throw CocoaError(.fileWriteUnknown) }
-            }, requireMissing: previous == nil)
+            try PrivateFileStore.write(
+                try JSONEncoder().encode(id), to: AppStorage.url(.pasteThroughChoice),
+                maximumBytes: 256,
+                beforeCommit: {
+                    guard try self.savedPasteChoice() == previous else { throw CocoaError(.fileWriteUnknown) }
+                }, requireMissing: previous == nil)
         } catch {
             EditorServices.current?.activePresentation?.showTransientStatus(
                 "Pasted transformed text. The last Paste Through choice could not be saved.", seconds: 8)
@@ -783,7 +789,9 @@ private struct AutomationCheckboxEdits {
         guard let raw = sender.representedObject as? String, let id = UUID(uuidString: raw) else { return }
         do { try runSavedAutomation(id: id, pasteThrough: true) } catch { showError(error) }
     }
-    private func run(_ workflow: AutomationDefinition, target: AutomationDocumentTarget?, capturedPaste: String? = nil) throws {
+    private func run(_ workflow: AutomationDefinition, target: AutomationDocumentTarget?, capturedPaste: String? = nil)
+        throws
+    {
         if capturedPaste == nil { onInvocation() }
         if workflow.input == .document && target == nil {
             throw AutomationError.invalid("This automation requires an open editor document.")
@@ -884,7 +892,8 @@ private struct AutomationCheckboxEdits {
                 alert.informativeText = String(format: format, workflow.input.displayName)
                 if reviewChanges {
                     let scope = workflow.input == .document ? "the entire captured document" : "the captured selection"
-                    alert.informativeText = "Preview as Changes supports up to \(SizePolicy.describe(SizePolicy.standard.reviewText)) per side. Edit this output before applying it to "
+                    alert.informativeText =
+                        "Preview as Changes supports up to \(SizePolicy.describe(SizePolicy.standard.reviewText)) per side. Edit this output before applying it to "
                         + scope + ", or cancel to keep the document unchanged."
                 }
             } else {
@@ -919,8 +928,10 @@ private struct AutomationCheckboxEdits {
             if capturedPaste != nil {
                 guard !output.isEmpty else { return }
                 let finish = try prepareTransformedPaste(target.resolve())
-                do { try target.apply([output], wholeDocument: false, operationName: workflow.name) }
-                catch { finish?(false); throw error }
+                do { try target.apply([output], wholeDocument: false, operationName: workflow.name) } catch {
+                    finish?(false)
+                    throw error
+                }
                 finish?(true)
                 rememberPasteChoice(workflow.id)
             } else {
@@ -969,12 +980,14 @@ private struct AutomationCheckboxEdits {
         let original = try CompareDocumentInput(editor)
         var bytes = original.capture.snapshot.bytes
         bytes.replaceSubrange(range, with: output.utf8)
-        let result = try TextSnapshot(bytes: bytes, source: .freeText(UUID()), label: workflow.name + " — Output",
-                                      format: original.capture.snapshot.format)
+        let result = try TextSnapshot(
+            bytes: bytes, source: .freeText(UUID()), label: workflow.name + " — Output",
+            format: original.capture.snapshot.format)
         Task { [weak self] in
             do {
-                _ = try await service.open(original: .document(original), modified: .automationResult(result),
-                                           destination: .original)
+                _ = try await service.open(
+                    original: .document(original), modified: .automationResult(result),
+                    destination: .original)
             } catch { self?.showError(error) }
         }
         return true

@@ -7,8 +7,8 @@
 #   scripts/swift-format.sh lint     report layout that differs; exit 1 if any
 #   scripts/swift-format.sh format   rewrite the files in place
 #
-# Output differs between swift-format versions, so the version is printed and
-# the CI lint step is advisory until CI and local toolchains are pinned alike.
+# The native CI job checks layout with the selected Xcode toolchain. Print the
+# formatter version so local results can be compared with the hosted check.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 mode="${1:-lint}"

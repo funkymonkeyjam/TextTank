@@ -197,7 +197,9 @@ package enum RunFailure: Error, LocalizedError, Equatable {
         case .configurationTooLarge:
             return
                 "Saved Run commands exceed the \(SizePolicy.describe(SizePolicy.standard.runLibrary)) configuration limit. Shorten arguments or remove commands; the existing configuration was preserved."
-        case .tooLarge: return "Process input or output exceeds the \(SizePolicy.describe(SizePolicy.standard.runIO)) limit. Use a smaller input or reduce command output."
+        case .tooLarge:
+            return
+                "Process input or output exceeds the \(SizePolicy.describe(SizePolicy.standard.runIO)) limit. Use a smaller input or reduce command output."
         case .selectionUnsuitable:
             return
                 "The selection cannot be passed as an argument: it contains a NUL character or exceeds \(SizePolicy.describe(SizePolicy.standard.runArgument)). Shorten the selection, or use a text extension, which receives the selection on standard input."
@@ -221,7 +223,8 @@ package enum RunTermination: Equatable, CaseIterable, Sendable {
         case .finished: return "finished"
         case .cancelled: return "cancelled"
         case .timedOut: return "stopped at the time limit"
-        case .outputLimit: return "stopped at the \(SizePolicy.describe(SizePolicy.standard.runIO)) output limit; output is incomplete"
+        case .outputLimit:
+            return "stopped at the \(SizePolicy.describe(SizePolicy.standard.runIO)) output limit; output is incomplete"
         case .lingeringDescendants:
             return
                 "finished, but a background process it started kept the output open and was stopped; output may be incomplete"

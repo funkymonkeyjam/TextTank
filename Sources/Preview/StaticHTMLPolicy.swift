@@ -34,7 +34,10 @@ package enum StaticHTMLPolicy {
                 case .tag(let tag): range = tag.range
                 case .rawText(_, let bytes), .doctype(let bytes): range = bytes
                 }
-                while i < sorted.count, sorted[i] <= range.lowerBound { result.append(sorted[i]); i += 1 }
+                while i < sorted.count, sorted[i] <= range.lowerBound {
+                    result.append(sorted[i])
+                    i += 1
+                }
                 while i < sorted.count, sorted[i] < range.upperBound { i += 1 }
             }
         } catch { return [] }

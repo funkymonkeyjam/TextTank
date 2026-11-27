@@ -162,7 +162,8 @@ import NativeSearch
         settle()
         check(
             editor.selectionRanges.first?.caret == byteAfter - 1,
-            "left half places caret before final period: caret \(String(describing: editor.selectionRanges.first?.caret)), anchor \(editor.selectionAnchor), expected \(byteAfter - 1)")
+            "left half places caret before final period: caret \(String(describing: editor.selectionRanges.first?.caret)), anchor \(editor.selectionAnchor), expected \(byteAfter - 1)"
+        )
         prepare()
         let dragOrigin = point(0.78), originalFrame = window.frame
         try click(dragOrigin, draggingTo: NSPoint(x: dragOrigin.x - 32, y: dragOrigin.y))

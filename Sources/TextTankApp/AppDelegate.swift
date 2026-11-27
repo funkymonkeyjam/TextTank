@@ -245,15 +245,15 @@ import AppKit
 
     private var replacementRetentionTimer: DispatchSourceTimer?
     private func startReplacementRetention() {
-        let cleanup = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "TextTank.folder-replacement-retention", qos: .utility))
+        let cleanup = DispatchSource.makeTimerSource(
+            queue: DispatchQueue(label: "TextTank.folder-replacement-retention", qos: .utility))
         cleanup.schedule(deadline: .now() + 2, repeating: .seconds(86_400), leeway: .seconds(120))
         cleanup.setEventHandler {
             do {
                 if try FolderReplacementHistory.prune().needsReview != 0 {
                     NSLog("Some private folder replacement backups could not be cleaned up.")
                 }
-            }
-            catch { NSLog("Folder replacement backup cleanup needs review in Find in Folder.") }
+            } catch { NSLog("Folder replacement backup cleanup needs review in Find in Folder.") }
         }
         replacementRetentionTimer = cleanup
         cleanup.resume()
@@ -493,7 +493,9 @@ import AppKit
                     newDocument(nil)
                     report([error.localizedDescription])
                 }
-            } else { newDocument(nil) }
+            } else {
+                newDocument(nil)
+            }
         }
         if restoredUntitled > 0 {
             // DS-40: a quiet status message, announced, never an alert.
@@ -533,22 +535,34 @@ import AppKit
                 controller.documents.contains(document),
                 let presentation = document.presentation, presentation.hostWindow != nil
             else {
-                TextTankApplication.smokeFailure(error?.localizedDescription ?? "No file-backed editor window.",
-                                                 cleanup: AppStorage.supportDirectory)
+                TextTankApplication.smokeFailure(
+                    error?.localizedDescription ?? "No file-backed editor window.",
+                    cleanup: AppStorage.supportDirectory)
             }
-            struct Status: Encodable { let file: String; let editorBytes: Int; let windowCreated: Bool }
+            struct Status: Encodable {
+                let file: String
+                let editorBytes: Int
+                let windowCreated: Bool
+            }
             do {
-                let status = Status(file: opened.path, editorBytes: Int(document.editor.byteLength), windowCreated: true)
+                let status = Status(
+                    file: opened.path, editorBytes: Int(document.editor.byteLength), windowCreated: true)
                 var data = try JSONEncoder().encode(status)
                 data.append(0x0A)
                 try FileHandle.standardOutput.write(contentsOf: data)
-            } catch { TextTankApplication.smokeFailure(error.localizedDescription, cleanup: AppStorage.supportDirectory) }
+            } catch {
+                TextTankApplication.smokeFailure(error.localizedDescription, cleanup: AppStorage.supportDirectory)
+            }
             document.close()
             NSApp.stop(nil)
             // Wake AppKit if this completion arrived from a dispatched callback.
-            if let event = NSEvent.otherEvent(with: .applicationDefined, location: .zero, modifierFlags: [],
-                                              timestamp: 0, windowNumber: 0, context: nil, subtype: 0,
-                                              data1: 0, data2: 0) { NSApp.postEvent(event, atStart: false) }
+            if let event = NSEvent.otherEvent(
+                with: .applicationDefined, location: .zero, modifierFlags: [],
+                timestamp: 0, windowNumber: 0, context: nil, subtype: 0,
+                data1: 0, data2: 0)
+            {
+                NSApp.postEvent(event, atStart: false)
+            }
         }
     }
     /// Installation is explicit and follows TextDocumentController construction in main.
@@ -781,10 +795,13 @@ import AppKit
         for item in menu.items {
             guard let id = item.representedObject as? String, id == "undo" || id == "redo" else { continue }
             let redo = id == "redo", base = redo ? EditorCommand.redo.title : EditorCommand.undo.title
-            if let name = editor?.historyName(redo: redo) { item.title = base + " " + name }
-            else if editor == nil, let manager = responder?.undoManager {
+            if let name = editor?.historyName(redo: redo) {
+                item.title = base + " " + name
+            } else if editor == nil, let manager = responder?.undoManager {
                 item.title = redo ? manager.redoMenuItemTitle : manager.undoMenuItemTitle
-            } else { item.title = base }
+            } else {
+                item.title = base
+            }
         }
     }
     @discardableResult func openHelpDocument(welcome: Bool) throws -> TextDocument {

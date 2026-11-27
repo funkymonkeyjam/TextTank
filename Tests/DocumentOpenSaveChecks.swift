@@ -73,8 +73,9 @@ extension DocumentChecks {
                     let signature = try WorkspaceStore.signature(ofRegularFileAt: url, maximumBytes: limit)
                     let document = TextDocument()
                     let streamed = try document.readInitialUTF8IfEligible(from: url, signature: signature, ofType: type)
-                    check(streamed && document.editor.byteLength == limit && !document.isDocumentEdited,
-                          "actual native type for ." + ext + " uses the validated first-read loader")
+                    check(
+                        streamed && document.editor.byteLength == limit && !document.isDocumentEdited,
+                        "actual native type for ." + ext + " uses the validated first-read loader")
                 }
             }
             let url = area.appendingPathComponent("native-type.swift")
@@ -90,15 +91,19 @@ extension DocumentChecks {
             let nativeType = try documents.typeForContents(of: url)
             let originalRevision = document.editor.revision
             var rejected = false
-            do { _ = try document.readInitialUTF8IfEligible(from: url, signature: invalidSignature, ofType: nativeType) }
-            catch FileCodecError.invalidBytes(.utf8) { rejected = true }
-            check(rejected && document.editor.byteLength == 0 && document.editor.revision == originalRevision,
-                  "late invalid UTF-8 leaves the existing native document untouched")
+            do {
+                _ = try document.readInitialUTF8IfEligible(from: url, signature: invalidSignature, ofType: nativeType)
+            } catch FileCodecError.invalidBytes(.utf8) { rejected = true }
+            check(
+                rejected && document.editor.byteLength == 0 && document.editor.revision == originalRevision,
+                "late invalid UTF-8 leaves the existing native document untouched")
             document.editor.replaceSelection("keep")
             let editedRevision = document.editor.revision
-            let streamed = try document.readInitialUTF8IfEligible(from: url, signature: invalidSignature, ofType: nativeType)
-            check(!streamed && document.editor.text == "keep" && document.editor.revision == editedRevision,
-                  "an edited native document retains its bytes when the first-read path declines")
+            let streamed = try document.readInitialUTF8IfEligible(
+                from: url, signature: invalidSignature, ofType: nativeType)
+            check(
+                !streamed && document.editor.text == "keep" && document.editor.revision == editedRevision,
+                "an edited native document retains its bytes when the first-read path declines")
         }
 
         section("size-scaled automatic recovery", #line) {

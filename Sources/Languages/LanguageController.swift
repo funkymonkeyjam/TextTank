@@ -31,7 +31,7 @@ private final class LanguageMenu: NSMenu {
             let data = try PrivateFileStore.read(self.url, maximumBytes: Self.maximumBytes)
             guard let file = try? JSONDecoder().decode(File.self, from: data) else { return }
             if file.version == 1 { ids = Self.bounded(file.languages) } else { replaceable = false }
-        } catch where error.isFileNotFound {} catch {
+        } catch  where error.isFileNotFound {} catch {
             // Too large, not a regular file or not readable: do not write over what is there.
             replaceable = false
         }
@@ -816,9 +816,12 @@ private final class LanguageMenu: NSMenu {
         do {
             return try PrivateFileStore.read(url, maximumBytes: LanguageCatalog.maximumBytes, parent: parent)
         } catch PrivateFileError.unsafeLocation {
-            throw LanguageError.invalid("Choose a regular local language file up to \(SizePolicy.describe(LanguageCatalog.maximumBytes)).")
+            throw LanguageError.invalid(
+                "Choose a regular local language file up to \(SizePolicy.describe(LanguageCatalog.maximumBytes)).")
         } catch PrivateFileError.tooLarge {
-            throw LanguageError.invalid("Language input exceeds \(SizePolicy.describe(LanguageCatalog.maximumBytes)). Split the catalog or choose a smaller file.")
+            throw LanguageError.invalid(
+                "Language input exceeds \(SizePolicy.describe(LanguageCatalog.maximumBytes)). Split the catalog or choose a smaller file."
+            )
         }
     }
 }

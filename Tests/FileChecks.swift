@@ -335,7 +335,9 @@ import os
                 rejects("V9 a copy that was never written is not confirmed") { try store.confirm(kept) }
                 try store.save(kept)
                 try store.confirm(kept)
-                check(try RecoveryStore(directory: storeURL).load(id: id) == kept, "V9 the confirmed copy is the document")
+                check(
+                    try RecoveryStore(directory: storeURL).load(id: id) == kept, "V9 the confirmed copy is the document"
+                )
                 let twin = RecoverySnapshot(
                     id: id, text: "kept cafe\u{301}\r\n\0😀", format: kept.format, originalURL: nil, revision: 4)
                 rejects("V9 text with other bytes is not confirmed", expecting: RecoveryError.staleRevision) {
@@ -343,7 +345,9 @@ import os
                 }
                 let later = RecoverySnapshot(
                     id: id, text: kept.text, format: kept.format, originalURL: nil, revision: 5)
-                rejects("V9 a later revision than the one on disk is not confirmed", expecting: RecoveryError.staleRevision) {
+                rejects(
+                    "V9 a later revision than the one on disk is not confirmed", expecting: RecoveryError.staleRevision
+                ) {
                     try store.confirm(later)
                 }
                 let body = try FileManager.default.contentsOfDirectory(at: storeURL, includingPropertiesForKeys: nil)
@@ -376,7 +380,8 @@ import os
                     }
                 }
                 func mode(_ url: URL) throws -> Int {
-                    (try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as! NSNumber).intValue
+                    (try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as! NSNumber)
+                        .intValue
                 }
                 func record(
                     _ store: LocalHistoryStore, _ path: String, _ text: String, replaced: String? = nil
@@ -409,15 +414,19 @@ import os
                     try record(store, a, text)
                     clock.advance(1)
                 }
-                check(try texts(store, a) == ["three", "two", "one"], "V10 three saves list three versions, newest first")
+                check(
+                    try texts(store, a) == ["three", "two", "one"], "V10 three saves list three versions, newest first")
                 let listed = try store.versions(forPath: a)
                 check(
-                    listed.allSatisfy { $0.kind == .saved && $0.format == FileFormat() } && listed.map(\.byteCount) == [5, 3, 3]
+                    listed.allSatisfy { $0.kind == .saved && $0.format == FileFormat() }
+                        && listed.map(\.byteCount) == [5, 3, 3]
                         && listed[0].sha256 == WorkspaceStore.fingerprint(Data("three".utf8))
                         && store.latestDigest(forPath: a) == listed[0].sha256,
                     "V10 each version records its date, size, digest and encoding")
                 try record(store, a, "three")
-                check(try texts(store, a) == ["three", "two", "one"], "V10 identical consecutive versions are stored once")
+                check(
+                    try texts(store, a) == ["three", "two", "one"], "V10 identical consecutive versions are stored once"
+                )
                 let folders = try FileManager.default.contentsOfDirectory(at: home, includingPropertiesForKeys: nil)
                 let files = try FileManager.default.contentsOfDirectory(at: folders[0], includingPropertiesForKeys: nil)
                 check(
@@ -460,7 +469,9 @@ import os
                         .count == 20,
                     "V10 an evicted version's bytes are deleted")
                 check(
-                    store.usage() == LocalHistoryUsage(files: 3, versions: 26, bytes: 11 + 19 + twenty.reduce(0) { $0 + $1.utf8.count })
+                    store.usage()
+                        == LocalHistoryUsage(
+                            files: 3, versions: 26, bytes: 11 + 19 + twenty.reduce(0) { $0 + $1.utf8.count })
                         && store.usage(forPath: a) == LocalHistoryUsage(files: 1, versions: 3, bytes: 11),
                     "V10 usage counts files, versions and bytes")
                 // Thirty days.
@@ -477,7 +488,8 @@ import os
                     try pruned.withLock { $0 } && texts(store, a) == ["four"] && texts(store, b).isEmpty
                         && texts(store, c).count == 16 && !texts(store, c).contains("version 4")
                         && texts(store, c).last == "version 5",
-                    "V10 versions older than thirty days are removed, oldest first, and an emptied file's folder with them")
+                    "V10 versions older than thirty days are removed, oldest first, and an emptied file's folder with them"
+                )
                 check(
                     try FileManager.default.contentsOfDirectory(atPath: home.path).count == 2,
                     "V10 a file with no version left has no folder")
@@ -500,7 +512,8 @@ import os
                 check(small.usage().bytes == 800, "V10 fixture: 800 bytes of history under a 1000 byte limit")
                 try record(small, x, block("c"))
                 check(
-                    try texts(small, x) == [block("c")] && texts(small, y) == [block("b")] && small.usage().bytes == 800,
+                    try texts(small, x) == [block("c")] && texts(small, y) == [block("b")]
+                        && small.usage().bytes == 800,
                     "V10 over the total limit the oldest version of any file goes first")
                 try record(small, y, String(repeating: "z", count: 601))
                 check(
@@ -522,7 +535,8 @@ import os
                 let zFolder = smallHome.appendingPathComponent(WorkspaceStore.fingerprint(Data(z.utf8)))
                 let blob = zFolder.appendingPathComponent(zVersions[0].id.uuidString + ".bytes")
                 try Data("zEd".utf8).write(to: blob)
-                rejects("V10 bytes that no longer match their digest are refused", expecting: LocalHistoryError.damaged) {
+                rejects("V10 bytes that no longer match their digest are refused", expecting: LocalHistoryError.damaged)
+                {
                     _ = try small.data(forPath: z, version: zVersions[0].id)
                 }
                 rejects("V10 an unknown version is reported as missing", expecting: LocalHistoryError.missing) {
@@ -542,7 +556,8 @@ import os
                         && texts(small, y).isEmpty && small.versions(forPath: z).count == 2,
                     "V10 clearing one file's history leaves the others")
                 check(
-                    try small.clear().versions == 2 && small.usage() == LocalHistoryUsage(files: 0, versions: 0, bytes: 0)
+                    try small.clear().versions == 2
+                        && small.usage() == LocalHistoryUsage(files: 0, versions: 0, bytes: 0)
                         && Set(FileManager.default.contentsOfDirectory(atPath: smallHome.path))
                             == ["stranger.txt", "not-a-digest"]
                         && Data(contentsOf: stranger) == Data("keep".utf8),
@@ -556,11 +571,16 @@ import os
                 /// The bytes are dated now by this check's clock, as they would be by the real one.
                 func spoil(_ store: LocalHistoryStore, _ path: String, with garbage: Data? = nil) throws {
                     let home = folder(store, path), manifest = home.appendingPathComponent("manifest.json")
-                    for name in try FileManager.default.contentsOfDirectory(atPath: home.path) where name.hasSuffix(".bytes") {
+                    for name in try FileManager.default.contentsOfDirectory(atPath: home.path)
+                    where name.hasSuffix(".bytes") {
                         try FileManager.default.setAttributes(
                             [.modificationDate: clock.now], ofItemAtPath: home.appendingPathComponent(name).path)
                     }
-                    if let garbage { try garbage.write(to: manifest) } else { try FileManager.default.removeItem(at: manifest) }
+                    if let garbage {
+                        try garbage.write(to: manifest)
+                    } else {
+                        try FileManager.default.removeItem(at: manifest)
+                    }
                 }
                 let healHome = base.appendingPathComponent("Heal", isDirectory: true)
                 let heal = LocalHistoryStore(directory: healHome, clock: { clock.now })
@@ -576,7 +596,8 @@ import os
                 try record(heal, h, "second bytes")
                 check(
                     try texts(heal, h) == ["second bytes", "first bytes"]
-                        && FileManager.default.fileExists(atPath: folder(heal, h).appendingPathComponent("manifest.json").path),
+                        && FileManager.default.fileExists(
+                            atPath: folder(heal, h).appendingPathComponent("manifest.json").path),
                     "F3 the next save of that file is kept and writes a manifest naming what was there")
                 try record(heal, g, "before damage")
                 try spoil(heal, g, with: Data("{ not a manifest".utf8))
@@ -664,7 +685,8 @@ import os
                 try record(newer, n, "kept by a newer build")
                 let newerFolder = folder(newer, n), newerManifest = newerFolder.appendingPathComponent("manifest.json")
                 let fixture = Data(
-                    #"{"entries":[{"blob":"x"}],"minimumReaderVersion":2,"path":"/synthetic/newer.txt","version":2}"#.utf8)
+                    #"{"entries":[{"blob":"x"}],"minimumReaderVersion":2,"path":"/synthetic/newer.txt","version":2}"#
+                        .utf8)
                 try fixture.write(to: newerManifest)
                 let untouched = try FileManager.default.contentsOfDirectory(atPath: newerFolder.path).sorted()
                 check(

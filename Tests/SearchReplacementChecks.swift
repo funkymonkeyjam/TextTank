@@ -80,11 +80,14 @@ import Darwin
         options.query = "needle"
         options.replacement = "a longer replacement"
         do {
-            _ = try await FolderReplacement.preview(fallbackDirectory: folders[0], matches: projectedRows, options: options)
+            _ = try await FolderReplacement.preview(
+                fallbackDirectory: folders[0], matches: projectedRows, options: options)
             check(false, "oversized projected result returned a patch")
         } catch {
-            check(error.localizedDescription.contains("8 MiB") && error.localizedDescription.contains("shorten the replacement"),
-                  "projected per-side limit names its actual ceiling independently of the patch output limit")
+            check(
+                error.localizedDescription.contains("8 MiB")
+                    && error.localizedDescription.contains("shorten the replacement"),
+                "projected per-side limit names its actual ceiling independently of the patch output limit")
         }
         check(try Data(contentsOf: files[0]) == near, "projected-side refusal preserves exact original bytes")
         let long = Data(repeating: 65, count: 1024 * 1024) + initial

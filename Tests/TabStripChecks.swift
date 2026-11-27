@@ -46,7 +46,8 @@ private final class Box<Value> {
     private static func appearance(_ tab: EditorWindowController, in strip: DocumentTabStrip) throws
         -> DocumentTabStrip.TabAppearance
     {
-        try requireValue(strip.tabAppearance(try requireValue(tab.tabID, "fixture: tab identity")), "fixture: tab appearance")
+        try requireValue(
+            strip.tabAppearance(try requireValue(tab.tabID, "fixture: tab identity")), "fixture: tab appearance")
     }
     private static func hover(_ tab: EditorWindowController?, in strip: DocumentTabStrip) throws {
         guard let tab else {
@@ -107,13 +108,16 @@ private final class Box<Value> {
         let close = try closeButton(notes, in: strip)
         var drawn = try appearance(notesTab, in: strip)
         check(
-            drawn.title == "notes.md" && !drawn.closeShowsEditedDot && drawn.outsideChange == nil && drawn.comparison == nil,
+            drawn.title == "notes.md" && !drawn.closeShowsEditedDot && drawn.outsideChange == nil
+                && drawn.comparison == nil,
             "fixture: a saved tab shows its name, the cross and no state symbol")
         let cross = close.image
         _ = notesTab.primaryEditor.replaceSelection("edited ")
         spinUntil("the edited dot") { (try? appearance(notesTab, in: strip).closeShowsEditedDot) == true }
         drawn = try appearance(notesTab, in: strip)
-        check(notes.isDocumentEdited && drawn.closeShowsEditedDot, "an edited tab shows the dot in the close button's place")
+        check(
+            notes.isDocumentEdited && drawn.closeShowsEditedDot,
+            "an edited tab shows the dot in the close button's place")
         check(
             drawn.title == "notes.md" && drawn.accessibilityLabel == "notes.md, edited",
             "the title of an edited tab is its name alone; its label says it is edited (\(drawn.title))")
@@ -126,9 +130,12 @@ private final class Box<Value> {
             close.accessibilityLabel() == "Close notes.md" && close.toolTip == "Close notes.md",
             "DS-70 the dot still says it closes the document")
         try hover(notesTab, in: strip)
-        check(try !appearance(notesTab, in: strip).closeShowsEditedDot, "the pointer over an edited tab shows the cross")
+        check(
+            try !appearance(notesTab, in: strip).closeShowsEditedDot, "the pointer over an edited tab shows the cross")
         try hover(otherTab, in: strip)
-        check(try appearance(notesTab, in: strip).closeShowsEditedDot, "and the dot returns when the pointer moves to another tab")
+        check(
+            try appearance(notesTab, in: strip).closeShowsEditedDot,
+            "and the dot returns when the pointer moves to another tab")
         try hover(nil, in: strip)
         let window = try requireValue(host.window, "workspace window")
         check(window.makeFirstResponder(close), "fixture: the close button takes the keyboard")
@@ -138,12 +145,14 @@ private final class Box<Value> {
         check(window.makeFirstResponder(otherTab.primaryEditor), "fixture: the keyboard returns to the text")
         check(try appearance(notesTab, in: strip).closeShowsEditedDot, "and the dot once the keyboard has left it")
         check(
-            try !appearance(plainTab, in: strip).closeShowsEditedDot && !appearance(otherTab, in: strip).closeShowsEditedDot,
+            try !appearance(plainTab, in: strip).closeShowsEditedDot
+                && !appearance(otherTab, in: strip).closeShowsEditedDot,
             "tabs that are not edited keep the cross")
 
         // A file changed outside TextTank: a symbol, not a character in the title.
         _ = plainTab.primaryEditor.replaceSelection("mine ")
-        try Data("changed elsewhere\n".utf8).write(to: try requireValue(plain.fileURL, "fixture: saved file"), options: .atomic)
+        try Data("changed elsewhere\n".utf8).write(
+            to: try requireValue(plain.fileURL, "fixture: saved file"), options: .atomic)
         plain.externalFile.check(prioritized: true)
         spinUntil("the outside change") {
             plain.externalFile.notice != nil && (try? appearance(plainTab, in: strip).outsideChange) != nil
@@ -158,7 +167,8 @@ private final class Box<Value> {
             outside.toolTip == "plain.txt: Changed on disk. Select this tab to choose what to do."
                 && !outside.isAccessibilityElement
                 && !((strip.accessibilityChildren() ?? []).contains { $0 is NSImageView }),
-            "DS-62/85 the symbol's tooltip says what happened and what to do; it is not an accessibility element, because the tab's label says it")
+            "DS-62/85 the symbol's tooltip says what happened and what to do; it is not an accessibility element, because the tab's label says it"
+        )
         check(
             drawn.accessibilityLabel == "plain.txt, edited. Changed on disk.",
             "DS-84 the tab's own label says both in whole sentences (\(drawn.accessibilityLabel ?? "nil"))")
@@ -182,14 +192,16 @@ private final class Box<Value> {
                 == "other.txt is selected for comparison. Choose Compare with Selected on another tab to compare them."
                 && !compared.isAccessibilityElement
                 && !((strip.accessibilityChildren() ?? []).contains { $0 is NSImageView }),
-            "DS-85 the comparison symbol's tooltip says what it means and what to do next; the tab's label carries it for assistive technology")
+            "DS-85 the comparison symbol's tooltip says what it means and what to do next; the tab's label carries it for assistive technology"
+        )
 
         // Both on one tab, wide and at the minimum width.
         try compare.mark(plainTab.primaryEditor)
         drawn = try appearance(plainTab, in: strip)
         frames = try requireValue(strip.tabLayout(plainID), "fixture: layout")
         check(
-            try drawn.comparison != nil && drawn.outsideChange != nil && appearance(otherTab, in: strip).comparison == nil,
+            try drawn.comparison != nil && drawn.outsideChange != nil
+                && appearance(otherTab, in: strip).comparison == nil,
             "a wide tab shows both symbols; the tab no longer selected loses its symbol")
         check(
             drawn.accessibilityLabel == "plain.txt, edited. Changed on disk. Selected for comparison.",
@@ -205,13 +217,16 @@ private final class Box<Value> {
         try resize(host, to: 800, strip: strip)
         frames = try requireValue(strip.tabLayout(plainID), "fixture: layout")
         let width = frames.close.maxX + 8 - (frames.title.minX - 8)
-        check(width < 162 && width >= 130, "fixture: seven tabs in an 800-point window are near the minimum width (\(width) pt)")
+        check(
+            width < 162 && width >= 130,
+            "fixture: seven tabs in an 800-point window are near the minimum width (\(width) pt)")
         drawn = try appearance(plainTab, in: strip)
         check(
             drawn.outsideChange != nil && drawn.comparison == nil && drawn.closeShowsEditedDot
                 && frames.title.width == width - 68
                 && frames.title.width >= DocumentTabStrip.minimumTitleWidthBesideComparisonMark,
-            "at the minimum width the outside change wins: it and the dot are drawn, the comparison symbol is not (\(frames.title.width) pt title)")
+            "at the minimum width the outside change wins: it and the dot are drawn, the comparison symbol is not (\(frames.title.width) pt title)"
+        )
         check(
             drawn.accessibilityLabel == "plain.txt, edited. Changed on disk. Selected for comparison.",
             "and what is not drawn is still in the tab's label")
@@ -223,7 +238,8 @@ private final class Box<Value> {
             "alone, the comparison symbol fits a tab at the minimum width")
         // With the eye of a tab in Preview, the eye and the outside change stay.
         check(notesTab.setViewMode(.preview), "fixture: the notes tab shows Preview")
-        try Data("# Changed elsewhere\n".utf8).write(to: try requireValue(notes.fileURL, "fixture: saved file"), options: .atomic)
+        try Data("# Changed elsewhere\n".utf8).write(
+            to: try requireValue(notes.fileURL, "fixture: saved file"), options: .atomic)
         notes.externalFile.check(prioritized: true)
         spinUntil("the second outside change") { (try? appearance(notesTab, in: strip).outsideChange) != nil }
         let notesID = try requireValue(notesTab.tabID, "fixture: notes tab")
@@ -318,7 +334,8 @@ private final class Box<Value> {
             DocumentTabStrip.tabToolTip(name: "Untitled", path: nil, notice: nil, home: home) == "Untitled",
             "a document with no file shows its name")
         check(
-            DocumentTabStrip.tabToolTip(name: "a.txt", path: "/home/person/a.txt", notice: "Changed on disk", home: home)
+            DocumentTabStrip.tabToolTip(
+                name: "a.txt", path: "/home/person/a.txt", notice: "Changed on disk", home: home)
                 == "~/a.txt\nChanged on disk",
             "a notice follows the path on its own line")
 
@@ -343,7 +360,8 @@ private final class Box<Value> {
             try tabButton(untitledTab, in: strip).toolTip == untitled.displayName,
             "the tab of an untitled document shows its name as its tooltip")
         _ = thirdTab.primaryEditor.replaceSelection("mine ")
-        try Data("changed elsewhere\n".utf8).write(to: try requireValue(third.fileURL, "fixture: saved file"), options: .atomic)
+        try Data("changed elsewhere\n".utf8).write(
+            to: try requireValue(third.fileURL, "fixture: saved file"), options: .atomic)
         third.externalFile.check(prioritized: true)
         spinUntil("the outside change") { third.externalFile.notice != nil }
         check(
@@ -356,25 +374,32 @@ private final class Box<Value> {
         host.activate(firstTab)
         func documents() -> Int { NSDocumentController.shared.documents.count }
         var count = documents()
-        try otherClick(down: try middle(of: secondTab, in: strip), up: try middle(of: firstTab, in: strip), in: strip, window: window)
+        try otherClick(
+            down: try middle(of: secondTab, in: strip), up: try middle(of: firstTab, in: strip), in: strip,
+            window: window)
         settle()
         check(
             documents() == count && second.isOpen && first.isOpen,
             "an other-button press on one tab released on another closes nothing")
         let empty = NSPoint(x: strip.bounds.maxX - 60, y: strip.bounds.midY)
         check(
-            strip.tabLayout(try requireValue(untitledTab.tabID, "fixture: untitled tab")).map { $0.close.maxX + 8 < empty.x }
+            strip.tabLayout(try requireValue(untitledTab.tabID, "fixture: untitled tab")).map {
+                $0.close.maxX + 8 < empty.x
+            }
                 == true, "fixture: the strip has an empty part after its last tab")
         try otherClick(down: empty, up: empty, in: strip, window: window)
         settle()
         check(documents() == count, "an other-button click on the empty strip closes nothing")
-        try otherClick(down: try middle(of: secondTab, in: strip), up: try middle(of: secondTab, in: strip), in: strip, window: window)
+        try otherClick(
+            down: try middle(of: secondTab, in: strip), up: try middle(of: secondTab, in: strip), in: strip,
+            window: window)
         spinUntil("the other-button close") { !second.isOpen }
         check(
             !second.isOpen && documents() == count - 1 && first.isOpen && third.isOpen && host.active === firstTab,
             "an other-button click on a tab closes that tab, and only that one, without selecting it first")
         let closeOfFirst = try closeButton(first, in: strip)
-        let onClose = strip.convert(NSPoint(x: closeOfFirst.bounds.midX, y: closeOfFirst.bounds.midY), from: closeOfFirst)
+        let onClose = strip.convert(
+            NSPoint(x: closeOfFirst.bounds.midX, y: closeOfFirst.bounds.midY), from: closeOfFirst)
         host.activate(thirdTab)
         count = documents()
         try otherClick(down: onClose, up: onClose, in: strip, window: window)
@@ -415,9 +440,12 @@ private final class Box<Value> {
                 NSPoint(x: $0, y: strip.bounds.midY)
             }.first { border.hitTest(border.convert(strip.convert($0, to: nil), from: nil)) === border }
             if let claimed {
-                strip.mouseDown(with: try mouse(.leftMouseDown, at: strip.convert(claimed, to: nil), clicks: 2, in: window))
+                strip.mouseDown(
+                    with: try mouse(.leftMouseDown, at: strip.convert(claimed, to: nil), clicks: 2, in: window))
                 strip.mouseUp(with: try mouse(.leftMouseUp, at: strip.convert(claimed, to: nil), clicks: 2, in: window))
-                check(documents() == count, "a double-click where the window frame takes the pointer is left to the frame")
+                check(
+                    documents() == count, "a double-click where the window frame takes the pointer is left to the frame"
+                )
             } else {
                 print("NOTE the window frame claims no point of the tab strip in this window; nothing to leave to it")
             }
@@ -443,13 +471,17 @@ private final class Box<Value> {
         check(
             !strip.showsOpenTabList && list.isHidden && !children().contains { $0 === list }
                 && clip.convert(clip.bounds, to: strip).maxX == strip.bounds.maxX,
-            "six tabs fit an 800-point strip at the minimum width: no list of open tabs, and the tabs have the whole strip")
+            "six tabs fit an 800-point strip at the minimum width: no list of open tabs, and the tabs have the whole strip"
+        )
         tabs.append(try open("list7.txt", "text\n", in: folder))
         try resize(host, to: 800, strip: strip)
-        check(strip.showsOpenTabList && !list.isHidden, "a seventh tab overflows the strip, and the list of open tabs appears")
+        check(
+            strip.showsOpenTabList && !list.isHidden,
+            "a seventh tab overflows the strip, and the list of open tabs appears")
         let frame = strip.openTabListFrame, scrolling = clip.convert(clip.bounds, to: strip)
         check(
-            frame.width == 28 && frame.height == 28 && frame.minX - scrolling.maxX == 4 && frame.maxX <= strip.bounds.maxX
+            frame.width == 28 && frame.height == 28 && frame.minX - scrolling.maxX == 4
+                && frame.maxX <= strip.bounds.maxX
                 && list.superview === strip && !list.isDescendant(of: clip),
             "DS-14/74 it is a 28 by 28 target at the trailing end, outside the scrolling area and four points from it")
         check(
@@ -484,7 +516,8 @@ private final class Box<Value> {
             items.map(\.title) == [
                 "list5.txt, pinned, edited", "list6.txt, pinned", "list1.txt", "list2.txt", "list3.txt, edited",
                 "list4.txt", "list7.txt"
-            ], "DS-62 each row names its document and says in words when it is pinned or edited (\(items.map(\.title)))")
+            ], "DS-62 each row names its document and says in words when it is pinned or edited (\(items.map(\.title)))"
+        )
         check(
             items.filter { $0.state == .on }.map(\.title) == ["list1.txt"] && items.allSatisfy { $0.isEnabled },
             "the active tab, and only it, has the checkmark")
@@ -561,7 +594,9 @@ private final class Box<Value> {
         try hover(nil, in: strip)
         host.activate(keptTab)
         func documents() -> Int { NSDocumentController.shared.documents.count }
-        func centre(_ view: NSView) -> NSPoint { strip.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), from: view) }
+        func centre(_ view: NSView) -> NSPoint {
+            strip.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), from: view)
+        }
 
         // The close button of the rightmost tab: the first click closes it, the second lands on
         // the strip where the tab was.
@@ -625,13 +660,16 @@ private final class Box<Value> {
         try resize(host, to: 800, strip: strip)
         check(
             strip.showsOpenTabList && documents() == fitting + 1 && fillers.count >= 1,
-            "fixture: one tab more than fit (\(fitting) in \(strip.bounds.width) points) overflows and shows the list of open tabs")
+            "fixture: one tab more than fit (\(fitting) in \(strip.bounds.width) points) overflows and shows the list of open tabs"
+        )
         let scrolling = try requireValue(
             strip.subviews.compactMap { $0 as? NSScrollView }.first, "fixture: the strip's scrolling area")
         check(
             !scrolling.hasHorizontalScroller && !scrolling.hasVerticalScroller
-                && scrolling.contentView.frame.height == strip.bounds.height && scrolling.contentView.bounds.origin.y == 0,
-            "an overflowing strip has no scroll bar, whatever the scroll bar setting: its tabs keep the strip's whole height (\(scrolling.contentView.frame.height) of \(strip.bounds.height))")
+                && scrolling.contentView.frame.height == strip.bounds.height
+                && scrolling.contentView.bounds.origin.y == 0,
+            "an overflowing strip has no scroll bar, whatever the scroll bar setting: its tabs keep the strip's whole height (\(scrolling.contentView.frame.height) of \(strip.bounds.height))"
+        )
         where_ = centre(strip.openTabListButton)
         last = try requireValue(fillers.last, "fixture: the last tab")
         close = try closeButton(last, in: strip)
@@ -646,9 +684,12 @@ private final class Box<Value> {
         let lastClose = try requireValue(strip.tabLayout(lastTab), "fixture: its layout").close
         check(
             !strip.showsOpenTabList && under is NSButton && documents() == count - 1
-                && lastClose.contains(strip.subviews.compactMap { $0 as? NSScrollView }.first?.documentView?.convert(where_, from: strip) ?? .zero)
+                && lastClose.contains(
+                    strip.subviews.compactMap { $0 as? NSScrollView }.first?.documentView?.convert(where_, from: strip)
+                        ?? .zero)
                 && under.accessibilityLabel()?.hasPrefix("Close ") == true,
-            "when the list of open tabs goes, a tab is where it was: a second click there is a click on that tab, not on empty strip (\(type(of: under)) at \(where_) in a \(strip.bounds.width)-point strip, list shown \(strip.showsOpenTabList))")
+            "when the list of open tabs goes, a tab is where it was: a second click there is a click on that tab, not on empty strip (\(type(of: under)) at \(where_) in a \(strip.bounds.width)-point strip, list shown \(strip.showsOpenTabList))"
+        )
 
         // And the real thing still works: two clicks, both on the empty strip, close together.
         fillers.dropLast().forEach { $0.close() }
@@ -681,7 +722,9 @@ private final class Box<Value> {
         let compare = try requireValue(EditorServices.current?.compare, "fixture: the compare service")
         try compare.mark(tabs[2].1.primaryEditor)
         let symbol = try requireValue(
-            descendantImageViews(of: strip).first { !$0.isHidden && $0.toolTip?.hasPrefix("c.txt is selected") == true },
+            descendantImageViews(of: strip).first {
+                !$0.isHidden && $0.toolTip?.hasPrefix("c.txt is selected") == true
+            },
             "fixture: the comparison symbol of the third tab")
         let from = symbol.convert(NSPoint(x: 8, y: 8), to: nil)
         let to = strip.convert(NSPoint(x: 30, y: strip.bounds.midY), to: nil)
@@ -695,7 +738,9 @@ private final class Box<Value> {
             "and dropping it moves the tab, without selecting it")
         symbol.mouseDown(with: try mouse(.leftMouseDown, at: symbol.convert(NSPoint(x: 8, y: 8), to: nil), in: window))
         symbol.mouseUp(with: try mouse(.leftMouseUp, at: symbol.convert(NSPoint(x: 8, y: 8), to: nil), in: window))
-        check(host.active === tabs[2].1 && order().first == ids[2], "a click on the symbol still selects its tab and moves nothing")
+        check(
+            host.active === tabs[2].1 && order().first == ids[2],
+            "a click on the symbol still selects its tab and moves nothing")
 
         // The pointer is asked for again after a layout change it did not cause.
         // Order now: c a b d e. Edited tabs show the dot, except the one under the pointer.
@@ -713,14 +758,17 @@ private final class Box<Value> {
         try resize(host, to: 800, strip: strip)
         check(
             try cross(right) && !cross(left),
-            "after the window narrows under a still pointer, the cross is on the tab now under it, not the one that was")
+            "after the window narrows under a still pointer, the cross is on the tab now under it, not the one that was"
+        )
         try resize(host, to: 1000, strip: strip)
         check(try cross(left) && !cross(right), "and back again when it widens")
         location.value = nil
         strip.needsLayout = true
         strip.layoutSubtreeIfNeeded()
         strip.layout()
-        check(try !cross(left) && !cross(right), "a layout change that leaves the pointer outside the window drops the hover")
+        check(
+            try !cross(left) && !cross(right),
+            "a layout change that leaves the pointer outside the window drops the hover")
 
         // Menus go through the strip's presenters, so a check tracks none on the desktop.
         let shown = Box<[NSMenu]>([])
@@ -768,7 +816,8 @@ private final class Box<Value> {
         dot.performClick(nil)
         check(asked.value == ["edited.txt"], "a click on the dot asks for the review exactly once (\(asked.value))")
         check(
-            edited.isOpen && edited.isDocumentEdited && editedTab.primaryEditor.text == text && window.attachedSheet == nil
+            edited.isOpen && edited.isDocumentEdited && editedTab.primaryEditor.text == text
+                && window.attachedSheet == nil
                 && (try? tabButton(editedTab, in: strip)) != nil && NSDocumentController.shared.documents.count == 2,
             "DS-12 on Cancel the tab stays open with its unsaved text, and nothing else changed")
         let point = try middle(of: editedTab, in: strip)
@@ -786,7 +835,9 @@ private final class Box<Value> {
         check(
             asked.value.count == 3 && !edited.isOpen && other.isOpen,
             "after a cancelled review the next close asks again, and Don't Save closes the tab")
-        try otherClick(down: try middle(of: otherTab, in: strip), up: try middle(of: otherTab, in: strip), in: strip, window: window)
+        try otherClick(
+            down: try middle(of: otherTab, in: strip), up: try middle(of: otherTab, in: strip), in: strip,
+            window: window)
         spinUntil("the clean tab closes") { !other.isOpen }
         check(asked.value.count == 3 && !other.isOpen, "a tab with nothing to save closes without a review")
     }

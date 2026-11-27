@@ -1255,7 +1255,8 @@ import NativeSearch
                     // DS-61: every state uses the primary label colour; a failure is told apart by
                     // its words, its symbol, its tooltip and the heavier weight.
                     failing.lastRecoveryError == nil && failingStatus.textColor == .labelColor
-                        && failingStatus.font?.fontDescriptor.symbolicTraits.contains(.bold) == false && failingStatus.toolTip == nil
+                        && failingStatus.font?.fontDescriptor.symbolicTraits.contains(.bold) == false
+                        && failingStatus.toolTip == nil
                         && failingStatus.stringValue.hasPrefix("Edited — recovery copy kept"),
                     "successful recovery write shows the ordinary status and names the recovery copy")
                 let firstHealthyHeader = try Data(contentsOf: failingFile)
@@ -1265,7 +1266,8 @@ import NativeSearch
                 check(
                     failing.lastRecoveryError != nil
                         && failingStatus.stringValue.hasPrefix("⚠︎ Recovery copy not written:")
-                        && failingStatus.textColor == .labelColor && failingStatus.font?.fontDescriptor.symbolicTraits.contains(.bold) == true
+                        && failingStatus.textColor == .labelColor
+                        && failingStatus.font?.fontDescriptor.symbolicTraits.contains(.bold) == true
                         && failingStatus.toolTip?.isEmpty == false,
                     "failed recovery write is visibly distinct in the status line")
                 check(notices == 0, "one recovery failure does not raise a notice")
@@ -1278,7 +1280,8 @@ import NativeSearch
                 failing.editor.text = "abcd"
                 failing.flushRecovery()
                 check(
-                    notices == 1 && failingStatus.textColor == .labelColor && failingStatus.font?.fontDescriptor.symbolicTraits.contains(.bold) == true,
+                    notices == 1 && failingStatus.textColor == .labelColor
+                        && failingStatus.font?.fontDescriptor.symbolicTraits.contains(.bold) == true,
                     "further failures stay in the status line without another notice")
                 check(
                     try Data(contentsOf: failingFile) == corruptSnapshot,
@@ -1290,7 +1293,8 @@ import NativeSearch
                 failing.flushRecovery()
                 check(
                     try failing.lastRecoveryError == nil && failingStatus.textColor == .labelColor
-                        && failingStatus.font?.fontDescriptor.symbolicTraits.contains(.bold) == false && failingStatus.toolTip == nil
+                        && failingStatus.font?.fontDescriptor.symbolicTraits.contains(.bold) == false
+                        && failingStatus.toolTip == nil
                         && TextDocument.recovery.load(id: failing.recoveryID).text == "abcde",
                     "next successful recovery write clears the failure state")
                 // F202: a failed cleanup at close is recorded, never blocks, and leaves the file for the next launch's review.
@@ -1388,7 +1392,8 @@ import NativeSearch
                     revertFailure?.recoveryAttempter as? ExplicitEncodingOpener,
                     "automatic Revert offers an explicit UTF-16 LE choice when disk bytes become ambiguous")
                 check(
-                    automatic.isDocumentEdited && automatic.editor.text == edited && automatic.editor.revision == editedRevision,
+                    automatic.isDocumentEdited && automatic.editor.text == edited
+                        && automatic.editor.revision == editedRevision,
                     "failed automatic Revert preserves the full edited buffer and revision")
                 check(
                     !reverter.attemptRecovery(fromError: revertFailure!, optionIndex: 1)

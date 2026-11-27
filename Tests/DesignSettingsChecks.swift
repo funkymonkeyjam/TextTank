@@ -258,7 +258,8 @@ import NativeSearch
     static func search(_ text: String, in window: NSWindow) throws {
         let filter: NSSearchField = try control("settings.filter", window)
         filter.stringValue = text
-        _ = NSApp.sendAction(try requireValue(filter.action, "DG fixture: search action"), to: filter.target, from: filter)
+        _ = NSApp.sendAction(
+            try requireValue(filter.action, "DG fixture: search action"), to: filter.target, from: filter)
         window.contentView?.layoutSubtreeIfNeeded()
     }
     /// V6: panes, the search field, Changed from default, Use Default and Reveal in Finder.
@@ -273,12 +274,16 @@ import NativeSearch
         let toolbar = try requireValue(window.toolbar, "V6 fixture: Settings toolbar")
         check(
             toolbar.items.map(\.label) == ["Editing", "Appearance", "Files", "Previews", "Shortcuts"]
-                && window.toolbarStyle == .preference && toolbar.selectedItemIdentifier?.rawValue == "settings.pane.editing"
+                && window.toolbarStyle == .preference
+                && toolbar.selectedItemIdentifier?.rawValue == "settings.pane.editing"
                 && toolbar.items.allSatisfy { $0.image != nil },
             "V6 Settings switches five panes from a preference-style toolbar and opens on Editing")
         // Every setting of the flat window, and the stored toggles that had no control, by pane.
         let expected: [(String, [String])] = [
-            ("editing", ["settings.width", "settings.tabs", "settings.autoIndent", "settings.autoPair", "settings.wrap"]),
+            (
+                "editing",
+                ["settings.width", "settings.tabs", "settings.autoIndent", "settings.autoPair", "settings.wrap"]
+            ),
             (
                 "appearance",
                 [
@@ -304,7 +309,8 @@ import NativeSearch
             let content = try requireValue(window.contentView, "V6 fixture: content")
             heights[pane] = content.bounds.height
             check(
-                shownSettings(window) == settings && toolbar.selectedItemIdentifier?.rawValue == "settings.pane." + pane,
+                shownSettings(window) == settings
+                    && toolbar.selectedItemIdentifier?.rawValue == "settings.pane." + pane,
                 "V6 the \(pane) pane lists exactly its settings: \(shownSettings(window))")
             check(
                 abs(content.bounds.height - content.fittingSize.height) <= 1
@@ -329,15 +335,20 @@ import NativeSearch
             ($0.identifier?.rawValue ?? "").hasPrefix("settings.") && ($0 as? NSTextField)?.isEditable != false
                 && ($0.accessibilityLabel() ?? "").isEmpty
         }
-        check(unnamed.isEmpty, "V6 DS-70 every Settings control has an accessibility label: \(unnamed.map { $0.identifier!.rawValue })")
+        check(
+            unnamed.isEmpty,
+            "V6 DS-70 every Settings control has an accessibility label: \(unnamed.map { $0.identifier!.rawValue })")
 
         // Short number fields with steppers, saved when stepped.
         try choosePane("editing", in: window)
         let width = try field("settings.width", window)
         let stepper: NSStepper = try control("settings.width.stepper", window)
-        check(width.frame.width <= 60, "V6 a one- or two-digit number has a short field, not one \(width.frame.width) points wide")
+        check(
+            width.frame.width <= 60,
+            "V6 a one- or two-digit number has a short field, not one \(width.frame.width) points wide")
         stepper.integerValue = 5
-        _ = NSApp.sendAction(try requireValue(stepper.action, "V6 fixture: stepper action"), to: stepper.target, from: stepper)
+        _ = NSApp.sendAction(
+            try requireValue(stepper.action, "V6 fixture: stepper action"), to: stepper.target, from: stepper)
         check(
             controller.value.tabWidth == 5 && width.stringValue == "5" && SettingsStore(url: url).value.tabWidth == 5
                 && stepper.minValue == 1 && stepper.maxValue == 32,
@@ -353,7 +364,9 @@ import NativeSearch
             abs(content.bounds.height - content.fittingSize.height) <= 1,
             "V6 the window is as tall as the search results")
         try search("THEME", in: window)
-        check(shownSettings(window) == ["settings.appearance"], "V6 a synonym finds a setting in another pane, in any case")
+        check(
+            shownSettings(window) == ["settings.appearance"],
+            "V6 a synonym finds a setting in another pane, in any case")
         try search("startup", in: window)
         check(shownSettings(window) == ["settings.atLaunch"], "V6 “startup” finds At launch")
         try search("file ask", in: window)
@@ -362,7 +375,9 @@ import NativeSearch
             "V6 every word typed must match, in the label or a synonym: \(shownSettings(window))")
         try search("indent", in: window)
         check(
-            shownSettings(window) == ["settings.width", "settings.tabs", "settings.autoIndent", "settings.indentGuides"],
+            shownSettings(window) == [
+                "settings.width", "settings.tabs", "settings.autoIndent", "settings.indentGuides"
+            ],
             "V6 one word lists matching settings across panes, in pane order: \(shownSettings(window))")
         NativeFixtureEnvironment.announcements = []
         try search("zzzz", in: window)
@@ -399,7 +414,7 @@ import NativeSearch
         custom.wrap = true
         custom.appearance = "dark"
         custom.autoPair = true
-        custom.currentLineHighlight = true  // stored, but the default value: not a change
+        custom.currentLineHighlight = true // stored, but the default value: not a change
         try controller.save(custom)
         changed.performClick(nil)
         check(
@@ -412,7 +427,10 @@ import NativeSearch
             defaults.map { $0.identifier!.rawValue } == [
                 "settings.width.default", "settings.autoPair.default", "settings.wrap.default",
                 "settings.appearance.default"
-            ] && defaults.allSatisfy { $0.title == "Use Default" && $0.accessibilityLabel()?.hasPrefix("Use the default for ") == true },
+            ]
+                && defaults.allSatisfy {
+                    $0.title == "Use Default" && $0.accessibilityLabel()?.hasPrefix("Use the default for ") == true
+                },
             "V6 each changed setting has its own named way back to its default")
         let wrapDefault: NSButton = try control("settings.wrap.default", window)
         wrapDefault.performClick(nil)
@@ -499,7 +517,8 @@ import NativeSearch
         try choosePane("files", in: window)
         let revealButton: NSButton = try control("settings.reveal", window)
         check(
-            revealButton.title == "Reveal Settings File in Finder" && !(revealButton.accessibilityLabel() ?? "").isEmpty,
+            revealButton.title == "Reveal Settings File in Finder"
+                && !(revealButton.accessibilityLabel() ?? "").isEmpty,
             "V6 the Files pane has Reveal Settings File in Finder")
         revealButton.performClick(nil)
         check(revealed == [url], "V6 it shows the settings file itself")
@@ -531,7 +550,8 @@ import NativeSearch
         }
         func listed() -> [String] { (0..<table.numberOfRows).map { text($0, 0) } }
         func row(_ title: String) throws -> Int {
-            try requireValue((0..<table.numberOfRows).first { text($0, 0) == title }, "V8 fixture: the command \(title)")
+            try requireValue(
+                (0..<table.numberOfRows).first { text($0, 0) == title }, "V8 fixture: the command \(title)")
         }
         func select(_ title: String) throws {
             table.selectRowIndexes([try row(title)], byExtendingSelection: false)
@@ -550,10 +570,13 @@ import NativeSearch
         /// Clicks the recorder and presses a key, as a person does.
         func press(_ characters: String, _ flags: NSEvent.ModifierFlags, code: UInt16 = 0) throws {
             recorder.performClick(nil)
-            try require(recorder.isRecording && window.firstResponder === recorder, "V8 fixture: the recorder is recording")
+            try require(
+                recorder.isRecording && window.firstResponder === recorder, "V8 fixture: the recorder is recording")
             window.sendEvent(try key(characters, flags, code: code))
         }
-        func button(_ id: String) throws -> NSButton { try DesignSettingsChecks.control("settings.shortcuts." + id, window) }
+        func button(_ id: String) throws -> NSButton {
+            try DesignSettingsChecks.control("settings.shortcuts." + id, window)
+        }
         /// The command of the selected row, or nil.
         var selectedTitle: String? { table.selectedRow >= 0 ? text(table.selectedRow, 0) : nil }
     }
@@ -615,7 +638,8 @@ import NativeSearch
                     exposes($0, purpose: purpose, role: "AXButton")
                         && modernAttribute($0, "accessibilityValue") as? String == value
                 } && recorder.accessibilityHelp() == nil,
-                "V8 DS-70 the window's accessibility tree has the recorder as a button named “\(purpose)” with that value")
+                "V8 DS-70 the window's accessibility tree has the recorder as a button named “\(purpose)” with that value"
+            )
         }
         table.deselectAll(nil)
         // The list takes the height the window gives the pane.
@@ -651,11 +675,15 @@ import NativeSearch
             let list = scroll.convert(scroll.bounds, to: content)
             return recorder.frame.height == recorderHeight
                 && recorder.convert(recorder.bounds, to: content).maxY <= list.minY + 1
-                && controls.allSatisfy { content.bounds.insetBy(dx: -1, dy: -1).contains($0.convert($0.bounds, to: content)) }
+                && controls.allSatisfy {
+                    content.bounds.insetBy(dx: -1, dy: -1).contains($0.convert($0.bounds, to: content))
+                }
         }
         // With scroll bars always shown (a mouse, a hosted runner) the vertical one takes width
         // from the list. The columns must still fit: no sideways scrolling, no clipped Status.
-        print("V8_SCROLLERS", scroll.scrollerStyle == .legacy ? "always shown" : "overlay", scroll.contentSize, table.frame.size)
+        print(
+            "V8_SCROLLERS", scroll.scrollerStyle == .legacy ? "always shown" : "overlay", scroll.contentSize,
+            table.frame.size)
         check(
             !scroll.hasHorizontalScroller && table.frame.width <= scroll.contentSize.width + 0.5
                 && table.tableColumns.allSatisfy { $0.width >= 90 },
@@ -681,7 +709,8 @@ import NativeSearch
         check(
             most >= accepted && abs(window.frame.height - limit) <= 1
                 && abs(scroll.frame.height - (listHeight + most)) <= 1 && intact(),
-            "V8 at the height of its screen the list has all the height the window was allowed: \(scroll.frame.height) of \(limit)")
+            "V8 at the height of its screen the list has all the height the window was allowed: \(scroll.frame.height) of \(limit)"
+        )
         let again = grow(by: 160)
         try find("save")
         try find("")
@@ -701,7 +730,8 @@ import NativeSearch
         check(
             abs(scroll.frame.height - (listHeight - 100)) <= 1 && intact()
                 && abs(content.bounds.height - (paneHeight - 100)) <= 1,
-            "V8 in a window shorter than the pane the list gives up the height and every control stays inside: \(scroll.frame.height)")
+            "V8 in a window shorter than the pane the list gives up the height and every control stays inside: \(scroll.frame.height)"
+        )
         try choosePane("editing", in: window)
         check(
             window.contentMaxSize == window.contentMinSize && content.bounds.height < paneHeight,
@@ -812,7 +842,8 @@ import NativeSearch
                 && SettingsStore(url: settings.url).value.shortcuts == settings.value.shortcuts
                 && text(try row("File › New"), 1) == "⌃⌥K" && text(try row("File › New"), 2) == "Custom"
                 && message.stringValue == "“File › New” now uses Control-Option-K.",
-            "V8 recording Control-Option-K for File › New saves it at once: \(settings.value.shortcuts) \(message.stringValue)")
+            "V8 recording Control-Option-K for File › New saves it at once: \(settings.value.shortcuts) \(message.stringValue)"
+        )
         check(
             new.keyEquivalent == "k" && new.keyEquivalentModifierMask == [.control, .option],
             "V8 the menu item has the key at once")
@@ -892,7 +923,8 @@ import NativeSearch
                 && text(try row("View › Show › Whitespace"), 1) == "⌃⌥W",
             "V8 View › Show › Whitespace takes Control-Option-W")
         try button("default").performClick(nil)
-        check(settings.value.shortcuts["showWhitespace"] == nil && settings.value.showWhitespaceEnabled == whitespace,
+        check(
+            settings.value.shortcuts["showWhitespace"] == nil && settings.value.showWhitespaceEnabled == whitespace,
             "V8 fixture: the toggle's shortcut is removed and its setting was not touched")
 
         // Changed from default narrows the list to the commands that were changed.
@@ -912,7 +944,8 @@ import NativeSearch
         try press("j", .command, code: 38)
         check(
             try settings.value.shortcuts["deleteLine"] == "k" && settings.value.shortcuts["duplicateLine"] == "j"
-                && settings.value.shortcuts["upper"] == "ctrl+cmd+v" && text(try row("Edit › Lines › Delete Line"), 1) == "⌘K",
+                && settings.value.shortcuts["upper"] == "ctrl+cmd+v"
+                && text(try row("Edit › Lines › Delete Line"), 1) == "⌘K",
             "G396 the real Settings list keeps several assignments, each saved as it is made")
         try button("default").performClick(nil)
         try select("Edit › Lines › Delete Line")
@@ -927,7 +960,8 @@ import NativeSearch
         try button("default").performClick(nil)
         check(
             try settings.value.shortcuts["upper"] == nil && toggle.keyEquivalent == "v"
-                && toggle.keyEquivalentModifierMask == [.control, .command] && text(try row("View › Preview › Toggle Preview"), 2) == "Default",
+                && toggle.keyEquivalentModifierMask == [.control, .command]
+                && text(try row("View › Preview › Toggle Preview"), 2) == "Default",
             "V8 Use Default removes one assignment and the yielding default has its key again")
         try select("File › New")
         try button("default").performClick(nil)
@@ -989,7 +1023,9 @@ import NativeSearch
         func runItem() -> NSMenuItem? {
             func search(_ menu: NSMenu) -> NSMenuItem? {
                 for item in menu.items {
-                    if item.target is RunController, item.title == ConfiguredRun.uppercaseSample.menuTitle { return item }
+                    if item.target is RunController, item.title == ConfiguredRun.uppercaseSample.menuTitle {
+                        return item
+                    }
                     if let found = item.submenu.flatMap(search) { return found }
                 }
                 return nil
@@ -1021,8 +1057,10 @@ import NativeSearch
         let small = NSMenu()
         let fixture = NSMenu(title: "Fixture")
         small.addItem(title: "Fixture", action: nil).submenu = fixture
-        fixture.addItem(title: "First", action: #selector(NSText.selectAll(_:)), keyEquivalent: "j", representedObject: "one")
-        fixture.addItem(title: "Second", action: #selector(NSText.selectAll(_:)), keyEquivalent: "j", representedObject: "two")
+        fixture.addItem(
+            title: "First", action: #selector(NSText.selectAll(_:)), keyEquivalent: "j", representedObject: "one")
+        fixture.addItem(
+            title: "Second", action: #selector(NSText.selectAll(_:)), keyEquivalent: "j", representedObject: "two")
         NSApp.mainMenu = small
         settings.showSettings(nil)
         try choosePane("files", in: window)

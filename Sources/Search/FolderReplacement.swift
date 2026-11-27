@@ -430,7 +430,8 @@ package enum FolderReplacement {
                 let newBytes = utf8 ? p.encoded.count : p.newText.utf8.count
                 guard max(oldBytes, newBytes) <= SizePolicy.standard.reviewText else {
                     throw FolderSearchError.invalidRequest(
-                        "Patch preview supports up to \(SizePolicy.describe(SizePolicy.standard.reviewText)) of UTF-8 text per file on each side. Select a smaller file or shorten the replacement.")
+                        "Patch preview supports up to \(SizePolicy.describe(SizePolicy.standard.reviewText)) of UTF-8 text per file on each side. Select a smaller file or shorten the replacement."
+                    )
                 }
                 let a = try TextSnapshot(
                     bytes: utf8 ? p.original : Data(p.oldText.utf8), source: .file(UUID()), label: url.lastPathComponent

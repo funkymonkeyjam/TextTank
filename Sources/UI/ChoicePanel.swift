@@ -96,7 +96,8 @@ import AppKit
     func refresh() {
         let selected = displayed.indices.contains(table.selectedRow) ? displayed[table.selectedRow].id : nil
         let query = filter.stringValue
-        displayed = filteredRows?(query) ?? rows().filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) }
+        displayed =
+            filteredRows?(query) ?? rows().filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) }
         table.rowHeight = displayed.contains { !$0.detail.isEmpty } ? 46 : 30
         table.reloadData()
         // Said once when the list empties, not for every further character typed (DS-36, DS-72).
@@ -112,13 +113,16 @@ import AppKit
         updateChoice()
     }
     private func updateChoice() {
-        chooseButton?.isEnabled = canChoose() && displayed.indices.contains(table.selectedRow) && displayed[table.selectedRow].enabled
+        chooseButton?.isEnabled =
+            canChoose() && displayed.indices.contains(table.selectedRow) && displayed[table.selectedRow].enabled
     }
     @objc private func activate() {
         guard !activating, form.acceptsActions else { return }
         activating = true
         defer { activating = false }
-        guard form.commitEditing(), canChoose(), displayed.indices.contains(table.selectedRow), displayed[table.selectedRow].enabled else { return }
+        guard form.commitEditing(), canChoose(), displayed.indices.contains(table.selectedRow),
+            displayed[table.selectedRow].enabled
+        else { return }
         do { if try choose(displayed[table.selectedRow].id) { form.close() } } catch {
             form.showValidation(error, field: filter)
         }

@@ -13,7 +13,9 @@ import Foundation
             old.version == 1 && old.untitled == nil && old.files.map(\.path) == ["/synthetic/notes.txt"]
                 && old.layout.groups[0].tabs.count == 1,
             "V9 a last-session file written before the decision loads as it did")
-        check(try old.encoded() == before, "V9 a session with no kept untitled document is written byte for byte as before")
+        check(
+            try old.encoded() == before,
+            "V9 a session with no kept untitled document is written byte for byte as before")
         check(
             try LastSessionLayout(files: old.files, untitled: [], layout: old.layout).encoded() == before,
             "V9 the new initializer without untitled documents writes version 1")
@@ -37,7 +39,8 @@ import Foundation
             only.files.isEmpty && only.untitled == kept.untitled && only.version == 2
                 && only.layout.groups.map(\.tabs.count) == [1, 1],
             "V9 a launch set to a new document still gets the kept untitled tabs, without the files")
-        check(try old.untitledOnly().version == 1, "V9 untitled-only of a files-only record is an empty version-1 record")
+        check(
+            try old.untitledOnly().version == 1, "V9 untitled-only of a files-only record is an empty version-1 record")
         var raw = try JSONSerialization.jsonObject(with: bytes) as! [String: Any]
         raw["version"] = 1
         rejects("V9 untitled entries are refused in a version-1 record") {
@@ -63,11 +66,12 @@ import Foundation
         }
         rejects("V9 an untitled tab without a record is refused") {
             _ = try LastSessionLayout.decode(
-                JSONSerialization.data(withJSONObject: {
-                    var value = try JSONSerialization.jsonObject(with: bytes) as! [String: Any]
-                    value["untitled"] = [(value["untitled"] as! [[String: Any]])[0]]
-                    return value
-                }()))
+                JSONSerialization.data(
+                    withJSONObject: {
+                        var value = try JSONSerialization.jsonObject(with: bytes) as! [String: Any]
+                        value["untitled"] = [(value["untitled"] as! [[String: Any]])[0]]
+                        return value
+                    }()))
         }
         let settings = try EditorSettings.decode(fixture("Settings.json"))
         check(

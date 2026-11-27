@@ -33,9 +33,11 @@ package struct ReviewApplyPolicy: Sendable {
         maximumReplacementBytes = SizePolicy.standard.reviewText
         maximumResultBytes = SizePolicy.standard.reviewText
     }
-    package init(maximumExpectedBytes: Int = SizePolicy.standard.reviewText,
-                 maximumReplacementBytes: Int = SizePolicy.standard.reviewText,
-                 maximumResultBytes: Int = SizePolicy.standard.reviewText) throws {
+    package init(
+        maximumExpectedBytes: Int = SizePolicy.standard.reviewText,
+        maximumReplacementBytes: Int = SizePolicy.standard.reviewText,
+        maximumResultBytes: Int = SizePolicy.standard.reviewText
+    ) throws {
         let allowed = 0...SizePolicy.standard.reviewText
         guard allowed.contains(maximumExpectedBytes), allowed.contains(maximumReplacementBytes),
             allowed.contains(maximumResultBytes)

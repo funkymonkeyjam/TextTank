@@ -1251,7 +1251,8 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                     skips.stale += 1
                     continue
                 }
-                let capture = action == .replaceAll && !chosen.isEmpty ? BulkChangeCapture(editor, name: "Replace All") : nil
+                let capture =
+                    action == .replaceAll && !chosen.isEmpty ? BulkChangeCapture(editor, name: "Replace All") : nil
                 let priorName = editor.exchangeNextUndoName(action == .replaceAll ? "Replace All" : "Replace")
                 defer { _ = editor.exchangeNextUndoName(priorName) }
                 switch Self.replace(chosen, text: buffer.text, revision: buffer.revision, in: editor) {
@@ -1483,8 +1484,9 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                 }
                 if matched && action == "replaceAll" {
                     completion(.replacedAll(replaced))
+                } else {
+                    completion(matched ? .applied : .noMatch)
                 }
-                else { completion(matched ? .applied : .noMatch) }
             } catch {
                 guard !cancellation.cancelled else {
                     completion(.cancelled)
@@ -1626,7 +1628,10 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         guard !cancellation.cancelled else { throw CancellationError() }
         if selected == nil && options.wrap { selected = ranges.first }
         var visible = ranges
-        if let selected, !visible.contains(selected) { visible.removeLast(); visible.append(selected) }
+        if let selected, !visible.contains(selected) {
+            visible.removeLast()
+            visible.append(selected)
+        }
         let count: String
         if report.truncated {
             count = "\(limit)+ matches"
@@ -1638,7 +1643,8 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         return InlinePreview(highlights: visible, selected: selected, countText: count)
     }
     /// Read-only. Range conversion and searching operate only on the immutable editor snapshot.
-    nonisolated static func preview(_ snapshot: Data, options: SearchOptions, openingCaret: Int,
+    nonisolated static func preview(
+        _ snapshot: Data, options: SearchOptions, openingCaret: Int,
         cancellation: TTSearchCancellation,
         unitLimit: Int = SearchCore.maximumTextUnits,
         chunkBytes: Int = SearchCore.largeChunkBytes
@@ -1673,19 +1679,28 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
             guard !cancellation.cancelled else { throw CancellationError() }
             let caret = utf8.index(utf8.startIndex, offsetBy: openingCaret)
             guard let start = caret.samePosition(in: utf16) else { throw SearchFailure.positionMapping }
-            let tail = NSRange(location: utf16.distance(from: utf16.startIndex, to: start),
-                               length: utf16.distance(from: start, to: utf16.endIndex))
-            let remaining = try SearchCore.search(text, options: options, range: tail, cancellation: cancellation, limit: 1)
+            let tail = NSRange(
+                location: utf16.distance(from: utf16.startIndex, to: start),
+                length: utf16.distance(from: start, to: utf16.endIndex))
+            let remaining = try SearchCore.search(
+                text, options: options, range: tail, cancellation: cancellation, limit: 1)
             if let hit = remaining.hits.first { selected = try bytes(hit.range) }
         }
         guard !cancellation.cancelled else { throw CancellationError() }
         if selected == nil && options.wrap { selected = ranges.first }
         var visible = ranges
-        if let selected, !visible.contains(selected) { visible.removeLast(); visible.append(selected) }
+        if let selected, !visible.contains(selected) {
+            visible.removeLast()
+            visible.append(selected)
+        }
         let count: String
-        if report.truncated { count = "\(limit)+ matches" }
-        else if let selected, let i = ranges.firstIndex(of: selected) { count = "\(i + 1) of \(ranges.count)" }
-        else { count = ranges.isEmpty ? "No matches" : "\(ranges.count) matches" }
+        if report.truncated {
+            count = "\(limit)+ matches"
+        } else if let selected, let i = ranges.firstIndex(of: selected) {
+            count = "\(i + 1) of \(ranges.count)"
+        } else {
+            count = ranges.isEmpty ? "No matches" : "\(ranges.count) matches"
+        }
         return InlinePreview(highlights: visible, selected: selected, countText: count)
     }
     /// `revision` is the staleness authority: every insert and delete moves it, in every view of a

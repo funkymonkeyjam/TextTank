@@ -15,20 +15,28 @@ import EditorBridge
             pane.cacheDisplay(in: pane.bounds, to: rep)
         }
         let line = String(repeating: "Orchid café 🌷 ", count: 1700)
-        let samples = [("wrap-final.txt", line), ("wrap-safety.swift",
-            String(repeating: "a", count: SizePolicy.standard.largeLineThreshold + 1))]
+        let samples = [
+            ("wrap-final.txt", line),
+            (
+                "wrap-safety.swift",
+                String(repeating: "a", count: SizePolicy.standard.largeLineThreshold + 1)
+            )
+        ]
         var docs = [TextDocument]()
         defer { for document in docs { document.close() } }
         for (name, text) in samples {
             let url = root.appendingPathComponent(name)
             try Data(text.utf8).write(to: url)
-            docs.append(try DocumentFactory.openCaptured(WorkspaceStore.captureRegularFile(url), from: url, display: false))
+            docs.append(
+                try DocumentFactory.openCaptured(WorkspaceStore.captureRegularFile(url), from: url, display: false))
         }
         let ids = docs.map { DocumentID($0.recoveryID) }
         let mapping = Dictionary(uniqueKeysWithValues: zip(ids, docs))
         var views = ids.map { id in
-            var t = WorkspaceLayoutState.Tab(documentID: id, isPinned: false, anchorByte: 8, caretByte: 2, firstVisibleLine: 37)
-            t.split = .init(otherAnchorByte: 0, otherCaretByte: 6, otherFirstVisibleLine: 0,
+            var t = WorkspaceLayoutState.Tab(
+                documentID: id, isPinned: false, anchorByte: 8, caretByte: 2, firstVisibleLine: 37)
+            t.split = .init(
+                otherAnchorByte: 0, otherCaretByte: 6, otherFirstVisibleLine: 0,
                 otherHorizontalOffset: 25, activeHorizontalOffset: 0, secondaryActive: true, primaryFraction: 0.31)
             t.split?.activeWrapping = .wrapped(documentLine: 0, subline: 37)
             t.split?.otherWrapping = .unwrapped
@@ -36,41 +44,57 @@ import EditorBridge
         }
         views[1].split?.activeWrapping = .wrapped(documentLine: Int.max, subline: Int.max)
         views[1].split?.otherWrapping = .wrapped(documentLine: 0, subline: 12)
-        var state = WorkspaceLayoutState(layout:.single, focusedGroup:.first,
-            groups:[.init(slot:.first,activeTabIndex:1,tabs:views)])
-        check(host.restoreSessionLayout(state, documents:mapping), "wrapped split layout accepted")
+        var state = WorkspaceLayoutState(
+            layout: .single, focusedGroup: .first,
+            groups: [.init(slot: .first, activeTabIndex: 1, tabs: views)])
+        check(host.restoreSessionLayout(state, documents: mapping), "wrapped split layout accepted")
         let deferred = try required(docs[1].presentation)
-        check(docs[1].deferredLargeFileLanguage != nil && !deferred.primaryEditor.wrap
-            && deferred.secondary?.wrap == false && deferred.activeEditor.firstVisibleLine == 0,
+        check(
+            docs[1].deferredLargeFileLanguage != nil && !deferred.primaryEditor.wrap
+                && deferred.secondary?.wrap == false && deferred.activeEditor.firstVisibleLine == 0,
             "a new large-file policy wins over both saved wrapping settings and unbounded offsets")
         let hidden = try required(docs[0].presentation)
         let captured = host.captureSessionLayout()
-        check(captured.groups[0].tabs[0] == views[0], "a checkpoint before mounting retains the hidden split's wrap, viewport, and divider")
+        check(
+            captured.groups[0].tabs[0] == views[0],
+            "a checkpoint before mounting retains the hidden split's wrap, viewport, and divider")
         host.activate(hidden)
         let a = hidden.primaryEditor, b = try required(hidden.secondary)
-        check(host.captureSessionLayout().groups[0].tabs[0].split?.activeWrapping == .wrapped(documentLine: 0, subline: 37),
+        check(
+            host.captureSessionLayout().groups[0].tabs[0].split?.activeWrapping
+                == .wrapped(documentLine: 0, subline: 37),
             "an immediate checkpoint after mounting retains a pending native wrap anchor")
-        try paint(a); try paint(b)
-        check(!a.wrap && b.wrap && b.firstVisibleDocumentLine == 0 && b.firstVisibleSubline == 37
-            && b.firstVisibleLine == 37 && a.horizontalScrollOffset == 25,
+        try paint(a)
+        try paint(b)
+        check(
+            !a.wrap && b.wrap && b.firstVisibleDocumentLine == 0 && b.firstVisibleSubline == 37
+                && b.firstVisibleLine == 37 && a.horizontalScrollOffset == 25,
             "the first real paints restore both distinct pane wrap settings and a final physical line's subrow")
         let width = hidden.split.bounds.width - hidden.split.dividerThickness
-        check(abs(a.frame.width/width - 0.31) < 0.02 && a.selectionCaret == 6 && b.selectionCaret == 2,
+        check(
+            abs(a.frame.width / width - 0.31) < 0.02 && a.selectionCaret == 6 && b.selectionCaret == 2,
             "off-center divider and both selections remain independent of the saved vertical scroll")
         b.scrollTo(documentLine: 0, subline: 24)
         a.wrap = true
-        try paint(a); a.scrollTo(documentLine: 0, subline: 53)
+        try paint(a)
+        a.scrollTo(documentLine: 0, subline: 53)
         state = host.captureSessionLayout()
-        check(state.groups[0].tabs[0].split?.activeWrapping == .wrapped(documentLine: 0, subline: 24)
-            && state.groups[0].tabs[0].split?.otherWrapping == .wrapped(documentLine: 0, subline: 53),
+        check(
+            state.groups[0].tabs[0].split?.activeWrapping == .wrapped(documentLine: 0, subline: 24)
+                && state.groups[0].tabs[0].split?.otherWrapping == .wrapped(documentLine: 0, subline: 53),
             "capture stores independent wrapped locations for both panes")
         if var old = state.groups[0].tabs[0].split {
-            old.activeWrapping = nil; old.otherWrapping = nil
-            var legacy = state; legacy.groups[0].tabs[0].split = old
-            check(host.restoreSessionLayout(legacy, documents:mapping) && a.wrap && b.wrap,
+            old.activeWrapping = nil
+            old.otherWrapping = nil
+            var legacy = state
+            legacy.groups[0].tabs[0].split = old
+            check(
+                host.restoreSessionLayout(legacy, documents: mapping) && a.wrap && b.wrap,
                 "older split metadata keeps each pane's existing wrapping policy")
-            try paint(a); try paint(b)
-            check(a.firstVisibleLine == 53 && b.firstVisibleLine == 24,
+            try paint(a)
+            try paint(b)
+            check(
+                a.firstVisibleLine == 53 && b.firstVisibleLine == 24,
                 "legacy display rows on the last wrapped line survive without the new optional keys")
         }
         b.wrap = false
@@ -78,8 +102,9 @@ import EditorBridge
         check(host.restoreSessionLayout(state, documents: mapping), "the native view awaits a new wrap paint")
         _ = b.setSelectionAnchor(0, caret: 0)
         try paint(b)
-        check(b.firstVisibleLine == 0 && b.selectionCaret == 0,
-              "a new user caret wins over the unresolved restoration")
+        check(
+            b.firstVisibleLine == 0 && b.selectionCaret == 0,
+            "a new user caret wins over the unresolved restoration")
         let frame = NSRect(x: 0, y: 0, width: 559, height: 300)
         let offscreen = NSWindow(contentRect: frame, styleMask: .titled, backing: .buffered, defer: false)
         for supersede in [false, true] {
@@ -93,11 +118,14 @@ import EditorBridge
             if supersede { _ = fresh.setSelectionAnchor(0, caret: 0) }
             try paint(fresh)
             if supersede {
-                check(fresh.firstVisibleLine == 0 && fresh.selectionCaret == 0,
-                      "a late native wrap cannot supersede the user's new selection")
+                check(
+                    fresh.firstVisibleLine == 0 && fresh.selectionCaret == 0,
+                    "a late native wrap cannot supersede the user's new selection")
             } else {
-                check(fresh.firstVisibleDocumentLine == 1 && fresh.firstVisibleSubline == 52 && fresh.selectionCaret == 17,
-                      "first paint restores the target inside the second physical line")
+                check(
+                    fresh.firstVisibleDocumentLine == 1 && fresh.firstVisibleSubline == 52
+                        && fresh.selectionCaret == 17,
+                    "first paint restores the target inside the second physical line")
             }
         }
         var invalid = state
@@ -105,11 +133,14 @@ import EditorBridge
         rejects("negative wrapped subrow invalidates the layout") { try invalid.validate() }
         var oversized = state
         oversized.groups[0].tabs[0].split?.activeWrapping = .wrapped(documentLine: Int.max, subline: Int.max)
-        check(host.restoreSessionLayout(oversized,documents:mapping), "huge positive wrap positions remain clamped position requests")
+        check(
+            host.restoreSessionLayout(oversized, documents: mapping),
+            "huge positive wrap positions remain clamped position requests")
         try paint(b)
-        check(b.firstVisibleDocumentLine == 0 && b.firstVisibleLine < line.utf8.count &&
-              docs[0].editor.checkedUTF8Data == Data(line.utf8) && !docs[0].isDocumentEdited,
-              "native row clamping keeps shortened originals clean")
+        check(
+            b.firstVisibleDocumentLine == 0 && b.firstVisibleLine < line.utf8.count
+                && docs[0].editor.checkedUTF8Data == Data(line.utf8) && !docs[0].isDocumentEdited,
+            "native row clamping keeps shortened originals clean")
     }
     static func run(app: NSApplication, controller: TextDocumentController) throws {
         precondition(!AppStorage.permitsLegacyDefaults && controller.documents.isEmpty)
@@ -221,10 +252,12 @@ import EditorBridge
         let canceledBytes = try Data(contentsOf: metadata)
         check(requests == 1 && replies == [false], "cancel replies once to the first native review request")
         check(canceledBytes == initialBytes, "cancel retains the exact preceding periodic file")
-        check(openDocuments.count == 8 && Set(controller.documents.map(ObjectIdentifier.init)) == openDocuments,
-              "cancel keeps all eight original documents open")
-        check(docs[0].isDocumentEdited && docs[0].editor.utf8Data == dirtyBytes
-              && docs[0].editor.text.contains("dirty unsaved text"), "cancel retains the exact dirty editor contents")
+        check(
+            openDocuments.count == 8 && Set(controller.documents.map(ObjectIdentifier.init)) == openDocuments,
+            "cancel keeps all eight original documents open")
+        check(
+            docs[0].isDocumentEdited && docs[0].editor.utf8Data == dirtyBytes
+                && docs[0].editor.text.contains("dirty unsaved text"), "cancel retains the exact dirty editor contents")
         check(first.applicationShouldTerminate(app) == .terminateLater, "second dirty attempt still requires review")
         guard spinUntil("second dirty quit to request native review", { requests >= 2 }) else { return }
         check(requests == 2, "second dirty quit requests native review exactly once")
