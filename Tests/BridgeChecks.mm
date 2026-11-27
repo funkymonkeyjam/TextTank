@@ -103,7 +103,7 @@ static void scrollSurfaceChecks() {
     [engine message:SCI_SETFIRSTVISIBLELINE wParam:10];
     SCIContentView *content = engine.content;
     const BOOL supported = [content respondsToSelector:@selector(drawScrollRect:inContext:)];
-    check(supported, "scrolling can flatten an exposed strip before the backing layer presents the viewport");
+    check(supported, "scrolling can isolate an exposed strip before the backing layer presents the viewport");
     if (!supported) return;
     NSRect viewport = engine.scrollView.contentView.bounds;
 
@@ -136,7 +136,7 @@ static void scrollSurfaceChecks() {
                 if (direct[i+3] == 255) { dark += direct[i] < 100; light += direct[i] > 200; }
                 if (memcmp(&direct[i], &flattened[i], 4) != 0) ++different;
             }
-            check(rendered == (inset == 0 || scale == 2), "only device-aligned scroll strips use the bitmap path");
+            check(rendered == (inset == 0 || scale == 2), "only device-aligned scroll strips use a bounded layer");
             check(dark > 0 && light > 0 && different == 0,
                   scale == 1 ? "one-times scroll strip preserves native glyphs, position and dirty clip" :
                                "Retina scroll strip preserves native glyphs, position and dirty clip");

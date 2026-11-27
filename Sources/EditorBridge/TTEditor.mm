@@ -213,48 +213,24 @@ static char TTPairCloser(NSString *text) {
 @implementation TTContentView {
     NSRect _lastDrawnViewport;
 }
-// A scrolling clip view can replay the text drawing commands for every line in the
-// viewport. Give it a scale-matched image of just the newly painted strip instead.
-// The image is transient. Scintilla still draws the glyphs, selection and caret.
+// Give Core Graphics the bounds of the exposed strip when AppKit replays the
+// scroll. The native context retains its backing resolution and colour handling.
 - (BOOL)drawScrollRect:(NSRect)rect inContext:(CGContextRef)destination {
     if (!destination) return NO;
-    // Use the device scale, including AppKit's recording-context base transform.
-    // Match the destination CTM's vertical orientation for identical glyph rasterization.
-    CGAffineTransform transform = CGContextGetUserSpaceToDeviceSpaceTransform(destination);
-    const CGAffineTransform drawing = CGContextGetCTM(destination);
-    if (transform.a <= 0 || transform.d == 0 || transform.b != 0 || transform.c != 0 ||
-        drawing.a <= 0 || drawing.d == 0 || drawing.b != 0 || drawing.c != 0) return NO;
-    if (std::signbit(transform.d) != std::signbit(drawing.d)) {
-        transform.d = -transform.d;
-        transform.ty = -transform.ty;
-    }
-    const CGRect pixels = CGRectApplyAffineTransform(rect, transform);
-    // Compositing a fractional boundary twice changes its antialiasing coverage.
-    if (!CGRectEqualToRect(pixels, CGRectIntegral(pixels))) return NO;
+    const CGAffineTransform device = CGContextGetUserSpaceToDeviceSpaceTransform(destination);
+    if (device.a <= 0 || device.d == 0 || device.b != 0 || device.c != 0) return NO;
+    const CGRect pixels = CGRectApplyAffineTransform(rect, device);
     const CGFloat area = pixels.size.width * pixels.size.height;
-    // At most 4 MiB of pixels, independent of document length and display size.
-    if (!std::isfinite(area) || area < 1 || area > 1024 * 1024) return NO;
-    CGColorSpaceRef color = self.window.colorSpace.CGColorSpace;
-    if (!color || CGColorSpaceGetModel(color) != kCGColorSpaceModelRGB) return NO;
-    CGContextRef bitmap = CGBitmapContextCreate(nullptr, (size_t)pixels.size.width, (size_t)pixels.size.height,
-        8, 4 * (size_t)pixels.size.width, color, kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Host);
-    if (!bitmap) return NO;
-    CGAffineTransform local = transform;
-    local.tx -= pixels.origin.x;
-    local.ty -= pixels.origin.y;
-    CGContextConcatCTM(bitmap, local);
-    [NSGraphicsContext saveGraphicsState];
-    NSGraphicsContext.currentContext = [NSGraphicsContext graphicsContextWithCGContext:bitmap flipped:self.flipped];
-    [super drawRect:rect];
-    [NSGraphicsContext restoreGraphicsState];
-    CGImageRef image = CGBitmapContextCreateImage(bitmap);
-    CGContextRelease(bitmap);
-    if (!image) return NO;
+    // Bound temporary drawing and keep fractional-edge antialiasing on the direct path.
+    if (!std::isfinite(area) || area < 1 || area > 1024 * 1024 || !CGRectEqualToRect(pixels, CGRectIntegral(pixels))) return NO;
     CGContextSaveGState(destination);
-    CGContextConcatCTM(destination, CGAffineTransformInvert(transform));
-    CGContextDrawImage(destination, pixels, image);
-    CGContextRestoreGState(destination);
-    CGImageRelease(image);
+    CGContextBeginTransparencyLayerWithRect(destination, rect, nullptr);
+    @try {
+        [super drawRect:rect];
+    } @finally {
+        CGContextEndTransparencyLayer(destination);
+        CGContextRestoreGState(destination);
+    }
     return YES;
 }
 
