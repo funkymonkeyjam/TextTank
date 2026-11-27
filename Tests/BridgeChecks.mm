@@ -46,6 +46,34 @@
 }
 @end
 
+// The native paint notification normally asks the bridge to update the extension.
+@interface TTEditor (LineNumberPaintChecks)
+- (void)invalidateLineNumbersIfChanged;
+@end
+
+static void gutterScrollingChecks() {
+    TTEditor *editor = [[TTEditor alloc] initWithFrame:NSMakeRect(0, 0, 480, 240)];
+    NSWindow *window = [[NSWindow alloc] initWithContentRect:editor.frame styleMask:NSWindowStyleMaskBorderless
+        backing:NSBackingStoreBuffered defer:NO];
+    window.contentView = editor;
+    editor.text = [@"" stringByPaddingToLength:1000 withString:@"line\n" startingAtIndex:0];
+    [editor layoutSubtreeIfNeeded];
+    ScintillaView *engine = (ScintillaView *)editor.subviews.firstObject;
+    NSView *filler = [editor valueForKey:@"emptyLineNumbers"];
+    [engine message:SCI_SETENDATLASTLINE wParam:0];
+    auto scrollTo = [&](NSInteger top) {
+        filler.needsDisplay = NO;
+        [engine message:SCI_SETFIRSTVISIBLELINE wParam:top];
+        [editor invalidateLineNumbersIfChanged];
+        return [engine message:SCI_GETFIRSTVISIBLELINE] == top;
+    };
+    check(scrollTo(0) && NSHeight(filler.bounds) > 0, "scroll fixture has a visible ruler at the start of a long document");
+    check(scrollTo(20) && !filler.needsDisplay, "scrolling inside the document leaves the blank number extension clean");
+    check(scrollTo(199) && filler.needsDisplay, "scrolling into the final rows repaints the newly visible filler numbers");
+    check(scrollTo(20) && filler.needsDisplay, "scrolling away from the end clears the old filler numbers");
+    check(scrollTo(40) && !filler.needsDisplay, "subsequent scrolling with no filler avoids a second ruler repaint");
+}
+
 static void bulkLoaderStyleChecks() {
     NSString *source = @"int main() {\n  return 42; // café\n}\n";
     NSData *bytes = [source dataUsingEncoding:NSUTF8StringEncoding];
@@ -727,6 +755,7 @@ int main(int argc, char **argv) {
         ttchecks::section("Return indentation", returnIndentChecks);
         ttchecks::section("Current line and indentation guides", currentLineAndGuideChecks);
         ttchecks::section("Base font metrics", baseFontMetricsChecks);
+        ttchecks::section("Scroll gutter repaint", gutterScrollingChecks);
         ttchecks::section("Live brace feedback", braceHighlightChecks);
         ttchecks::section("D1 comparison drop and gutter isolation", [&] {
             TTEditor *renderer=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,400,240)];
