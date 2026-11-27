@@ -82,7 +82,8 @@ final package class WorkspaceBrowserStore {
         try value.validate()
         try PrivateFileStore.prepareDirectory(url.deletingLastPathComponent())
         try PrivateFileStore.write(
-            JSONEncoder().encode(value), to: url, maximumBytes: SizePolicy.standard.workspacePreferences, temporaryPrefix: ".workspace-")
+            JSONEncoder().encode(value), to: url, maximumBytes: SizePolicy.standard.workspacePreferences,
+            temporaryPrefix: ".workspace-")
         state = value
         loadError = nil
     }

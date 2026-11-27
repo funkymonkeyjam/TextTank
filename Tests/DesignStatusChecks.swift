@@ -39,7 +39,9 @@ enum DesignStatusChecks {
         func field(_ identifier: String) -> NSButton? {
             descendants(row).compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == identifier }
         }
-        let fieldIDs = ["status.position.0", "status.language.0", "status.indent.0", "status.encoding.0", "status.eol.0"]
+        let fieldIDs = [
+            "status.position.0", "status.language.0", "status.indent.0", "status.encoding.0", "status.eol.0"
+        ]
         let fields = fieldIDs.compactMap(field)
         check(fields.count == 5, "DB-R1 the five unselected fields are native controls in the row")
         check(
@@ -65,7 +67,8 @@ enum DesignStatusChecks {
         // document is the field's tooltip and accessibility help.
         controller.refreshStatusDetails()
         _ = spinUntil(timeout: 2, "SR-1 the character total reaches the position field") {
-            controller.statusMetricsCaptureCount > 0 && controller.statusStatistics.contains(Strings.count(0, .character))
+            controller.statusMetricsCaptureCount > 0
+                && controller.statusStatistics.contains(Strings.count(0, .character))
         }
         let positionField = try requireValue(field("status.position.0"), "fixture: position field")
         check(
@@ -82,7 +85,8 @@ enum DesignStatusChecks {
         check(
             positionField.accessibilityLabel()?.hasPrefix("Position: Ln ") == true
                 && positionField.accessibilityLabel()?.hasSuffix("Go to line.") == true,
-            "DS-70 the position is named by what it shows and what it does: \(positionField.accessibilityLabel() ?? "nil")")
+            "DS-70 the position is named by what it shows and what it does: \(positionField.accessibilityLabel() ?? "nil")"
+        )
         var ran: [StatusField] = []
         let wired = row.onCommand
         row.onCommand = { ran.append($0) }
@@ -146,7 +150,8 @@ enum DesignStatusChecks {
         check(
             more.superview == nil && window.firstResponder === field("status.eol.0")
                 && (window.firstResponder as? NSView)?.window === window,
-            "DS-73 when More leaves the row with the keyboard, the keyboard moves to the row's last field: \(String(describing: window.firstResponder))")
+            "DS-73 when More leaves the row with the keyboard, the keyboard moves to the row's last field: \(String(describing: window.firstResponder))"
+        )
         check(
             visibleLanguage?.isHiddenOrHasHiddenAncestor == false,
             "DB-R5 collapsed language returns when the owned window widens")
@@ -320,7 +325,8 @@ enum DesignStatusChecks {
                 $0.representedObject as? String ?? ""
             } == ["LF", "CRLF", "CR"]
                 && eolPopup.menu!.items.dropFirst().filter { $0.representedObject == nil }.map(\.title)
-                    == ["Convert document line endings"] && eolPopup.menu!.items.allSatisfy { $0.submenu == nil },
+                    == ["Convert document line endings"]
+                && eolPopup.menu!.items.allSatisfy { $0.submenu == nil },
             "SR-1 the line-ending menu lists the three conversions only")
         let conversionIDs: Set<String> = ["LF", "CRLF", "CR"]
         let conversions = eolPopup.menu!.items.filter {
@@ -405,7 +411,8 @@ enum DesignStatusChecks {
             controller.statusStatistics.contains(selectedLine)
                 && field("status.position.0")?.toolTip?.contains(selectedLine) == true,
             "DB-R3 selection details are in the position tooltip whether or not their field fits")
-        try reachabilityChecks(composition: composition, controller: controller, document: document, row: row, field: field)
+        try reachabilityChecks(
+            composition: composition, controller: controller, document: document, row: row, field: field)
         // At the minimum width a long message collapses fields; each stays reachable in More
         // with its own menu, the selection's Clear Selection included.
         controller.showTransientStatus(
@@ -462,7 +469,8 @@ enum DesignStatusChecks {
                         $0.convert($0.bounds, to: row).minX >= -0.5
                             && $0.convert($0.bounds, to: row).maxX <= row.bounds.width + 0.5
                     },
-                "DB-R5 with the sidebar docked at the minimum window width the row stays one row inside its tab: \(row.bounds.width)")
+                "DB-R5 with the sidebar docked at the minimum window width the row stays one row inside its tab: \(row.bounds.width)"
+            )
             host.setSidebarShown(false)
         } else {
             check(false, "fixture: the docked sidebar could be shown for the status-row width check")
@@ -606,8 +614,10 @@ enum DesignStatusChecks {
         }
         check(
             row.bounds.height == 28
-                && descendants(row).compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "status.position.0" }?
-                    .isHiddenOrHasHiddenAncestor == false
+                && descendants(row).compactMap { $0 as? NSButton }.first {
+                    $0.identifier?.rawValue == "status.position.0"
+                }?
+                .isHiddenOrHasHiddenAncestor == false
                 && visible.allSatisfy {
                     $0.convert($0.bounds, to: row).minX >= -0.5
                         && $0.convert($0.bounds, to: row).maxX <= row.bounds.width + 0.5
@@ -617,7 +627,8 @@ enum DesignStatusChecks {
         check(
             cancels == 1 && row.progress?.id == search,
             "SR-3 Cancel in the row calls the operation's own cancellation once")
-        check(window.makeFirstResponder(cancel) && window.firstResponder === cancel, "fixture: the keyboard is on Cancel")
+        check(
+            window.makeFirstResponder(cancel) && window.firstResponder === cancel, "fixture: the keyboard is on Cancel")
         center.end(search, announce: "Search cancelled. Nothing was changed.")
         root.layoutSubtreeIfNeeded()
         let lastField = descendants(row).compactMap { $0 as? NSButton }.filter {
@@ -677,7 +688,8 @@ enum DesignStatusChecks {
             "SR-3 the finished search selects its match and leaves the row")
         check(
             !fractions.isEmpty && fractions == fractions.sorted() && fractions.allSatisfy { $0 > 0 && $0 <= 1 },
-            "DS-51 a search of a large document reports its real progress to the row: \(fractions.prefix(4))… of \(fractions.count)")
+            "DS-51 a search of a large document reports its real progress to the row: \(fractions.prefix(4))… of \(fractions.count)"
+        )
         check(
             said().first == "Searching the document." && said().last == "Search finished. A match is selected."
                 && said().count == 2,
@@ -700,7 +712,9 @@ enum DesignStatusChecks {
         // A bulk change: the message gives the counts and Show Changes is a real button.
         let followUp = try requireValue(
             control(StatusBadgeRow.followUpIdentifier, NSButton.self), "fixture: follow-up button")
-        check(followUp.isHidden && !controller.hasStatusFollowUp, "SR-4 no follow-up is offered without a message that has one")
+        check(
+            followUp.isHidden && !controller.hasStatusFollowUp,
+            "SR-4 no follow-up is offered without a message that has one")
         document.editor.text = "b\na\nc\n"
         NativeFixtureEnvironment.announcements = []
         let capture = try requireValue(BulkChangeCapture(document.editor, name: "Sort Lines"), "fixture: bulk capture")
@@ -758,7 +772,8 @@ enum DesignStatusChecks {
         // A row with no field to take the keyboard gives it back to the text.
         row.update([])
         controller.offerStatusFollowUp(
-            StatusFollowUp(title: "Owned", accessibilityLabel: "Owned follow-up", toolTip: "", run: {}, isCurrent: { true }))
+            StatusFollowUp(
+                title: "Owned", accessibilityLabel: "Owned follow-up", toolTip: "", run: {}, isCurrent: { true }))
         root.layoutSubtreeIfNeeded()
         check(window.makeFirstResponder(followUp), "fixture: the keyboard is on the only control of the row")
         controller.offerStatusFollowUp(nil)
@@ -766,14 +781,17 @@ enum DesignStatusChecks {
         check(
             (window.firstResponder as? NSView)?.isDescendant(of: controller.keyboardFocusView) == true
                 && (window.firstResponder as? NSView)?.isDescendant(of: row) == false,
-            "DS-73 with no field in the row, the keyboard returns to the text: \(String(describing: window.firstResponder))")
+            "DS-73 with no field in the row, the keyboard returns to the text: \(String(describing: window.firstResponder))"
+        )
         controller.refreshStatusDetails()
         // A field whose value goes while it has the keyboard: the selection, after Clear Selection.
         _ = document.editor.setSelectionAnchor(0, caret: 1)
         controller.refreshStatusDetails()
         root.layoutSubtreeIfNeeded()
         let selectionPopup = try requireValue(
-            descendants(row).compactMap { $0 as? NSPopUpButton }.first { $0.identifier?.rawValue == "status.selection.0" },
+            descendants(row).compactMap { $0 as? NSPopUpButton }.first {
+                $0.identifier?.rawValue == "status.selection.0"
+            },
             "fixture: the selection field")
         check(window.makeFirstResponder(selectionPopup), "fixture: the keyboard is on the selection field")
         _ = document.editor.setSelectionAnchor(0, caret: 0)
@@ -851,7 +869,8 @@ enum DesignStatusChecks {
             "SR-2 internal profiles are left out of the chooser and stay in the Syntax Highlighting menu")
         let unmarked = all.filter { $0.accessory.isEmpty || $0.accessory == "Current" }
         check(
-            unmarked.map(\.title) == unmarked.map(\.title).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+            unmarked.map(\.title)
+                == unmarked.map(\.title).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
                 && unmarked.count > 60 && Set(all.map(\.id)).count == all.count,
             "SR-2 the chooser lists every language once, alphabetically by display name")
         check(
@@ -868,7 +887,9 @@ enum DesignStatusChecks {
         _ = spinUntil(timeout: 2, "SR-2 the language field follows the chosen language") {
             languageField.title == "Python"
         }
-        check(languageField.title == "Python", "SR-2 the language field shows the chosen language: \(languageField.title)")
+        check(
+            languageField.title == "Python", "SR-2 the language field shows the chosen language: \(languageField.title)"
+        )
         check(
             NativeFixtureEnvironment.announcements.contains("Syntax highlighting set to Python."),
             "DS-72 choosing a language is announced")
@@ -884,7 +905,8 @@ enum DesignStatusChecks {
             presented.count == 2 && second.panel !== first.panel
                 && second.panel.displayedRows.first?.id == "python"
                 && second.panel.displayedRows.first?.accessory == "Recent · Current",
-            "SR-2 the chosen language is listed under recents next time: \(second.panel.displayedRows.prefix(3).map { $0.title + " " + $0.accessory })")
+            "SR-2 the chosen language is listed under recents next time: \(second.panel.displayedRows.prefix(3).map { $0.title + " " + $0.accessory })"
+        )
         check(
             LanguageRecentsStore(url: languages.recentsStore.url).ids == languages.recentsStore.ids,
             "SR-2 recently chosen languages are read back from private storage")
@@ -910,7 +932,8 @@ enum DesignStatusChecks {
             third.panel.displayedRows.prefix(2).map(\.id) == ["json", "python"]
                 && third.panel.displayedRows.first?.accessory == "Detected"
                 && third.panel.displayedRows.first?.title == "JSON",
-            "SR-2 the detected language is first, then the recently chosen: \(third.panel.displayedRows.prefix(3).map { $0.title + " " + $0.accessory })")
+            "SR-2 the detected language is first, then the recently chosen: \(third.panel.displayedRows.prefix(3).map { $0.title + " " + $0.accessory })"
+        )
         type("zzzz-no-such-language", in: third.panel)
         check(
             third.panel.displayedRows.isEmpty && third.panel.showsEmptyMessage
@@ -921,17 +944,22 @@ enum DesignStatusChecks {
             document.languageIdentifier == "python" && languages.chooser === third.panel,
             "SR-2 Return on an empty list leaves the language as it was and the chooser open")
         type("", in: third.panel)
-        check(pressReturn(in: third.panel) && document.languageIdentifier == "json", "SR-2 Return applies the detected language")
+        check(
+            pressReturn(in: third.panel) && document.languageIdentifier == "json",
+            "SR-2 Return applies the detected language")
         _ = spinUntil(timeout: 2, "SR-2 the language field shows the display name") { languageField.title == "JSON" }
         // One name per language in the field, the chooser and the menu (DS-20, DS-24).
         let menuTitles = Dictionary(
-            languages.languageMenuItems().compactMap { item in (item.representedObject as? String).map { ($0, item.title) } },
+            languages.languageMenuItems().compactMap { item in
+                (item.representedObject as? String).map { ($0, item.title) }
+            },
             uniquingKeysWith: { first, _ in first })
         check(
             languageField.title == "JSON" && menuTitles["json"] == "JSON" && menuTitles["ini"] == "INI"
                 && menuTitles["mssql"] == "Microsoft SQL" && menuTitles["normal"] == "Plain Text"
                 && languages.displayName(identifier: "mssql") == "Microsoft SQL",
-            "SR-2 lexer identifiers are shown by their proper names: \(languageField.title), \(menuTitles["json"] ?? "nil"), \(menuTitles["mssql"] ?? "nil")")
+            "SR-2 lexer identifiers are shown by their proper names: \(languageField.title), \(menuTitles["json"] ?? "nil"), \(menuTitles["mssql"] ?? "nil")"
+        )
         check(
             all.allSatisfy { menuTitles[$0.id] == $0.title },
             "SR-2 the chooser and the Syntax Highlighting menu use the same display name for every language")
@@ -979,9 +1007,12 @@ enum DesignStatusChecks {
             _ = pressReturn(in: panel)
             check(
                 presented.last?.parent === window && document.languageIdentifier == id,
-                "SR-2 with the keyboard in \(place), Choose Language… acts on the active tab: \(document.languageIdentifier)")
+                "SR-2 with the keyboard in \(place), Choose Language… acts on the active tab: \(document.languageIdentifier)"
+            )
         }
-        if check(controller.setViewMode(.preview) && controller.viewMode == .preview, "fixture: the JSON tab shows Preview") {
+        if check(
+            controller.setViewMode(.preview) && controller.viewMode == .preview, "fixture: the JSON tab shows Preview")
+        {
             window.makeFirstResponder(controller.keyboardFocusView)
             check(
                 (window.firstResponder as? NSView)?.isDescendant(of: controller.split) != true,
@@ -995,7 +1026,8 @@ enum DesignStatusChecks {
             let outline = host.sidebarFocusView
         {
             check(
-                window.makeFirstResponder(outline) && (window.firstResponder as? NSView)?.isDescendant(of: outline) == true,
+                window.makeFirstResponder(outline)
+                    && (window.firstResponder as? NSView)?.isDescendant(of: outline) == true,
                 "fixture: the keyboard is in the sidebar")
             chooseFromMenu("python", expecting: "python", where: "the sidebar")
             host.setSidebarShown(false)

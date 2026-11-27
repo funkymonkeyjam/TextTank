@@ -143,7 +143,9 @@ package struct FolderSearchSettings: Codable, Equatable {
     }
     static package func decode(_ data: Data) throws -> Self {
         guard data.count <= maximumBytes else {
-            throw FolderSearchError.invalidRequest("Saved folder search settings exceed \(SizePolicy.describe(Self.maximumBytes)). Shorten the saved search or replacement.")
+            throw FolderSearchError.invalidRequest(
+                "Saved folder search settings exceed \(SizePolicy.describe(Self.maximumBytes)). Shorten the saved search or replacement."
+            )
         }
         try PersistedFormat.check(data, context: "Find in Folder settings")
         let value = try JSONDecoder().decode(Self.self, from: data)

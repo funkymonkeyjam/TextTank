@@ -31,7 +31,8 @@ import EditorBridge
             let s = try requireValue(LastSessionLayout.read(AppStorage.url(.lastSession)), "final session on disk")
             if mode.hasPrefix("held-cancel") {
                 // The second quit went ahead: one review, for the file, and the untitled text kept.
-                require(presses == 2, "the two quits pressed Cancel once and Don’t Save once, and nothing else was asked")
+                require(
+                    presses == 2, "the two quits pressed Cancel once and Don’t Save once, and nothing else was asked")
                 require(
                     s.version == 2 && s.untitled?.count == 1 && s.files.count == 2,
                     "the committed quit names the untitled document beside the files")
@@ -262,7 +263,8 @@ import EditorBridge
         try await Task.sleep(nanoseconds: 200_000_000)
         require(chosen && presses == 1, "the cancelled quit asked once, about the file")
         require(
-            Set(documents.documents.map(ObjectIdentifier.init)) == Set(open) && untitled.isOpen && first.isOpen && second.isOpen,
+            Set(documents.documents.map(ObjectIdentifier.init)) == Set(open) && untitled.isOpen && first.isOpen
+                && second.isOpen,
             "after the cancelled quit every document is still open and registered")
         require(host.captureSessionLayout() == layout, "every tab is in its group and place, with its selection")
         require(
@@ -273,7 +275,10 @@ import EditorBridge
         @MainActor func all(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap { all($0) } }
         let strip = host.window?.contentView.map { all($0) } ?? []
         require(
-            strip.contains { ($0.accessibilityLabel() ?? "").hasPrefix("Untitled") && ($0.accessibilityLabel() ?? "").contains("dited") },
+            strip.contains {
+                ($0.accessibilityLabel() ?? "").hasPrefix("Untitled")
+                    && ($0.accessibilityLabel() ?? "").contains("dited")
+            },
             "the untitled tab still says it is edited")
         untitled.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
         require(untitled.editor.text == "held text\n", "Undo still has the untitled document's history")
@@ -317,7 +322,9 @@ import EditorBridge
         exit(1)
     }
     static func checkBoth(in root: URL) throws {
-        for mode in ["fresh", "cancel"] { try runGenuine([mode], in: root.appendingPathComponent("native-quit-" + mode)) }
+        for mode in ["fresh", "cancel"] {
+            try runGenuine([mode], in: root.appendingPathComponent("native-quit-" + mode))
+        }
     }
     /// DS-D9 through AppKit's own terminate: a quit with unsaved untitled text, then a launch
     /// from what that quit left, then a second quit. Both processes share one support folder.

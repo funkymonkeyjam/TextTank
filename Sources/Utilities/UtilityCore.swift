@@ -336,11 +336,15 @@ package enum UtilityFailure: LocalizedError, Equatable {
     package var errorDescription: String? {
         switch self {
         case .invalidJSON(let byte): return "Invalid JSON at UTF-8 byte \(byte). The selection was preserved."
-        case .jsonOutputLimit: return "Formatted JSON exceeds \(SizePolicy.describe(SizePolicy.standard.formattedJSONOutput)). Select a smaller value."
+        case .jsonOutputLimit:
+            return
+                "Formatted JSON exceeds \(SizePolicy.describe(SizePolicy.standard.formattedJSONOutput)). Select a smaller value."
         case .jsonDepthLimit: return "This tool supports up to 128 nested arrays and objects."
         case .malformed(let format): return "Invalid \(format) input. The selection was not changed."
         case .binaryResult: return "The decoded bytes are not valid UTF-8 text. The selection was not changed."
-        case .tooLarge: return "Select at most \(SizePolicy.describe(SizePolicy.standard.utilitySelection)) for this utility. The selection was not changed."
+        case .tooLarge:
+            return
+                "Select at most \(SizePolicy.describe(SizePolicy.standard.utilitySelection)) for this utility. The selection was not changed."
         case .selectionRequired: return "Select one nonempty text range before running a utility."
         case .multipleSelections:
             return "This command works on a single selection. Collapse multiple selections and try again."
@@ -448,7 +452,10 @@ private struct JSONSelection {
             let object = b == 123, end: UInt8 = object ? 125 : 93
             try punctuation(b)
             skipWhitespace()
-            if peek == end { try punctuation(end); return }
+            if peek == end {
+                try punctuation(end)
+                return
+            }
             while true {
                 try indent(depth + 1)
                 if object {
@@ -487,7 +494,10 @@ private struct JSONSelection {
         while let b = peek {
             guard b >= 32 else { throw invalid }
             cursor += 1
-            if b == 34 { try emit(bytes[start..<cursor]); return }
+            if b == 34 {
+                try emit(bytes[start..<cursor])
+                return
+            }
             if b == 92 {
                 guard let escape = peek else { throw invalid }
                 cursor += 1
@@ -499,7 +509,9 @@ private struct JSONSelection {
                         else { throw invalid }
                         cursor += 1
                     }
-                default: cursor -= 1; throw invalid
+                default:
+                    cursor -= 1
+                    throw invalid
                 }
             }
         }
@@ -513,7 +525,10 @@ private struct JSONSelection {
         let start = cursor
         if peek == 45 { cursor += 1 }
         if peek == 48 { cursor += 1 } else { try digits() }
-        if peek == 46 { cursor += 1; try digits() }
+        if peek == 46 {
+            cursor += 1
+            try digits()
+        }
         if peek == 101 || peek == 69 {
             cursor += 1
             if peek == 45 || peek == 43 { cursor += 1 }

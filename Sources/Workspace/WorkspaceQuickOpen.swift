@@ -130,7 +130,8 @@ final class FileProbePool: @unchecked Sendable {
     /// Threads that are asking, or stuck asking, now.
     var busy: Int { state.withLock { running } }
     init(
-        width: Int, ceiling: Int, perVolume: Int = 2, reserve: Int = 2, cooldown: TimeInterval = 30, patience: TimeInterval = 0.5,
+        width: Int, ceiling: Int, perVolume: Int = 2, reserve: Int = 2, cooldown: TimeInterval = 30,
+        patience: TimeInterval = 0.5,
         volumes: @escaping VolumeNames = FileProbePool.mountPoints
     ) {
         self.width = max(1, width)

@@ -52,7 +52,9 @@ import EditorBridge
     private static func keys(_ text: String, into field: NSTextField) throws {
         try requireValue(field.currentEditor(), "fixture: the field is being edited").selectAll(nil)
         for character in text {
-            try keyDown(String(character), code: try requireValue(digitKeys[character], "fixture: key for \(character)"), in: field)
+            try keyDown(
+                String(character), code: try requireValue(digitKeys[character], "fixture: key for \(character)"),
+                in: field)
         }
     }
     /// Presses one segment the way assistive technology does: the segment's own accessibility
@@ -63,7 +65,9 @@ import EditorBridge
         while segments.count == 1, let inner = (segments[0] as? NSAccessibilityProtocol)?.accessibilityChildren() {
             segments = inner.compactMap { $0 as? NSObject }
         }
-        try require(segments.count == control.segmentCount, "fixture: one accessibility element for each segment (\(segments.count))")
+        try require(
+            segments.count == control.segmentCount,
+            "fixture: one accessibility element for each segment (\(segments.count))")
         let element = try requireValue(segments[segment] as? NSAccessibilityProtocol, "fixture: segment \(segment)")
         // AppKit's segment reports false even when it has acted; the callers check the effect.
         _ = element.accessibilityPerformPress()
@@ -254,14 +258,19 @@ import EditorBridge
                 && disclosure.state == .off && bar.frame.height == 24,
             "Find opens as one row: the Replace field and its buttons are not shown")
         check(
-            disclosure.superview === bar && disclosure.frame.minX == 0 && disclosure.frame.maxX <= tab.findField.frame.minX
-                && disclosure.bezelStyle == .disclosure && disclosure.frame.width >= 20 && disclosure.frame.height >= 20,
+            disclosure.superview === bar && disclosure.frame.minX == 0
+                && disclosure.frame.maxX <= tab.findField.frame.minX
+                && disclosure.bezelStyle == .disclosure && disclosure.frame.width >= 20
+                && disclosure.frame.height >= 20,
             "a standard disclosure control sits at the leading edge of the bar, before the Find field")
         check(
-            disclosure.accessibilityLabel() == "Replace in document" && disclosure.toolTip?.hasPrefix("Show the Replace field") == true
+            disclosure.accessibilityLabel() == "Replace in document"
+                && disclosure.toolTip?.hasPrefix("Show the Replace field") == true
                 && disclosure.accessibilityHelp() == disclosure.toolTip,
             "the disclosure control says what it shows, to the pointer and to assistive technology")
-        check(sound(bar) && options.showsWords, "at a wide window everything is on the one row, with the options in words")
+        check(
+            sound(bar) && options.showsWords, "at a wide window everything is on the one row, with the options in words"
+        )
         picture(tab, "one-row")
 
         // Disclosing Replace: the bar grows, the editor gives up exactly that height, the text stays.
@@ -279,7 +288,8 @@ import EditorBridge
             editor.frame.height == editorHeight - 26 && editor.firstVisibleDocumentLine == top && sound(bar),
             "the editor gives the row its height and the same line is still at the top of the text")
         check(
-            tab.replaceField.frame.minX == tab.findField.frame.minX && tab.replaceField.frame.maxY < tab.findField.frame.minY,
+            tab.replaceField.frame.minX == tab.findField.frame.minX
+                && tab.replaceField.frame.maxY < tab.findField.frame.minY,
             "the Replace field is under the Find field")
         check(EditorFindBar.rememberedShowsReplace == true, "the choice is remembered")
         picture(tab, "replace-row")
@@ -301,7 +311,9 @@ import EditorBridge
         tab.hideFind(nil)
         EditorFindBar.rememberedShowsReplace = nil
         tab.showFind(nil)
-        check(tab.replaceRowShown, "with no choice made yet, Find opens with the Replace row when a replacement is in use")
+        check(
+            tab.replaceRowShown, "with no choice made yet, Find opens with the Replace row when a replacement is in use"
+        )
         tab.hideFind(nil)
         search.setSharedReplacement("", from: nil)
         tab.showFind(nil)
@@ -397,7 +409,9 @@ import EditorBridge
         _ = editor.setSelectionAnchor(0, caret: 0)
         window.makeFirstResponder(tab.findField)
         try keys("390", into: tab.findField)
-        spinUntil("the live count for typed keys") { tab.findCount.stringValue.contains("1") && !tab.findCount.stringValue.isEmpty }
+        spinUntil("the live count for typed keys") {
+            tab.findCount.stringValue.contains("1") && !tab.findCount.stringValue.isEmpty
+        }
         check(
             tab.findField.stringValue == "390" && search.sharedQuery == "390" && search.queryField.stringValue == "390",
             "keys typed into the Find field are the shared Find text")
@@ -426,8 +440,11 @@ import EditorBridge
             "fixture: a recent replacement")
         try require(!tab.replaceRowShown, "fixture: the Replace row is hidden")
         check(
-            NSApp.sendAction(try requireValue(recentReplacement.action, "fixture"), to: recentReplacement.target, from: recentReplacement)
-                && tab.replaceField.stringValue == "LINE 39" && search.sharedReplacement == "LINE 39" && tab.replaceRowShown
+            NSApp.sendAction(
+                try requireValue(recentReplacement.action, "fixture"), to: recentReplacement.target,
+                from: recentReplacement)
+                && tab.replaceField.stringValue == "LINE 39" && search.sharedReplacement == "LINE 39"
+                && tab.replaceRowShown
                 && !tab.replaceField.isHidden,
             "a replacement chosen from the history is shown: the Replace row opens for it")
         search.setSharedReplacement("", from: nil)
@@ -439,7 +456,8 @@ import EditorBridge
             let rows = oneRow ? 1 : 2
             check(
                 sound(bar) && bar.frame.height == CGFloat(rows * 26 - 2) && tab.findField.frame.width >= 90,
-                "\(label): \(rows == 1 ? "one row" : "two rows"), every control whole and at least 20 points (bar \(Int(bar.frame.width)) wide)")
+                "\(label): \(rows == 1 ? "one row" : "two rows"), every control whole and at least 20 points (bar \(Int(bar.frame.width)) wide)"
+            )
             tab.setReplaceRow(shown: true)
             window.contentView?.layoutSubtreeIfNeeded()
             check(
@@ -451,12 +469,15 @@ import EditorBridge
         window.setContentSize(NSSize(width: 800, height: 500))
         checkWidth("the 800-point window", oneRow: true)
         check(
-            !options.showsWords && (0..<3).allSatisfy { index in
-                options.image(forSegment: index)?.accessibilityDescription == FindOptionsControl.Option(rawValue: index)?.name
-                    && options.label(forSegment: index)?.isEmpty != false && options.width(forSegment: index) >= 28
-                    && options.toolTip(forSegment: index)?.isEmpty == false
-            },
-            "where words do not fit the options are symbols, each still named for assistive technology and by its tooltip")
+            !options.showsWords
+                && (0..<3).allSatisfy { index in
+                    options.image(forSegment: index)?.accessibilityDescription
+                        == FindOptionsControl.Option(rawValue: index)?.name
+                        && options.label(forSegment: index)?.isEmpty != false && options.width(forSegment: index) >= 28
+                        && options.toolTip(forSegment: index)?.isEmpty == false
+                },
+            "where words do not fit the options are symbols, each still named for assistive technology and by its tooltip"
+        )
         let restoreRoom = WorkspaceRoom.grant(host)
         defer { restoreRoom() }
         check(host.setSidebarShown(true), "fixture: the sidebar is shown")
@@ -487,11 +508,15 @@ import EditorBridge
         check(
             bar.frame.height == bar.intrinsicContentSize.height && bar.frame.height == 72 && sound(bar)
                 && root.bounds.contains(bar.frame),
-            "in a 320 × 200 group the three-row bar has its whole height: no row is cut off (bar \(bar.frame.height), root \(root.frame.size))")
+            "in a 320 × 200 group the three-row bar has its whole height: no row is cut off (bar \(bar.frame.height), root \(root.frame.size))"
+        )
         check(
             tab.viewContainer.frame.height >= 32 && tab.viewContainer.frame.maxY <= bar.frame.minY
-                && root.subviews.filter { !$0.isHidden }.allSatisfy { root.bounds.insetBy(dx: -0.5, dy: -0.5).contains($0.frame) },
-            "and the text keeps its minimum height between the bar and the status row (text \(tab.viewContainer.frame.height))")
+                && root.subviews.filter { !$0.isHidden }.allSatisfy {
+                    root.bounds.insetBy(dx: -0.5, dy: -0.5).contains($0.frame)
+                },
+            "and the text keeps its minimum height between the bar and the status row (text \(tab.viewContainer.frame.height))"
+        )
         picture(tab, "smallest-group")
         tab.setReplaceRow(shown: false)
         surface.frame = surfaceFrame
@@ -500,7 +525,9 @@ import EditorBridge
         window.contentView?.layoutSubtreeIfNeeded()
         check(options.showsWords && bar.frame.height == 24, "widening the window brings back one row and the words")
         tab.hideFind(nil)
-        check(keyboard(in: editor, of: host) && !tab.findBarVisible, "Escape or Done still closes the bar and returns to the text")
+        check(
+            keyboard(in: editor, of: host) && !tab.findBarVisible,
+            "Escape or Done still closes the bar and returns to the text")
     }
 
     // MARK: Go to Line
@@ -521,7 +548,9 @@ import EditorBridge
         check(taker === tab, "the Go to Line menu command sent from the text reaches the tab, not the text view")
         check(!tab.goToLineBarVisible, "fixture: Go to Line is closed before the menu command")
         _ = taker?.perform(menuAction, with: nil)
-        check(tab.goToLineBarVisible && field.currentEditor() != nil, "the Go to Line menu command opens the bar with the keyboard in its field")
+        check(
+            tab.goToLineBarVisible && field.currentEditor() != nil,
+            "the Go to Line menu command opens the bar with the keyboard in its field")
         tab.cancelGoToLine(nil)
         window.makeFirstResponder(editor)
 
@@ -546,7 +575,8 @@ import EditorBridge
                 && bar.frame.minX == tab.findBar?.frame.minX && bar.frame.maxY == tab.findBar?.frame.maxY,
             "Go to Line is one inline field above the text, in the find bar's place, and the find bar is closed")
         check(
-            presentedFormWindow == nil && !FormPanel.visible.contains { $0.window.identifier?.rawValue == "TextTank.GoToLine" },
+            presentedFormWindow == nil
+                && !FormPanel.visible.contains { $0.window.identifier?.rawValue == "TextTank.GoToLine" },
             "no Go to Line panel opens: there is one presentation")
         check(
             search.sharedQuery == "line 39" && tab.findField.stringValue == "line 39",
@@ -594,9 +624,12 @@ import EditorBridge
             bar.message.stringValue == "Enter a line number, such as 12 or 12:4. Lines are 1–400." && bar.entryIsMarked
                 && place(editor) == before, "text that is not a number says what to enter, and moves nothing")
         typed("", into: field, of: tab)
-        check(!bar.entryIsMarked && bar.message.stringValue.hasPrefix("Lines are 1–400."), "an emptied field is not an error")
         check(
-            press(returnKey, in: field, of: tab) && tab.goToLineBarVisible && bar.entryIsMarked && place(editor) == before,
+            !bar.entryIsMarked && bar.message.stringValue.hasPrefix("Lines are 1–400."),
+            "an emptied field is not an error")
+        check(
+            press(returnKey, in: field, of: tab) && tab.goToLineBarVisible && bar.entryIsMarked
+                && place(editor) == before,
             "Return on an empty field asks for a line number")
 
         // Escape after a preview.
@@ -608,7 +641,8 @@ import EditorBridge
             "Escape closes Go to Line and returns the keyboard to the text")
         window.contentView?.layoutSubtreeIfNeeded()
         check(
-            place(editor) == before, "Escape after a preview restores the caret, the selection and the scroll position exactly")
+            place(editor) == before,
+            "Escape after a preview restores the caret, the selection and the scroll position exactly")
 
         // Return goes there and closes.
         // Return with the field as it opened changes nothing: not the caret, not the selection.
@@ -619,7 +653,8 @@ import EditorBridge
         check(
             !tab.goToLineBarVisible && place(editor) == before && editor.selectedText.utf8.count == 15
                 && keyboard(in: editor, of: host),
-            "Return on the line the field opened with closes it and keeps the caret, the selection and the scroll position")
+            "Return on the line the field opened with closes it and keeps the caret, the selection and the scroll position"
+        )
 
         // Only Return or Go makes the jump. The keyboard leaving the field any other way (Tab,
         // Move Focus to Next Area) closes it and puts everything back.
@@ -631,7 +666,8 @@ import EditorBridge
         window.contentView?.layoutSubtreeIfNeeded()
         check(
             !tab.goToLineBarVisible && place(editor) == before,
-            "the keyboard leaving Go to Line without Return closes it and restores the caret, selection and scroll position")
+            "the keyboard leaving Go to Line without Return closes it and restores the caret, selection and scroll position"
+        )
         // A click that places a caret in the text of the pane being previewed is the person's own
         // move, made where they pointed: it stands, and it is not the previewed line.
         tab.goToLine(nil)
@@ -645,14 +681,19 @@ import EditorBridge
             editor.selectionCaret == clicked && editor.selectionAnchor == clicked && editor.selectionCount == 1
                 && (200...400).contains(editor.statusInfo.line) && !before.carets.contains(clicked)
                 && keyboard(in: editor, of: host),
-            "a click in the previewed text places the caret where it pointed, and that caret stands (line \(editor.statusInfo.line))")
+            "a click in the previewed text places the caret where it pointed, and that caret stands (line \(editor.statusInfo.line))"
+        )
         try require(editor.setSelectionAnchor(10, caret: 25), "fixture: the selection again")
         editor.scrollTo(documentLine: 50, subline: 0)
         try require(place(editor) == before, "fixture: where the text was")
 
         // Several selections, the main one, and a rectangular selection come back exactly.
-        let lineStart = { (line: Int) in (1..<line).map { "line \($0) of the find bar fixture\n".utf8.count }.reduce(0, +) }
-        let threeRanges = [(lineStart(60), lineStart(60) + 4), (lineStart(62) + 4, lineStart(62)), (lineStart(64), lineStart(64) + 4)]
+        let lineStart = { (line: Int) in
+            (1..<line).map { "line \($0) of the find bar fixture\n".utf8.count }.reduce(0, +)
+        }
+        let threeRanges = [
+            (lineStart(60), lineStart(60) + 4), (lineStart(62) + 4, lineStart(62)), (lineStart(64), lineStart(64) + 4)
+        ]
         try require(
             editor.setSelectionRanges(threeRanges.map { TTSelectionRange(anchor: $0.0, caret: $0.1) }),
             "fixture: three selections")
@@ -673,7 +714,8 @@ import EditorBridge
             editor.setSelectionRanges([TTSelectionRange(anchor: lineStart(60) + 2, caret: lineStart(60) + 2)])
                 && command("rectangularSelection") && command("lineDown", times: 3) && command("charRight", times: 4)
                 && editor.selectionIsRectangular && editor.selectionCount == 4 && editor.selectedText.count >= 16,
-            "fixture: a rectangular selection of four lines (\(editor.selectionIsRectangular), \(editor.selectionCount))")
+            "fixture: a rectangular selection of four lines (\(editor.selectionIsRectangular), \(editor.selectionCount))"
+        )
         let rectangle = place(editor)
         tab.goToLine(nil)
         try keys("300", into: field)
@@ -717,14 +759,17 @@ import EditorBridge
         check(!tab.goToLineBarVisible && place(editor) == atSeven, "Cancel does what Escape does")
         tab.goToLine(nil)
         tab.goToLine(nil)
-        check(tab.goToLineBarVisible && field.currentEditor() != nil, "Command-L again keeps the one field and its keyboard")
+        check(
+            tab.goToLineBarVisible && field.currentEditor() != nil,
+            "Command-L again keeps the one field and its keyboard")
         typed("90", into: field, of: tab)
         tab.showFind(nil)
         window.contentView?.layoutSubtreeIfNeeded()
         check(
             tab.findBarVisible && !tab.goToLineBarVisible && place(editor).anchors == atSeven.anchors
                 && place(editor).carets == atSeven.carets && tab.findField.stringValue == "line 39",
-            "Find takes Go to Line's place: an entry that was only typed is not a jump, and the Find text is still there")
+            "Find takes Go to Line's place: an entry that was only typed is not a jump, and the Find text is still there"
+        )
         tab.hideFind(nil)
 
         // The Go to Line bar at a narrow width.
@@ -733,7 +778,8 @@ import EditorBridge
         tab.goToLine(nil)
         window.contentView?.layoutSubtreeIfNeeded()
         check(
-            bar.frame.width < 520 && bar.frame.height == 50 && sound(bar) && bar.message.frame.width == bar.bounds.width,
+            bar.frame.width < 520 && bar.frame.height == 50 && sound(bar)
+                && bar.message.frame.width == bar.bounds.width,
             "in a narrow group the range has a row of its own, so it is not cut short (DS-67)")
         picture(tab, "go-to-line-narrow")
         _ = press(escapeKey, in: field, of: tab)
@@ -808,7 +854,8 @@ import EditorBridge
         typed("249999:5", into: otherTab.goToLineBar.field, of: otherTab)
         let started = Date()
         check(
-            press(returnKey, in: otherTab.goToLineBar.field, of: otherTab) && otherTab.primaryEditor.statusInfo.line == 249_999
+            press(returnKey, in: otherTab.goToLineBar.field, of: otherTab)
+                && otherTab.primaryEditor.statusInfo.line == 249_999
                 && otherTab.primaryEditor.statusInfo.column == 5 && Date().timeIntervalSince(started) < 1,
             "Go to Line works in a document of 250,000 lines")
         // Closing the document with the field open.
@@ -828,7 +875,9 @@ import EditorBridge
             folded.goToLine(3) && folded.executeCommand(TTEditorCommandIdentifier(rawValue: "foldCurrent"))
                 && !folded.lineIsVisible(3) && !folded.lineIsVisible(4) && folded.lineIsVisible(2)
                 && folded.lineIsVisible(6), "fixture: lines 3 to 5 are folded under line 2")
-        try require(folded.setSelectionAnchor(code.utf8.count - 4, caret: code.utf8.count - 1), "fixture: a selection on line 7")
+        try require(
+            folded.setSelectionAnchor(code.utf8.count - 4, caret: code.utf8.count - 1), "fixture: a selection on line 7"
+        )
         window.contentView?.layoutSubtreeIfNeeded()
         let foldedPlace = place(folded)
         foldTab.goToLine(nil)
@@ -837,7 +886,8 @@ import EditorBridge
             !folded.lineIsVisible(4) && !folded.lineIsVisible(3) && folded.statusInfo.line == 2,
             "typing a line that is inside folded text does not unfold it: the fold's own line is shown")
         check(
-            foldTab.goToLineBar.message.stringValue == "Line 4 is in folded text. Press Return to unfold it and go there."
+            foldTab.goToLineBar.message.stringValue
+                == "Line 4 is in folded text. Press Return to unfold it and go there."
                 && !foldTab.goToLineBar.entryIsMarked, "and the field says why, in words")
         try keyDown("\u{1B}", code: 53, in: foldField)
         window.contentView?.layoutSubtreeIfNeeded()
@@ -864,7 +914,8 @@ import EditorBridge
             "Go to Line in a tab that shows Preview alone shows the source beside the preview first")
         typed("4", into: notesTab.goToLineBar.field, of: notesTab)
         check(
-            notesTab.setViewMode(.preview) && !notesTab.goToLineBarVisible && notesTab.primaryEditor.statusInfo.line == 1,
+            notesTab.setViewMode(.preview) && !notesTab.goToLineBarVisible
+                && notesTab.primaryEditor.statusInfo.line == 1,
             "choosing Preview closes Go to Line, which acts on the hidden source, and no jump was made")
     }
 
@@ -902,7 +953,8 @@ import EditorBridge
             tab.goToLine(nil)
             try keys("300", into: field)
             window.contentView?.layoutSubtreeIfNeeded()
-            try require(tab.goToLineBarVisible && first.statusInfo.line == 300, "fixture: line 300 is shown in the first pane")
+            try require(
+                tab.goToLineBarVisible && first.statusInfo.line == 300, "fixture: line 300 is shown in the first pane")
         }
 
         // A click in the other pane: the previewing pane goes back exactly, and the click lands.
@@ -915,7 +967,8 @@ import EditorBridge
         window.contentView?.layoutSubtreeIfNeeded()
         check(
             !tab.goToLineBarVisible && place(first) == before,
-            "a click in the other pane of a split puts the previewing pane back: caret, selection and scroll position (line \(first.statusInfo.line))")
+            "a click in the other pane of a split puts the previewing pane back: caret, selection and scroll position (line \(first.statusInfo.line))"
+        )
         check(
             second.selectionCaret != 0 && keyboard(in: second, of: host) && tab.activeEditor === second,
             "and the click does what it does: its caret is in the other pane, which has the keyboard ")
@@ -928,7 +981,8 @@ import EditorBridge
         window.contentView?.layoutSubtreeIfNeeded()
         check(
             first.statusInfo.line != 300 && first.firstVisibleDocumentLine == before.topLine,
-            "a click on the previewing pane's line-number margin does not keep the previewed line (line \(first.statusInfo.line), field open \(tab.goToLineBarVisible))")
+            "a click on the previewing pane's line-number margin does not keep the previewed line (line \(first.statusInfo.line), field open \(tab.goToLineBarVisible))"
+        )
         if tab.goToLineBarVisible { tab.cancelGoToLine(nil) }
 
         // The text changes underneath, from the other pane: the place to go back to moves with
@@ -937,7 +991,8 @@ import EditorBridge
         let selected = first.selectedText
         try preview()
         try require(
-            second.setSelectionRanges([TTSelectionRange(anchor: 0, caret: 0)]) && second.replaceSelection("added above\n"),
+            second.setSelectionRanges([TTSelectionRange(anchor: 0, caret: 0)])
+                && second.replaceSelection("added above\n"),
             "fixture: a line added at the top from the other pane")
         spinUntil("the field follows the edit") { field.placeholderString == "1–401" }
         check(
@@ -948,7 +1003,8 @@ import EditorBridge
         check(
             first.selectionAnchor == 10 + 12 && first.selectionCaret == 25 + 12 && first.selectedText == selected
                 && first.selectionCount == 1,
-            "Escape after an edit from another view goes back to the selection the person had, moved with the text, not to the previewed line (line \(first.statusInfo.line))")
+            "Escape after an edit from another view goes back to the selection the person had, moved with the text, not to the previewed line (line \(first.statusInfo.line))"
+        )
         check(
             first.firstVisibleDocumentLine == before.topLine + 1 && first.horizontalScrollOffset == before.across,
             "and the same line of text is at the top again")
@@ -968,7 +1024,9 @@ import EditorBridge
             "when the caret's own text is deleted underneath, the field says so in words and it is announced")
         try keyDown("\u{1B}", code: 53, in: field)
         check(
-            first.selectionAnchor == 0 && first.selectionCaret == 0 && first.selectionCount == 1 && first.statusInfo.line == 1,
-            "and Escape goes to the nearest place left, where the deleted text began, never to the previewed line (line \(first.statusInfo.line))")
+            first.selectionAnchor == 0 && first.selectionCaret == 0 && first.selectionCount == 1
+                && first.statusInfo.line == 1,
+            "and Escape goes to the nearest place left, where the deleted text began, never to the previewed line (line \(first.statusInfo.line))"
+        )
     }
 }

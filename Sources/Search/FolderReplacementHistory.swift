@@ -12,7 +12,9 @@ package enum FolderReplacementHistory {
     private static var policy: URL { store.appendingPathComponent("Retention.json") }
 
     private static func readPolicy() throws -> Data? {
-        do { return try PrivateFileStore.read(policy, maximumBytes: SizePolicy.standard.folderRetentionSettings) } catch  where error.isFileNotFound {
+        do {
+            return try PrivateFileStore.read(policy, maximumBytes: SizePolicy.standard.folderRetentionSettings)
+        } catch  where error.isFileNotFound {
             return nil
         }
     }

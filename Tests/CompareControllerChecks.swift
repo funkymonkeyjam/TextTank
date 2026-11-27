@@ -704,11 +704,13 @@ private final class CompareFailingEngine: ReviewDiffing, @unchecked Sendable {
             await waitUntil("linked horizontal viewport notification") {
                 scrolling.window?.displayIfNeeded()
                 return changes > 0 && scrolling.left.editor.comparisonHorizontalOffset > 0
-                    && scrolling.right.editor.comparisonHorizontalOffset == scrolling.left.editor.comparisonHorizontalOffset
+                    && scrolling.right.editor.comparisonHorizontalOffset
+                        == scrolling.left.editor.comparisonHorizontalOffset
             }
             check(
                 scrolling.left.editor.comparisonHorizontalOffset > 0
-                    && scrolling.right.editor.comparisonHorizontalOffset == scrolling.left.editor.comparisonHorizontalOffset
+                    && scrolling.right.editor.comparisonHorizontalOffset
+                        == scrolling.left.editor.comparisonHorizontalOffset
                     && (scrolling.left.top, scrolling.right.top) == originalTop,
                 "D1 actual horizontal-only viewport notification links peer without vertical movement")
             scrolling.perform(.linked)

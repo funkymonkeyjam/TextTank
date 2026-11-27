@@ -36,7 +36,8 @@ final class WorkspaceWindowController: NSWindowController, NSToolbarDelegate, NS
         guard model.groups.count == 2 else { return nil }
         let editors = model.groups.compactMap { group -> TTEditor? in
             guard let tab = group.activeTab, let view = presentation(for: tab),
-                groupSurfaces[group.slot]?.mounted === view.presentationRoot else { return nil }
+                groupSurfaces[group.slot]?.mounted === view.presentationRoot
+            else { return nil }
             return view.activeEditor
         }
         guard editors.count == 2 else { return nil }

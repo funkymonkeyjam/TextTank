@@ -24,7 +24,9 @@ enum ReviewInline {
                 try meter.spend()
                 let na = block.original.upper - block.original.lower,
                     nb = block.modified.upper - block.modified.lower
-                guard na + nb <= min(SizePolicy.standard.inlineSpan, limits.maximumSpanBytes) else { throw ReviewHalt.budget(.span) }
+                guard na + nb <= min(SizePolicy.standard.inlineSpan, limits.maximumSpanBytes) else {
+                    throw ReviewHalt.budget(.span)
+                }
                 // Include String storage, token ranges, and conservative temporary capacity.
                 let storage = (na + nb + 1) * 96
                 try meter.reserve(storage)

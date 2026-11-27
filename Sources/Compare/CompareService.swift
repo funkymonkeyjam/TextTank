@@ -329,7 +329,8 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
             return "The selected range does not follow text boundaries. Choose a complete text selection and try again."
         case CompareFailure.budget(let reason): return budgetMessage(reason) + " No document was changed."
         case PrivateFileError.tooLarge(let limit, _) where limit == SizePolicy.standard.reviewText:
-            return "The source file exceeds the \(SizePolicy.describe(limit)) file-read limit. Choose a smaller file or compare an excerpt in a new document."
+            return
+                "The source file exceeds the \(SizePolicy.describe(limit)) file-read limit. Choose a smaller file or compare an excerpt in a new document."
         case ReviewRejection.budgetExceeded: return SizePolicy.standard.reviewTextNotice
         case ReviewRejection.closed, ReviewRejection.revisionChanged, ReviewRejection.reloaded,
             ReviewRejection.bytesChanged:
@@ -390,7 +391,9 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
         return (a, b)
     }
     /// The sole comparison-opening entry. Caller document inputs are already captured before awaits.
-    func open(original: CompareInput, modified: CompareInput, destination: CompareSide? = nil) async throws -> CompareController {
+    func open(original: CompareInput, modified: CompareInput, destination: CompareSide? = nil) async throws
+        -> CompareController
+    {
         guard windows.count + admissions < 2 else { throw CompareOpenFailure.limit }
         admissions += 1
         defer { admissions -= 1 }
@@ -602,8 +605,9 @@ enum CompareOpenFailure: Error { case sameDocument, limit, selection, originClos
             let original = try CompareDocumentInput(first), modified = try CompareDocumentInput(second)
             Task { [weak self] in
                 guard let self else { return }
-                do { _ = try await open(original: .document(original), modified: .document(modified)) }
-                catch { report(error) }
+                do { _ = try await open(original: .document(original), modified: .document(modified)) } catch {
+                    report(error)
+                }
             }
         } catch { report(error) }
     }

@@ -380,7 +380,10 @@ private final class PreviewSelectionReceiver: NSObject, WKScriptMessageHandler {
                 else { return }
                 guard probes.count == 2, probes[0].positions.indices.contains(indexes[0]),
                     probes[1].positions.indices.contains(indexes[1])
-                else { self.onUnmappedSelection?(); return }
+                else {
+                    self.onUnmappedSelection?()
+                    return
+                }
                 let start = probes[0].positions[indexes[0]], end = probes[1].positions[indexes[1]]
                 if start < end { self.onSelection?([start..<end]) } else { self.onUnmappedSelection?() }
             } catch { /* The page or the selection went away. */  }

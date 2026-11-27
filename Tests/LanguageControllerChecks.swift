@@ -444,8 +444,10 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
         let recentsURL = support.appendingPathComponent("chooser-recents-" + UUID().uuidString + ".json")
         controller.recentsURL = recentsURL
         // DS-24: one proper name per language; a name the person gave is kept.
-        let names = ["json": "JSON", "json5": "JSON5", "ini": "INI", "mssql": "Microsoft SQL",
-            "registry": "Windows Registry", "errorlist": "Error List", "python": "Python"]
+        let names = [
+            "json": "JSON", "json5": "JSON5", "ini": "INI", "mssql": "Microsoft SQL",
+            "registry": "Windows Registry", "errorlist": "Error List", "python": "Python"
+        ]
         let bundledPlain = try LanguageCatalog.decode(Data(contentsOf: bundledURL)).profiles.first {
             $0.id == LanguageProfile.plainTextID
         }
@@ -454,18 +456,22 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             "SR-2 the bundled no-language profile is shown as Plain Text")
         check(
             names.allSatisfy { controller.displayName(identifier: $0.key) == $0.value },
-            "SR-2 lexer identifiers have proper display names: \(names.keys.sorted().map { controller.displayName(identifier: $0) })")
+            "SR-2 lexer identifiers have proper display names: \(names.keys.sorted().map { controller.displayName(identifier: $0) })"
+        )
         var renamed = try requireValue(controller.profile(identifier: "json"), "fixture: JSON profile")
         check(renamed.title == "json" && renamed.displayName == "JSON", "fixture: the catalog title is the lexer's")
         renamed.title = "My JSON"
         check(renamed.displayName == "My JSON", "SR-2 a language the person renamed keeps their name")
         check(
             controller.displayName(identifier: "no-such-language") == "no-such-language"
-                && Set(controller.languageMenuItems().map(\.title)).isDisjoint(with: ["json", "ini", "mssql", "Normal text"]),
+                && Set(controller.languageMenuItems().map(\.title)).isDisjoint(with: [
+                    "json", "ini", "mssql", "Normal text"
+                ]),
             "SR-2 the Syntax Highlighting menu uses the display names")
         let menuItems = controller.languageMenuItems()
         check(
-            menuItems.map(\.title) == menuItems.map(\.title).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending },
+            menuItems.map(\.title)
+                == menuItems.map(\.title).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending },
             "SR-2 the menu's languages are ordered by display name")
         // Detected, then recent, then the rest by name; each once; internal profiles left out.
         let rows = controller.chooserRows(
@@ -476,13 +482,16 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                 && rows.prefix(3).map(\.accessory) == ["Detected", "Recent", "Recent · Current"]
                 && rows.prefix(3).map(\.accessoryLabel)
                     == ["Detected for this document", "Recently chosen", "Recently chosen, Current language"],
-            "SR-2 the detected language is first, then the recently chosen: \(rows.prefix(3).map { $0.id + " " + $0.accessory })")
+            "SR-2 the detected language is first, then the recently chosen: \(rows.prefix(3).map { $0.id + " " + $0.accessory })"
+        )
         check(
-            rest.map(\.title) == rest.map(\.title).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+            rest.map(\.title)
+                == rest.map(\.title).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
                 && rest.allSatisfy { $0.accessory.isEmpty } && Set(rows.map(\.id)).count == rows.count
-                && rows.count == menuItems.count - menuItems.filter {
-                    LanguageProfile.internalIDs.contains($0.representedObject as? String ?? "")
-                }.count,
+                && rows.count == menuItems.count
+                    - menuItems.filter {
+                        LanguageProfile.internalIDs.contains($0.representedObject as? String ?? "")
+                    }.count,
             "SR-2 every other language follows once, alphabetically by display name")
         check(
             !rows.contains { LanguageProfile.internalIDs.contains($0.id) }
@@ -498,11 +507,14 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
         check(
             filtered("c").first == "c" && filtered("cpp") == ["cpp"] && filtered("JSON").prefix(2) == ["json", "json5"]
                 && filtered("microsoft") == ["mssql"],
-            "SR-2 the filter matches names without regard to case, exact names first, and identifiers by prefix: \(filtered("c").prefix(3)) \(filtered("cpp")) \(filtered("JSON"))")
+            "SR-2 the filter matches names without regard to case, exact names first, and identifiers by prefix: \(filtered("c").prefix(3)) \(filtered("cpp")) \(filtered("JSON"))"
+        )
         // Recents: at most five, newest first, kept in a private file, a later format left alone.
         let store = LanguageRecentsStore(url: recentsURL)
         for id in ["ada", "c", "css", "d", "go", "html", "c"] { store.note(id) }
-        check(store.ids == ["c", "html", "go", "d", "css"], "SR-2 at most five recent languages are kept, newest first: \(store.ids)")
+        check(
+            store.ids == ["c", "html", "go", "d", "css"],
+            "SR-2 at most five recent languages are kept, newest first: \(store.ids)")
         let mode = (try FileManager.default.attributesOfItem(atPath: recentsURL.path)[.posixPermissions] as? Int) ?? 0
         check(
             LanguageRecentsStore(url: recentsURL).ids == store.ids && mode == 0o600,
@@ -551,7 +563,8 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             panel.displayedRows.first?.id == "python" && panel.displayedRows.first?.accessory == "Detected"
                 && panel.displayedRows.dropFirst().prefix(5).map(\.id) == ["c", "html", "go", "d", "css"]
                 && panel.selectedID == "python" && panel.emptyMessage == "No matching languages",
-            "SR-2 the chooser opens on the detected language with the stored recents after it: \(panel.displayedRows.prefix(6).map(\.id))")
+            "SR-2 the chooser opens on the detected language with the stored recents after it: \(panel.displayedRows.prefix(6).map(\.id))"
+        )
         panel.filter.stringValue = "rub"
         panel.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: panel.filter))
         check(panel.displayedRows.map(\.id) == ["ruby"], "SR-2 typing in the chooser's field filters its rows")
@@ -575,13 +588,15 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             again.filter, textView: NSTextView(), doCommandBy: #selector(NSResponder.insertNewline(_:)))
         check(
             handled && selected == "ruby" && applied == ["ruby"] && controller.chooser == nil,
-            "SR-2 Return applies the selected language to the document: \(handled) \(selected) \(applied) \(again.selectedID ?? "nil") \(again.form.validation.stringValue)")
+            "SR-2 Return applies the selected language to the document: \(handled) \(selected) \(applied) \(again.selectedID ?? "nil") \(again.form.validation.stringValue)"
+        )
         check(
             controller.recentsStore.ids == ["ruby", "c", "html", "go", "d"]
                 && LanguageRecentsStore(url: recentsURL).ids == controller.recentsStore.ids,
             "SR-2 the chosen language becomes the most recent and the sixth is dropped: \(controller.recentsStore.ids)")
         let menuChoice = try requireValue(
-            controller.languageMenuItems().first { $0.representedObject as? String == "json" }, "fixture: JSON menu item")
+            controller.languageMenuItems().first { $0.representedObject as? String == "json" },
+            "fixture: JSON menu item")
         check(
             NSApp.sendAction(menuChoice.action!, to: menuChoice.target, from: menuChoice) && selected == "json"
                 && controller.recentsStore.ids.first == "json",
@@ -934,7 +949,8 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                     lexEditor.bitmapImageRepForCachingDisplay(in: lexEditor.bounds), "native viewport bitmap")
                 lexEditor.cacheDisplay(in: lexEditor.bounds, to: bitmap)
             }
-            check(sci(SCI_GETSTYLEAT, 0) == 16 && sci(SCI_GETSTYLEAT, 8) == 5,
+            check(
+                sci(SCI_GETSTYLEAT, 0) == 16 && sci(SCI_GETSTYLEAT, 8) == 5,
                 "the initially visible C++ keywords use the profile's final lists")
             let bottom = sci(SCI_GETLINECOUNT) - 2
             try paint(bottom)
@@ -951,11 +967,13 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             let onePass = max(before, after)
             check(
                 applyTime < 3 * onePass,
-                "applying a profile costs less than three lexing passes (apply \(String(format:"%.3f",applyTime)) s, one pass \(String(format:"%.3f",onePass)) s)")
+                "applying a profile costs less than three lexing passes (apply \(String(format:"%.3f",applyTime)) s, one pass \(String(format:"%.3f",onePass)) s)"
+            )
             try paint(0)
             check(
                 controller.apply(identifier: "python", to: lexEditor) && sci(SCI_GETSTYLEAT, 0) == 11
-                    && sci(SCI_GETENDSTYLED) < length, "switching to Python replaces the visible C++ styles immediately")
+                    && sci(SCI_GETENDSTYLED) < length, "switching to Python replaces the visible C++ styles immediately"
+            )
             try paint(bottom)
             check(
                 sci(SCI_GETSTYLEAT, UInt(lastLine + 8)) == 11 && sci(SCI_GETENDSTYLED) == length
@@ -968,10 +986,12 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
             let farHeader = sci(SCI_GETLINECOUNT) - 4
             try paint(farHeader)
             let SCI_GETFOLDLEVEL: UInt32 = 2223, SCI_GETFOLDEXPANDED: UInt32 = 2230
-            check(sci(SCI_GETFOLDLEVEL, UInt(farHeader)) & 0x2000 != 0,
+            check(
+                sci(SCI_GETFOLDLEVEL, UInt(farHeader)) & 0x2000 != 0,
                 "the last visible C++ block has a real fold header after scrolling")
             _ = lexEditor.executeCommand(TTEditorCommandIdentifier(rawValue: "foldAll"))
-            check(sci(SCI_GETFOLDEXPANDED, 0) == 0 && sci(SCI_GETFOLDEXPANDED, UInt(farHeader)) == 0,
+            check(
+                sci(SCI_GETFOLDEXPANDED, 0) == 0 && sci(SCI_GETFOLDEXPANDED, UInt(farHeader)) == 0,
                 "Fold All resolves and collapses both first and far C++ headers")
             // F248: the number of profiles that load is asserted, not only printed. A Lexilla upgrade
             // that gains or loses a lexer fails here on purpose; update the literal in the same change.
@@ -1602,10 +1622,11 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                     && languageMenu.items.dropFirst(3).first?.isSeparatorItem == true
                     && languageMenu.items.filter { !$0.isSeparatorItem }.count <= 20
                     && ranges.count >= 4 && ranges.allSatisfy { ($0.submenu?.items.count ?? 0) <= 20 }
-                    && ranges.map(\.title) == ranges.map(\.title).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+                    && ranges.map(\.title)
+                        == ranges.map(\.title).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
                     && listed(languageMenu).count == controller.languageMenuItems().count,
-                "DS-23 Choose Language… then Plain Text come first and every language is in an alphabetical range of at most twenty")
-            {
+                "DS-23 Choose Language… then Plain Text come first and every language is in an alphabetical range of at most twenty"
+            ) {
                 print(
                     "NOTE Syntax Highlighting: \(languageMenu.items.map { "\($0.title)(\($0.submenu?.items.count ?? 0))" }); listed \(listed(languageMenu).count) of \(controller.languageMenuItems().count)"
                 )
@@ -1616,11 +1637,14 @@ final class QuietListWindow: NSWindow { override func makeKeyAndOrderFront(_ sen
                     && LanguageController.alphabeticalRanges(["x", "xa", "xb"], limit: 2).map(\.title) == ["X–Xa", "Xb"]
                     && LanguageController.alphabeticalRanges(["x", "xa", "xb"], limit: 2).map(\.count) == [2, 1]
                     && LanguageController.alphabeticalRanges([]).isEmpty,
-                "alphabetical ranges keep each initial letter whole unless it alone is over the limit, and name what they hold")
+                "alphabetical ranges keep each initial letter whole unless it alone is over the limit, and name what they hold"
+            )
             let chosen = selected
             selected = "python"
             controller.menuNeedsUpdate(languageMenu)
-            let currentRange = ranges.first { $0.submenu?.items.contains { $0.representedObject as? String == selected } == true }
+            let currentRange = ranges.first {
+                $0.submenu?.items.contains { $0.representedObject as? String == selected } == true
+            }
             check(
                 listed(languageMenu).filter { $0.state == .on }.map { $0.representedObject as? String } == [selected]
                     && ranges.filter { $0.state == .on }.map(\.title) == [currentRange?.title],

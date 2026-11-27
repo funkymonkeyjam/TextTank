@@ -244,7 +244,8 @@ private func seconds(_ work: () -> Void) -> Double {
         let tolerant = try EditorSettings.decode(garbage)
         check(
             tolerant.previewOpenMode(for: .markdown) == .source && tolerant.previewOpenMode(for: .json) == .source
-                && tolerant.previewOpenMode(for: .svg) == .source && tolerant.previewOpenMode(for: .delimited) == .source,
+                && tolerant.previewOpenMode(for: .svg) == .source
+                && tolerant.previewOpenMode(for: .delimited) == .source,
             "an unknown, empty or differently cased value reads as Source")
         check(tolerant.previewOpenMode(for: .html) == .both, "and a known value beside it is still honoured")
         check(
@@ -305,7 +306,8 @@ private func seconds(_ work: () -> Void) -> Double {
         try store.updateLastRenderedPreviewMode(.both)
         check(SettingsStore(url: url).value.toggledPreviewMode == .both, "and Both replaces Preview")
 
-        for (format, mode) in zip(PreviewFormat.allCases, [DocumentViewMode.preview, .both, .preview, .both, .preview]) {
+        for (format, mode) in zip(PreviewFormat.allCases, [DocumentViewMode.preview, .both, .preview, .both, .preview])
+        {
             try store.updatePreviewOpenMode(for: format, from: .source, to: mode)
         }
         let reread = SettingsStore(url: url)
@@ -323,7 +325,10 @@ private func seconds(_ work: () -> Void) -> Double {
         check(
             (attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600 && siblings == ["Settings.json"],
             "the file is replaced privately and atomically: no temporary file is left beside it")
-        rejects("a choice made from a value that is no longer the saved one is refused", expecting: SettingsError.changedOnDisk) {
+        rejects(
+            "a choice made from a value that is no longer the saved one is refused",
+            expecting: SettingsError.changedOnDisk
+        ) {
             try store.updatePreviewOpenMode(for: .markdown, from: .both, to: .source)
         }
         try store.updatePreviewOpenMode(for: .markdown, from: .preview, to: .source)
@@ -515,7 +520,9 @@ private func seconds(_ work: () -> Void) -> Double {
         check(
             mapped("one\r\n\r\ntwo\rstill two\r\rthree").map { spans($0.map) } == [[0, 1], [2, 2], [5, 1]],
             "lines end at LF, CRLF or CR, as the editor counts them")
-        check(mapped("")?.map.count == 0 && mapped("\n\n[a]: b\n")?.map.count == 0, "a document with no block has an empty map")
+        check(
+            mapped("")?.map.count == 0 && mapped("\n\n[a]: b\n")?.map.count == 0,
+            "a document with no block has an empty map")
 
         // Every Markdown fixture: one entry per top-level element, in order, lines ascending.
         for name in try PreviewFixtures.names(in: "markdown", withExtension: "md") {
@@ -553,7 +560,8 @@ private func seconds(_ work: () -> Void) -> Double {
         )
         shape(
             [
-                "- one", "  - one a", "    - one a i", "", "      deep paragraph", "  - one b", "- two", "", "  1. first",
+                "- one", "  - one a", "    - one a i", "", "      deep paragraph", "  - one b", "- two", "",
+                "  1. first",
                 "  2. second", "", "after"
             ],
             [[0, 10], [11, 1]],
@@ -572,7 +580,9 @@ private func seconds(_ work: () -> Void) -> Double {
         let table = mapped((["| n | text |", "| - | - |"] + rows).joined(separator: "\n"))?.map
         check(
             table?.position(forLine: 1502) == PreviewScrollMap.Position(block: 0, fraction: 1502.0 / 3002.0)
-                && (0..<3002).allSatisfy { line in table?.position(forLine: line).flatMap { table?.line(for: $0) } == line },
+                && (0..<3002).allSatisfy { line in
+                    table?.position(forLine: line).flatMap { table?.line(for: $0) } == line
+                },
             "and every one of its lines maps to a place in it and back")
         shape(
             [
@@ -583,7 +593,8 @@ private func seconds(_ work: () -> Void) -> Double {
             "raw HTML is ordinary paragraph text for the map, as it is for the output")
         let raw = mapped("<script>alert(1)</script>\n\ntext <b>inline</b> <img src=x onerror=y>")?.html
         check(
-            raw == "<p>&lt;script&gt;alert(1)&lt;/script&gt;</p>\n<p>text &lt;b&gt;inline&lt;/b&gt; &lt;img src=x onerror=y&gt;</p>\n",
+            raw
+                == "<p>&lt;script&gt;alert(1)&lt;/script&gt;</p>\n<p>text &lt;b&gt;inline&lt;/b&gt; &lt;img src=x onerror=y&gt;</p>\n",
             "and it is still escaped, never passed through: \(raw ?? "nil")")
 
         // The adversarial fixture renders to exactly the bytes it rendered to before the map existed.
@@ -594,8 +605,9 @@ private func seconds(_ work: () -> Void) -> Double {
             digest == "496611ef4e8d68fbc8e78a3534e0150b4e2445ba825647fdf4d045ef11b54458",
             "markdown/adversarial.html is the file main has (SHA-256 \(digest))")
         let withMap = MarkdownRenderer.renderWithScrollMap(adversarial, isCancelled: never)
-        if case .rendered(let html) = withMap.rendering, case .rendered(let plain) = MarkdownRenderer.render(
-            adversarial, isCancelled: never)
+        if case .rendered(let html) = withMap.rendering,
+            case .rendered(let plain) = MarkdownRenderer.render(
+                adversarial, isCancelled: never)
         {
             check(
                 Data(html.utf8) == adversarialExpected && Data(plain.utf8) == adversarialExpected,
@@ -656,11 +668,14 @@ private func seconds(_ work: () -> Void) -> Double {
             "blocks removed above move it up")
         check(
             try before.counterpart(of: 2, in: paragraphs(letters + ["new"])) == 2
-                && before.counterpart(of: 1, in: paragraphs(["A", "B", "C", "new", "D", "E", "F", "G", "H", "I", "J"])) == 1,
+                && before.counterpart(of: 1, in: paragraphs(["A", "B", "C", "new", "D", "E", "F", "G", "H", "I", "J"]))
+                    == 1,
             "blocks added below leave it where it is, also when they are added just after it")
         var edited = letters
         edited[5] = "F, edited"
-        check(try before.counterpart(of: 5, in: paragraphs(edited)) == 5, "an edit inside the block leaves it where it is")
+        check(
+            try before.counterpart(of: 5, in: paragraphs(edited)) == 5, "an edit inside the block leaves it where it is"
+        )
         edited[1] = "B, edited"
         check(
             try before.counterpart(of: 5, in: paragraphs(["new"] + edited)) == 6,
@@ -673,7 +688,8 @@ private func seconds(_ work: () -> Void) -> Double {
             "among blocks with the same text any of the two candidates shows the same thing: \(twin)")
         check(
             try before.counterpart(of: 9, in: paragraphs(["A"])) == 0 && before.counterpart(of: 10, in: before) == nil
-                && before.counterpart(of: -1, in: before) == nil && before.counterpart(of: 0, in: PreviewScrollMap()) == nil,
+                && before.counterpart(of: -1, in: before) == nil
+                && before.counterpart(of: 0, in: PreviewScrollMap()) == nil,
             "the answer is always a block of the new map, or none")
         check(
             try paragraphs(["x", "A"]).blocks[1].fingerprint == before.blocks[0].fingerprint
@@ -693,7 +709,8 @@ private func seconds(_ work: () -> Void) -> Double {
 
     static func checkScrollSyncSetting() throws {
         let fresh = EditorSettings()
-        check(fresh.syncsPreviewScrolling && fresh.syncPreviewScrolling == nil, "Sync scrolling in Both is on by default")
+        check(
+            fresh.syncsPreviewScrolling && fresh.syncPreviewScrolling == nil, "Sync scrolling in Both is on by default")
         let freshJSON = try JSONSerialization.jsonObject(with: JSONEncoder().encode(fresh)) as? [String: Any]
         check(freshJSON?["syncPreviewScrolling"] == nil, "default settings are written without the member, as before")
         let older = try Data(contentsOf: TestPaths.fixtures.appendingPathComponent("persistence/Settings.json"))
@@ -728,7 +745,9 @@ private func seconds(_ work: () -> Void) -> Double {
         let url = folder.appendingPathComponent("Settings.json")
         try settings(#""futureMember":{"kept":[1,2.50]},"lastRenderedPreviewMode":"preview""#).write(to: url)
         let store = SettingsStore(url: url)
-        check(store.loadError == nil && store.value.syncsPreviewScrolling, "fixture: a file without the member loads as on")
+        check(
+            store.loadError == nil && store.value.syncsPreviewScrolling,
+            "fixture: a file without the member loads as on")
         try store.updateViewPreference(.syncPreviewScrolling) { _ in false }
         let written = String(decoding: try Data(contentsOf: url), as: UTF8.self)
         check(
@@ -736,7 +755,8 @@ private func seconds(_ work: () -> Void) -> Double {
                 && written.contains(#""syncPreviewScrolling":false"#),
             "switching it off writes the member and survives a round trip")
         check(
-            written.contains(#""futureMember":{"kept":[1,2.50]}"#) && written.contains(#""lastRenderedPreviewMode":"preview""#)
+            written.contains(#""futureMember":{"kept":[1,2.50]}"#)
+                && written.contains(#""lastRenderedPreviewMode":"preview""#)
                 && SettingsStore(url: url).value.toggledPreviewMode == .preview,
             "the other members, one this build does not know among them, are kept as written")
         let afterOff = try Data(contentsOf: url)
@@ -757,7 +777,8 @@ private func seconds(_ work: () -> Void) -> Double {
             !fresh.changeBarsEnabled && !fresh.centeredColumnEnabled && fresh.centeredColumnCharacters == 90
                 && freshJSON?["changeBars"] == nil && freshJSON?["centeredColumn"] == nil
                 && freshJSON?["centeredColumnWidth"] == nil,
-            "change bars and the centered column are off by default, 90 characters wide, and default settings are written without the members")
+            "change bars and the centered column are off by default, 90 characters wide, and default settings are written without the members"
+        )
         let older = try EditorSettings.decode(
             Data(contentsOf: TestPaths.fixtures.appendingPathComponent("persistence/Settings.json")))
         check(
@@ -1189,7 +1210,8 @@ private func seconds(_ work: () -> Void) -> Double {
         }
         check(
             elapsed < 5 && growth < 200,
-            "100 KB of table-shaped text costs little: \(String(format: "%.2f", elapsed)) s, peak memory grew \(growth) MB")
+            "100 KB of table-shaped text costs little: \(String(format: "%.2f", elapsed)) s, peak memory grew \(growth) MB"
+        )
 
         // Inside the column cap, but 96 million cells once padded.
         let manyCells = table(columns: 4_000, rows: 24_000)
@@ -1216,7 +1238,8 @@ private func seconds(_ work: () -> Void) -> Double {
         growth = (peakMemory() - memoryBefore) / megabyte
         check(
             outcome == .limited(.outputTooLarge(maxBytes: limits.maxOutputBytes)) && elapsed < 10 && growth < 300,
-            "short rows are padded only as they are written, under the output limit: \(String(format: "%.2f", elapsed)) s, peak memory grew \(growth) MB")
+            "short rows are padded only as they are written, under the output limit: \(String(format: "%.2f", elapsed)) s, peak memory grew \(growth) MB"
+        )
         let tallTable = table(columns: 2, rows: 400_000)
         let rowProbe = CancellationProbe()
         _ = MarkdownRenderer.render(tallTable, limits: unlimitedCells, isCancelled: rowProbe.isCancelled)
@@ -1226,7 +1249,8 @@ private func seconds(_ work: () -> Void) -> Double {
         }
         check(
             outcome == .cancelled && cancelling.polls == 20 && rowProbe.polls >= 2 * (tallTable.utf8.count / 8192),
-            "table rows are polled as they are read and as they are written (\(rowProbe.polls) polls for \(tallTable.utf8.count) bytes), and cancelling stops at once")
+            "table rows are polled as they are read and as they are written (\(rowProbe.polls) polls for \(tallTable.utf8.count) bytes), and cancelling stops at once"
+        )
         let wideCancel = CancellationProbe(cancelAtPoll: 2)
         memoryBefore = peakMemory()
         elapsed = seconds {
@@ -1260,7 +1284,8 @@ private func seconds(_ work: () -> Void) -> Double {
         let hostileSeconds = seconds { hostileHTML = rendered(hostile) }
         check(
             plainHTML != nil && hostileHTML != nil && hostileSeconds < 10 * plainSeconds + 0.3,
-            "1 MB of failed link targets takes time in proportion to its size: \(String(format: "%.2f", hostileSeconds)) s against \(String(format: "%.2f", plainSeconds)) s for plain text of the same size")
+            "1 MB of failed link targets takes time in proportion to its size: \(String(format: "%.2f", hostileSeconds)) s against \(String(format: "%.2f", plainSeconds)) s for plain text of the same size"
+        )
         check(
             hostileHTML == "<p>" + hostile + "</p>\n" && markdownOutputViolation(hostileHTML ?? "") == nil,
             "and is shown as the text that was typed")
@@ -1355,13 +1380,15 @@ private func seconds(_ work: () -> Void) -> Double {
         _ = MarkdownRenderer.render(codeBlock, isCancelled: codeProbe.isCancelled)
         check(
             codeProbe.polls >= codeBlock.utf8.count / 4096 - 1,
-            "one indented code block of \(codeBlock.utf8.count) bytes is polled while it is read (\(codeProbe.polls) polls)")
+            "one indented code block of \(codeBlock.utf8.count) bytes is polled while it is read (\(codeProbe.polls) polls)"
+        )
         let paragraph = String(repeating: "one line of a long paragraph\n", count: 40_000)
         let paragraphProbe = CancellationProbe()
         _ = MarkdownRenderer.render(paragraph, isCancelled: paragraphProbe.isCancelled)
         check(
             paragraphProbe.polls >= paragraph.utf8.count / 4096 + paragraph.utf8.count / 8192,
-            "one paragraph of \(paragraph.utf8.count) bytes is polled while its lines are gathered and again while it is rendered (\(paragraphProbe.polls) polls)")
+            "one paragraph of \(paragraph.utf8.count) bytes is polled while its lines are gathered and again while it is rendered (\(paragraphProbe.polls) polls)"
+        )
 
         // The default closure reads the cancellation state of the calling task.
         let detached = Task.detached { () -> MarkdownRendering in
@@ -1549,12 +1576,14 @@ private func seconds(_ work: () -> Void) -> Double {
         check(report("< p><3 <-- a < b > c <\n").scriptCount == 0, "stray angle brackets are tolerated")
 
         // A script ends at "</script" followed by a space, a slash or ">", not at "</scriptx".
-        let longerName = report("<script>a</scriptx><img src='http://inside.example/a.png'></script><img src='http://after.example/b.png'>")
+        let longerName = report(
+            "<script>a</scriptx><img src='http://inside.example/a.png'></script><img src='http://after.example/b.png'>")
         check(
             longerName.externalReferences == ["http://after.example/b.png"] && longerName.scriptCount == 1,
             "\"</scriptx\" does not end a script: \(longerName.externalReferences)")
         check(
-            preparedHTML("<script></scriptx><head></script><p>")?.html == "<head>" + policyTag + "</head><script></scriptx><head></script><p>",
+            preparedHTML("<script></scriptx><head></script><p>")?.html == "<head>" + policyTag
+                + "</head><script></scriptx><head></script><p>",
             "so a head tag written inside that script is not taken for the document's head")
         for ending in ["</script>", "</SCRIPT >", "</script/>", "</script\n>"] {
             check(

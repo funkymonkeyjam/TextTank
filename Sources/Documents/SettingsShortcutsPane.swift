@@ -114,13 +114,17 @@ final class ShortcutRecorder: NSButton {
                 }
             }
             if let sameKeyAs {
-                words = String(format: Strings.text("settings.shortcuts.status.sameKey", "%@ · Same key as “%@”"), words, sameKeyAs)
+                words = String(
+                    format: Strings.text("settings.shortcuts.status.sameKey", "%@ · Same key as “%@”"), words, sameKeyAs
+                )
             }
             if ignored != nil {
-                words = String(format: Strings.text("settings.shortcuts.status.ignored", "%@ · Saved shortcut ignored"), words)
+                words = String(
+                    format: Strings.text("settings.shortcuts.status.ignored", "%@ · Saved shortcut ignored"), words)
             }
             if inQuestion {
-                words = String(format: Strings.text("settings.shortcuts.status.inQuestion", "%@ · Has the key in question"), words)
+                words = String(
+                    format: Strings.text("settings.shortcuts.status.inQuestion", "%@ · Has the key in question"), words)
             }
             return words
         }
@@ -410,7 +414,9 @@ final class ShortcutRecorder: NSButton {
     private func help(for row: Row, inQuestion: Bool) -> String? {
         if inQuestion, let pending, let shortcut = pending.shortcut {
             return String(
-                format: Strings.text("settings.shortcuts.help.inQuestion", "“%@” has %@, the key being recorded for “%@”. Replace leaves “%@” without a shortcut."),
+                format: Strings.text(
+                    "settings.shortcuts.help.inQuestion",
+                    "“%@” has %@, the key being recorded for “%@”. Replace leaves “%@” without a shortcut."),
                 row.title, shortcut.spokenText, context.title(pending.id), row.title)
         }
         return row.ignored
@@ -512,7 +518,9 @@ final class ShortcutRecorder: NSButton {
             if recorder.isRecording, let row = selectedRow {
                 say(
                     String(
-                        format: Strings.text("settings.shortcuts.message.typing", "Type the shortcut for “%@”. Press Escape to keep the current one."),
+                        format: Strings.text(
+                            "settings.shortcuts.message.typing",
+                            "Type the shortcut for “%@”. Press Escape to keep the current one."),
                         row.title))
             }
         }
@@ -540,7 +548,9 @@ final class ShortcutRecorder: NSButton {
             if let owner = context.fixed[shortcut.identity] {
                 refuse(
                     String(
-                        format: Strings.text("settings.shortcuts.message.fixed", "%@ is used by “%@”, whose shortcut cannot be changed here. Choose a different shortcut."),
+                        format: Strings.text(
+                            "settings.shortcuts.message.fixed",
+                            "%@ is used by “%@”, whose shortcut cannot be changed here. Choose a different shortcut."),
                         shortcut.spokenText, owner))
                 return
             }
@@ -551,7 +561,10 @@ final class ShortcutRecorder: NSButton {
                 cancel.isHidden = false
                 let names = holders.map { "“" + context.title($0) + "”" }.joined(separator: ", ")
                 let question = String(
-                    format: Strings.text("settings.shortcuts.message.inUse", "%@ is already used by %@. Replace gives it to “%@” and leaves %@ without a shortcut. Cancel changes nothing."),
+                    format: Strings.text(
+                        "settings.shortcuts.message.inUse",
+                        "%@ is already used by %@. Replace gives it to “%@” and leaves %@ without a shortcut. Cancel changes nothing."
+                    ),
                     shortcut.spokenText, names, row.title, names)
                 markRecorder(question)
                 redrawRows()
@@ -584,7 +597,8 @@ final class ShortcutRecorder: NSButton {
             } else {
                 say(
                     String(
-                        format: Strings.text("settings.shortcuts.message.cleared", "“%@” now has no shortcut."), row.title))
+                        format: Strings.text("settings.shortcuts.message.cleared", "“%@” now has no shortcut."),
+                        row.title))
             }
         } catch {
             refuse(error.localizedDescription)

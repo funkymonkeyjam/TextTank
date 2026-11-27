@@ -331,7 +331,8 @@ import NativeSearch
             check(
                 operations.operations.count == 1 && folderOperation?.title == "Searching the folder"
                     && folderOperation?.fraction == nil && folderOperation?.cancelLabel == "Stop the folder search",
-                "SR-3 a folder search is one indeterminate status-row operation, also after a restart: \(operations.operations.map(\.title))")
+                "SR-3 a folder search is one indeterminate status-row operation, also after a restart: \(operations.operations.map(\.title))"
+            )
             await waitUntil("the restarted search to finish") { !busy.isSearching }
             check(operations.operations.isEmpty, "SR-3 the folder search's operation ends with the search")
             let stoppable = pressReturn()

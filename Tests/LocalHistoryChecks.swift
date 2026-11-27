@@ -140,7 +140,8 @@ import EditorBridge
         check(
             try comparison.merge.destination == .modified && !comparison.merge.canChoose(.original)
                 && doc.editor.revision == revision && Data(contentsOf: url) == written[2],
-            "V10 the earlier version is read-only: only the open document can be the destination, and nothing changed yet")
+            "V10 the earlier version is read-only: only the open document can be the destination, and nothing changed yet"
+        )
         comparison.merge.perform(.selectAllChanges)
         try require(comparison.merge.canPerform(.applySelected), "V10 every change can be applied to the document")
         comparison.merge.applySelected()
@@ -229,12 +230,14 @@ import EditorBridge
                 && prompt.detail.contains("“\(doc.displayName ?? "")” accounts for 1 earlier version, ")
                 && prompt.detail.contains("This cannot be undone.")
                 && prompt.detail.contains("Your files and open documents are not changed."),
-            "V10 the confirmation says what is deleted, how much, and that it cannot be undone (DS-43): \(prompt.detail)")
+            "V10 the confirmation says what is deleted, how much, and that it cannot be undone (DS-43): \(prompt.detail)"
+        )
         check(store.usage() == before, "V10 Cancel clears nothing")
         answer = .thisFile
         delegate.clearLocalHistory(clearing)
         _ = await waitUntil("V10 this file's history to be cleared") {
-            prompts.count == 2 && delegate.workspaceWindow.lastTabMessage.hasPrefix("Cleared 1 earlier version of this file")
+            prompts.count == 2
+                && delegate.workspaceWindow.lastTabMessage.hasPrefix("Cleared 1 earlier version of this file")
         }
         check(
             try store.versions(forPath: key(other)).isEmpty && store.versions(forPath: key(renamed)).count == 5,
@@ -242,7 +245,8 @@ import EditorBridge
         answer = .everything
         delegate.clearLocalHistory(clearing)
         _ = await waitUntil("V10 all history to be cleared") {
-            prompts.count == 3 && delegate.workspaceWindow.lastTabMessage.hasPrefix("Cleared 5 earlier versions of 1 file")
+            prompts.count == 3
+                && delegate.workspaceWindow.lastTabMessage.hasPrefix("Cleared 5 earlier versions of 1 file")
         }
         check(
             try store.usage() == LocalHistoryUsage(files: 0, versions: 0, bytes: 0)
@@ -295,7 +299,10 @@ import EditorBridge
             for _ in 0..<5 { await Task.yield() }
             try? await Task.sleep(nanoseconds: 30_000_000)
         }
-        func write(_ text: String, to document: TextDocument, _ url: URL, _ operation: NSDocument.SaveOperationType = .saveOperation)
+        func write(
+            _ text: String, to document: TextDocument, _ url: URL,
+            _ operation: NSDocument.SaveOperationType = .saveOperation
+        )
             async throws
         {
             _ = document.editor.setSelectionAnchor(0, caret: document.editor.byteLength)
@@ -339,15 +346,18 @@ import EditorBridge
         try await write("small four\n", to: doc, small)
         _ = await waitUntil("history fix 4: the status line to report the version that was not kept") {
             let status = doc.presentation?.status
-            return ((status?.stringValue ?? "") + (status?.toolTip ?? "")).contains("An earlier version could not be kept")
+            return ((status?.stringValue ?? "") + (status?.toolTip ?? "")).contains(
+                "An earlier version could not be kept")
         }
         try FileManager.default.removeItem(at: manifestFolder)
         try FileManager.default.moveItem(at: aside, to: manifestFolder)
         let status = doc.presentation?.status
         check(
             try store.versions(forPath: key(small)).count == 3 && Data(contentsOf: small) == Data("small four\n".utf8)
-                && ((status?.stringValue ?? "") + (status?.toolTip ?? "")).contains("An earlier version could not be kept"),
-            "history fix 4: fixture: a version that cannot be written does not fail the save, and the status line says so")
+                && ((status?.stringValue ?? "") + (status?.toolTip ?? "")).contains(
+                    "An earlier version could not be kept"),
+            "history fix 4: fixture: a version that cannot be written does not fail the save, and the status line says so"
+        )
         clock.advance(10)
         try await write("small five\n", to: doc, small)
         let afterFailure = try store.versions(forPath: key(small))
@@ -365,7 +375,8 @@ import EditorBridge
         LocalHistory.forgetNewest()
         var finished = false
         doc.save(to: small, ofType: TextDocument.plainTextType, for: .saveOperation) { _ in finished = true }
-        let saved = await waitUntil(timeout: 5, "history fix 6: the save to finish while the store's queue is blocked") { finished }
+        let saved = await waitUntil(timeout: 5, "history fix 6: the save to finish while the store's queue is blocked")
+        { finished }
         var busyPrompts = 0
         let priorConfirm = LocalHistory.confirmClear
         LocalHistory.confirmClear = { _, _, reply in
@@ -406,7 +417,8 @@ import EditorBridge
         check(
             outside.prefix(2).map(\.kind) == [.saved, .replaced] && outside[1].format == nil
                 && outside[0].format == FileFormat(encoding: .utf8, bom: false),
-            "history fix 7: bytes that another program wrote are kept without the document's format, to be detected on reading")
+            "history fix 7: bytes that another program wrote are kept without the document's format, to be detected on reading"
+        )
         check(
             try LocalHistory.snapshot(
                 store.data(forPath: key(cased), version: outside[1].id), of: outside[1], name: "x"
@@ -418,7 +430,9 @@ import EditorBridge
         options.keepLocalHistory = false
         _ = try delegate.settings.save(options)
         clock.advance(31 * 24 * 60 * 60)
-        check(try store.versions(forPath: key(cased)).count >= 2, "history fix 2: fixture: versions older than thirty days are still there")
+        check(
+            try store.versions(forPath: key(cased)).count >= 2,
+            "history fix 2: fixture: versions older than thirty days are still there")
         LocalHistory.pruneAtLaunch()
         await settle()
         check(
@@ -438,7 +452,8 @@ import EditorBridge
             try? good.write(to: settingsURL)
             delegate.installEditorServices()
         }
-        try require(unreadable.settings.loadFailureMessage != nil, "history fix 7: fixture: the settings file cannot be read")
+        try require(
+            unreadable.settings.loadFailureMessage != nil, "history fix 7: fixture: the settings file cannot be read")
         let before = try store.versions(forPath: key(cased)).map(\.id)
         check(
             !LocalHistory.isEnabled && !doc.validateUserInterfaceItem(command),

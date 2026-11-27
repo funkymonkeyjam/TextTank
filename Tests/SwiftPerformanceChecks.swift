@@ -18,12 +18,17 @@ import NativeSearch
     }
     private static func metric(_ name: String, since start: Double, initialPeak: Int) throws {
         let end = now(), high = try peak()
-        print(String(format: "SWIFT_PERF %@ elapsed_s=%.6f peak_rss_bytes=%ld peak_growth_bytes=%ld",
-                     name, end - start, high, high - initialPeak))
+        print(
+            String(
+                format: "SWIFT_PERF %@ elapsed_s=%.6f peak_rss_bytes=%ld peak_growth_bytes=%ld",
+                name, end - start, high, high - initialPeak))
         fflush(stdout)
     }
-    private static let chunk = Data(String(repeating: "let value = 42 // " + String(repeating: "a", count: 109) + "\n",
-                                           count: 512).utf8)
+    private static let chunk = Data(
+        String(
+            repeating: "let value = 42 // " + String(repeating: "a", count: 109) + "\n",
+            count: 512
+        ).utf8)
     private static func fixture(_ file: URL, bytes: Int) throws {
         try require(chunk.count == 65536 && bytes.isMultiple(of: chunk.count), "exact streaming fixture geometry")
         try Data().write(to: file)
@@ -59,7 +64,8 @@ import NativeSearch
             try metric("open32", since: t0, initialPeak: beforeOpen)
             let view = doc.editor
             doc.presentation?.hostWindow?.contentView?.layoutSubtreeIfNeeded()
-            let bitmap = try requireValue(view.bitmapImageRepForCachingDisplay(in: view.bounds), "offscreen editor bitmap")
+            let bitmap = try requireValue(
+                view.bitmapImageRepForCachingDisplay(in: view.bounds), "offscreen editor bitmap")
             view.cacheDisplay(in: view.bounds, to: bitmap)
             try metric("open32_through_offscreen_paint", since: t0, initialPeak: beforeOpen)
             var colors = Set<NSColor>()
@@ -68,9 +74,12 @@ import NativeSearch
                     if let color = bitmap.colorAt(x: x, y: y), color.alphaComponent > 0 { colors.insert(color) }
                 }
             }
-            check(colors.count > 3 && view.byteLength == size && !doc.isDocumentEdited,
-                  "normal document open populates and renders the full UTF-8 fixture")
-            print("SWIFT_PERF open_language=\(doc.languageIdentifier) bytes=\(view.byteLength) bitmap=\(bitmap.pixelsWide)x\(bitmap.pixelsHigh)")
+            check(
+                colors.count > 3 && view.byteLength == size && !doc.isDocumentEdited,
+                "normal document open populates and renders the full UTF-8 fixture")
+            print(
+                "SWIFT_PERF open_language=\(doc.languageIdentifier) bytes=\(view.byteLength) bitmap=\(bitmap.pixelsWide)x\(bitmap.pixelsHigh)"
+            )
             return
         }
         try require(doc.editor.setSelectionAnchor(size, caret: size), "valid end-of-document caret")
@@ -86,24 +95,28 @@ import NativeSearch
             let tick = try wait("ordinary safe save completed") { complete }
             if let failure { throw failure }
             try metric("save32", since: start, initialPeak: initialPeak)
-            print(String(format: "SWIFT_PERF save32 max_main_tick_s=%.6f",tick))
+            print(String(format: "SWIFT_PERF save32 max_main_tick_s=%.6f", tick))
             let saved = try Data(contentsOf: url, options: .mappedIfSafe)
-            let originalIntact = saved.count == size + 1 && saved.withUnsafeBytes { buffer in
-                chunk.withUnsafeBytes { expected in
-                    stride(from: 0, to: size, by: chunk.count).allSatisfy { offset in
-                        memcmp(buffer.baseAddress!.advanced(by: offset), expected.baseAddress!, chunk.count) == 0
+            let originalIntact =
+                saved.count == size + 1
+                && saved.withUnsafeBytes { buffer in
+                    chunk.withUnsafeBytes { expected in
+                        stride(from: 0, to: size, by: chunk.count).allSatisfy { offset in
+                            memcmp(buffer.baseAddress!.advanced(by: offset), expected.baseAddress!, chunk.count) == 0
+                        }
                     }
                 }
-            }
-            check(originalIntact && saved.last == 33 && !doc.isDocumentEdited,
-                  "safe save publishes the edited fixture and clears the dirty state")
+            check(
+                originalIntact && saved.last == 33 && !doc.isDocumentEdited,
+                "safe save publishes the edited fixture and clears the dirty state")
             return
         }
         if mode == "recovery64" {
             // Fire the exact one-shot installed by the ordinary edit. This isolates the
             // synchronous capture/enqueue call from the idle interval and the background writer.
-            let timer = try requireValue(Mirror(reflecting: doc).children.first { $0.label == "recoveryTimer" }?.value as? Timer,
-                                         "edit installed the production idle recovery timer")
+            let timer = try requireValue(
+                Mirror(reflecting: doc).children.first { $0.label == "recoveryTimer" }?.value as? Timer,
+                "edit installed the production idle recovery timer")
             let start = now()
             timer.fire()
             try metric("recovery64_main_capture_and_enqueue", since: start, initialPeak: initialPeak)
@@ -112,12 +125,13 @@ import NativeSearch
             doc.currentSaveStateStatus.contains("recovery copy kept")
         }
         try metric(mode, since: editStart, initialPeak: initialPeak)
-        print(String(format: "SWIFT_PERF %@ max_main_tick_s=%.6f",mode,tick))
+        print(String(format: "SWIFT_PERF %@ max_main_tick_s=%.6f", mode, tick))
         let recovered = try TextDocument.recovery.load(id: doc.recoveryID)
         let disk = try Data(contentsOf: url, options: .mappedIfSafe)
         let utf8 = recovered.text.utf8
-        check(utf8.count == size + 1 && utf8.last == 33 && utf8.dropLast().elementsEqual(disk)
-              && doc.isDocumentEdited, "confirmed recovery retains every edited byte and preserves the original file")
+        check(
+            utf8.count == size + 1 && utf8.last == 33 && utf8.dropLast().elementsEqual(disk)
+                && doc.isDocumentEdited, "confirmed recovery retains every edited byte and preserves the original file")
     }
     @MainActor private static func replaceAll(using service: AppDelegate) throws {
         let document = DocumentFactory.makeUntitled(display: false)
@@ -133,10 +147,11 @@ import NativeSearch
         search.replaceAll(nil)
         let tick = try wait("actual Find and Replace action completed") { !search.isSearching }
         try metric("replace100k", since: start, initialPeak: before)
-        print(String(format: "SWIFT_PERF replace100k max_main_tick_s=%.6f",tick))
-        check(search.lastOutcome == .replaced(changed: 100_000, stale: 0)
-              && document.editor.text == String(repeating: "y\n", count: 100_000),
-              "current-document Replace All changes precisely 100,000 matches")
+        print(String(format: "SWIFT_PERF replace100k max_main_tick_s=%.6f", tick))
+        check(
+            search.lastOutcome == .replaced(changed: 100_000, stale: 0)
+                && document.editor.text == String(repeating: "y\n", count: 100_000),
+            "current-document Replace All changes precisely 100,000 matches")
         document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
         check(document.editor.text == source, "one native Undo restores all 100,000 matches")
         let overLimit = source + "x\n"
@@ -144,8 +159,10 @@ import NativeSearch
         let revision = document.editor.revision
         search.replaceAll(nil)
         _ = try wait("over-limit comparison completed") { !search.isSearching }
-        check(search.lastOutcome == .limitReached && document.editor.revision == revision && document.editor.text == overLimit,
-              "100,001 matches preserve all bytes and the existing search cap")
+        check(
+            search.lastOutcome == .limitReached && document.editor.revision == revision
+                && document.editor.text == overLimit,
+            "100,001 matches preserve all bytes and the existing search cap")
     }
     /// V5: Find in a document above the 64 Mi UTF-16 limit, through the real Find and Replace
     /// window. The fixture is the existing streaming generator's, with three planted matches of
@@ -331,14 +348,15 @@ import NativeSearch
             app.finishLaunching()
             let documents = TextDocumentController(), delegate = AppDelegate()
             delegate.installEditorServices()
-            if mode == "replace100k" { try replaceAll(using: delegate) }
-            else if mode == "find72" {
+            if mode == "replace100k" {
+                try replaceAll(using: delegate)
+            } else if mode == "find72" {
                 try largeFind(using: delegate, in: support.url)
-            }
-            else if mode == "foldcjk" {
+            } else if mode == "foldcjk" {
                 try longNeedleInCJK()
+            } else {
+                try documentCase(mode, in: support.url)
             }
-            else { try documentCase(mode, in: support.url) }
             withExtendedLifetime(documents) {}
             withExtendedLifetime(delegate) {}
         }

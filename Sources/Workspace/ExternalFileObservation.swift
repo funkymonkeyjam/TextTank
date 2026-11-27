@@ -143,7 +143,9 @@ import TextTankCore
             if case .changed = result.status, let digest = result.digest, let identity = result.identity {
                 self.candidate = Candidate(state: expected, digest: digest, identity: identity)
             }
-            if self.notice != message || self.actionTitle != previousAction || self.offersComparison != previouslyComparable {
+            if self.notice != message || self.actionTitle != previousAction
+                || self.offersComparison != previouslyComparable
+            {
                 self.notice = message
                 self.document?.externalNoticeChanged()
             }
@@ -176,7 +178,9 @@ import TextTankCore
         return EditorServices.current?.compare?.hasSavedSource(document) == true
     }
     @objc func compare(_ sender: Any?) {
-        guard !reloading, offersComparison, !CompareCommandScope.blocksWorkspace, let candidate, let document else { return }
+        guard !reloading, offersComparison, !CompareCommandScope.blocksWorkspace, let candidate, let document else {
+            return
+        }
         guard state == candidate.state else {
             check(prioritized: true)
             return

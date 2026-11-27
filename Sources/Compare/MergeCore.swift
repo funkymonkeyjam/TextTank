@@ -88,7 +88,9 @@ package enum MergeCore {
                 lower = r.lower
             }
             upper = max(upper, r.upper)
-            guard removed <= parentByteLength, replacement <= SizePolicy.standard.reviewText, count <= 10_000 else { return false }
+            guard removed <= parentByteLength, replacement <= SizePolicy.standard.reviewText, count <= 10_000 else {
+                return false
+            }
         }
         return parentByteLength - removed + replacement <= SizePolicy.standard.reviewText
     }
@@ -184,7 +186,8 @@ package enum MergeCore {
         _ side: CompareSide, _ parent: TextSnapshot, _ slice: Range<Int>?, _ selected: [Int], meter: ReviewMeter
     ) throws -> MergePlan {
         try meter.poll()
-        guard let target = parent.document, parent.bytes.count <= min(SizePolicy.standard.reviewText, meter.policy.maximumInputBytes),
+        guard let target = parent.document,
+            parent.bytes.count <= min(SizePolicy.standard.reviewText, meter.policy.maximumInputBytes),
             selected.count <= 100_000, changes.blocks.count <= 100_000
         else { throw MergeFailure(.budgetExceeded) }
         let dest = side == .original ? a : b, source = side == .original ? b : a

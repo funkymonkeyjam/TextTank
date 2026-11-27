@@ -72,7 +72,9 @@ import NativeSearch
         composition.noteActive(controller)
         let window = try requireValue(controller.hostWindow, "DT fixture: document window")
         let toolbar = try requireValue(window.toolbar, "DT fixture: native toolbar")
-        let core = ["TextTank.New", "TextTank.Open", "TextTank.Save", "TextTank.Find", "TextTank.Split", "TextTank.Wrap"]
+        let core = [
+            "TextTank.New", "TextTank.Open", "TextTank.Save", "TextTank.Find", "TextTank.Split", "TextTank.Wrap"
+        ]
         let native = nativeTree(window)
         for item in toolbar.items where item.itemIdentifier != .flexibleSpace {
             let exposed = native.first {
@@ -89,7 +91,8 @@ import NativeSearch
         check(
             toolbar.items.first { $0.itemIdentifier.rawValue == "TextTank.Automations" } is NSMenuToolbarItem,
             "DT-R2 Automations is a native menu toolbar item")
-        let layout = toolbar.items.first { $0.itemIdentifier == EditorLayoutToolbarItem.identifier } as? NSMenuToolbarItem
+        let layout =
+            toolbar.items.first { $0.itemIdentifier == EditorLayoutToolbarItem.identifier } as? NSMenuToolbarItem
         check(
             layout != nil && layout?.label == "Editor Layout"
                 && layout?.menu.items.filter { $0.identifier?.rawValue.hasPrefix("groups.layout.") == true }.count == 4
@@ -136,36 +139,43 @@ import NativeSearch
         document.editor.readOnly = false
         let split = try requireValue(
             toolbar.items.first { $0.itemIdentifier.rawValue == "TextTank.Split" }, "DT fixture: Split")
-        let wrap = try requireValue(toolbar.items.first { $0.itemIdentifier == EditorToolbarCommand.wrap.identifier },
-                                    "fixture: Wrap Lines")
+        let wrap = try requireValue(
+            toolbar.items.first { $0.itemIdentifier == EditorToolbarCommand.wrap.identifier },
+            "fixture: Wrap Lines")
         let startingWrap = controller.activeEditor.wrap
         let revisionBeforeWrap = document.editor.revision
-        check(identifiers.firstIndex(of: "TextTank.Wrap") == identifiers.firstIndex(of: "TextTank.Split").map { $0 + 1 },
-              "Wrap Lines is immediately after Split Tab View")
+        check(
+            identifiers.firstIndex(of: "TextTank.Wrap") == identifiers.firstIndex(of: "TextTank.Split").map { $0 + 1 },
+            "Wrap Lines is immediately after Split Tab View")
         for expected in [!startingWrap, startingWrap] {
-            check(NSApp.sendAction(EditorToolbarCommand.wrap.action, to: controller, from: wrap)
+            check(
+                NSApp.sendAction(EditorToolbarCommand.wrap.action, to: controller, from: wrap)
                     && controller.activeEditor.wrap == expected && controller.validateToolbarItem(wrap)
                     && wrap.menuFormRepresentation?.state == (expected ? .on : .off)
                     && document.editor.revision == revisionBeforeWrap,
-                  "Wrap Lines toggles the view and overflow state without editing the document")
+                "Wrap Lines toggles the view and overflow state without editing the document")
         }
-        let wrapIndex = try requireValue(toolbar.items.firstIndex { $0.itemIdentifier == wrap.itemIdentifier },
-                                         "fixture: installed wrap item")
+        let wrapIndex = try requireValue(
+            toolbar.items.firstIndex { $0.itemIdentifier == wrap.itemIdentifier },
+            "fixture: installed wrap item")
         toolbar.removeItem(at: wrapIndex)
         EditorToolbarPreferences.offerWrapItemOnce(in: toolbar, defaults: preferences)
-        check(toolbar.items[wrapIndex].itemIdentifier == wrap.itemIdentifier,
-              "an existing arrangement gains Wrap Lines immediately after Split")
+        check(
+            toolbar.items[wrapIndex].itemIdentifier == wrap.itemIdentifier,
+            "an existing arrangement gains Wrap Lines immediately after Split")
         toolbar.removeItem(at: wrapIndex)
         EditorToolbarPreferences.offerWrapItemOnce(in: toolbar, defaults: preferences)
-        check(!toolbar.items.contains { $0.itemIdentifier == wrap.itemIdentifier },
-              "a user who removes Wrap Lines keeps that choice")
+        check(
+            !toolbar.items.contains { $0.itemIdentifier == wrap.itemIdentifier },
+            "a user who removes Wrap Lines keeps that choice")
         toolbar.insertItem(withItemIdentifier: wrap.itemIdentifier, at: wrapIndex)
         let splitMenu = try requireValue(menuItem(split.action!, in: NSApp.mainMenu), "DT fixture: menu Split")
         let splitOverflow = try requireValue(split.menuFormRepresentation, "DT fixture: Clone overflow")
         let singleViewHelp = split.toolTip
         let revisionBeforeClone = document.editor.revision
         check(
-            split.label == "Split Tab View" && controller.validateToolbarItem(split) && controller.validateMenuItem(splitMenu)
+            split.label == "Split Tab View" && controller.validateToolbarItem(split)
+                && controller.validateMenuItem(splitMenu)
                 && splitMenu.state == .off && splitOverflow.state == .off,
             "DS-20/22 Clone is enabled and unchecked on the toolbar, menu and overflow before splitting")
         check(

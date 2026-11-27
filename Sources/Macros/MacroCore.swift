@@ -178,7 +178,9 @@ package struct MacroLibrary: VersionedLibrary, Equatable {
 
     static package let libraryContext = "Saved macros"
     static package var librarySizeError: Error {
-        MacroError.invalid("Saved macros exceed the \(SizePolicy.describe(SizePolicy.standard.macroLibrary)) limit. Shorten a recording or remove unused macros.")
+        MacroError.invalid(
+            "Saved macros exceed the \(SizePolicy.describe(SizePolicy.standard.macroLibrary)) limit. Shorten a recording or remove unused macros."
+        )
     }
     /// Same 32 MiB resource envelope as saved automations; bound both import and persistence.
     static package let maximumBytes = SizePolicy.standard.macroLibrary
@@ -193,7 +195,9 @@ package struct MacroLibrary: VersionedLibrary, Equatable {
             guard let text else { return }
             let count = text.utf8.count
             guard count <= remaining else {
-                throw MacroError.invalid("Saved macros exceed the \(SizePolicy.describe(SizePolicy.standard.macroLibrary)) limit. Shorten a recording or remove unused macros.")
+                throw MacroError.invalid(
+                    "Saved macros exceed the \(SizePolicy.describe(SizePolicy.standard.macroLibrary)) limit. Shorten a recording or remove unused macros."
+                )
             }
             remaining -= count
         }

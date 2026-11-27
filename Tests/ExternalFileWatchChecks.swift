@@ -169,9 +169,10 @@ import Darwin
                 : armed.owned == before.owned + number
         }
         check(
-            armed.distinct == armed.owned && (reduced
-                ? (armed.owned > before.owned && armed.owned < before.owned + number)
-                : armed.owned == before.owned + number),
+            armed.distinct == armed.owned
+                && (reduced
+                    ? (armed.owned > before.owned && armed.owned < before.owned + number)
+                    : armed.owned == before.owned + number),
             "available descriptor budget bounds watcher admission")
         let last = try requireValue(docs.last, "last owned document")
         let lastURL = try requireValue(last.fileURL, "last disk file")

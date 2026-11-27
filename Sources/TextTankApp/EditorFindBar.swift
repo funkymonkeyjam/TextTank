@@ -143,8 +143,10 @@ final class EditorFindBar: NSView {
     /// Called after the disclosure control is clicked, with the row's new state.
     var onDisclose: ((Bool) -> Void)?
     private(set) var showsReplace = false
-    init(disclosure: NSButton, find: NSView, replace: NSView, navigation: NSView, count: NSView,
-         options: FindOptionsControl, replaceActions: [NSButton], more: NSView, done: NSView) {
+    init(
+        disclosure: NSButton, find: NSView, replace: NSView, navigation: NSView, count: NSView,
+        options: FindOptionsControl, replaceActions: [NSButton], more: NSView, done: NSView
+    ) {
         self.disclosure = disclosure
         self.find = find
         self.replace = replace
@@ -251,14 +253,16 @@ final class EditorFindBar: NSView {
         }
         let first = takeRow()
         row(
-            shape.oneRow ? [disclosure, find, count, options, navigation, more, done] : [disclosure, find, navigation, done],
+            shape.oneRow
+                ? [disclosure, find, count, options, navigation, more, done] : [disclosure, find, navigation, done],
             flexible: find, from: 0, y: first)
         if showsReplace {
             // Under the Find field and, where the row allows, exactly as wide.
             let y = takeRow()
             if shape.oneRow {
                 var x = find.frame.minX
-                for (view, width) in [(replace, find.frame.width)] + replaceActions.map({ ($0 as NSView, fitting($0)) }) {
+                for (view, width) in [(replace, find.frame.width)] + replaceActions.map({ ($0 as NSView, fitting($0)) })
+                {
                     view.frame = NSRect(x: x, y: y, width: width, height: Self.rowHeight)
                     x += width + Self.gap
                 }
@@ -505,13 +509,15 @@ struct InlineFindPublication {
                 && editor.selectionCaret == NSMaxRange(range)
         }
         let current = editor.selectionRanges
-        return original.count == current.count && zip(original, current).allSatisfy {
-            $0.anchor == $1.anchor && $0.caret == $1.caret
-        }
+        return original.count == current.count
+            && zip(original, current).allSatisfy {
+                $0.anchor == $1.anchor && $0.caret == $1.caret
+            }
     }
     private func restoreSelection() {
         guard let editor, editor.revision == revision, selectionAtPublication != nil,
-              stillOwnsSelection(editor) else { return }
+            stillOwnsSelection(editor)
+        else { return }
         _ = editor.setSelectionRanges(original)
         selectionAtPublication = nil
     }
@@ -522,14 +528,18 @@ struct InlineFindPublication {
         pending = nil
     }
     private func clearHighlights() {
-        if painted { _ = editor?.setFindPreviewHighlights([]); painted = false }
+        if painted {
+            _ = editor?.setFindPreviewHighlights([])
+            painted = false
+        }
     }
     func cancel(restore: Bool) {
         cancelPending()
         clearHighlights()
         if restore { restoreSelection() }
     }
-    func search(options: SearchOptions, isCurrent: @escaping @MainActor () -> Bool,
+    func search(
+        options: SearchOptions, isCurrent: @escaping @MainActor () -> Bool,
         publish: @escaping @MainActor (InlineFindPublication) -> Void
     ) {
         cancelPending()
@@ -554,7 +564,8 @@ struct InlineFindPublication {
                 let largePaint = lineLength > 256 * 1024 && lineLength <= Self.paintLineLimit
                 try await Task.sleep(nanoseconds: largePaint ? 45_000_000 : 90_000_000)
                 guard let self, !flag.cancelled, isCurrent(),
-                      EditorLifetime.isOpen(editor), editor.revision == self.revision else { return }
+                    EditorLifetime.isOpen(editor), editor.revision == self.revision
+                else { return }
                 if self.snapshot == nil { self.snapshot = editor.checkedUTF8Data }
                 guard let data = self.snapshot else { throw SearchFailure.positionMapping }
                 let result = try await Task.detached(priority: .userInitiated) {
@@ -562,7 +573,8 @@ struct InlineFindPublication {
                         data, options: options, openingCaret: caret, cancellation: flag, unitLimit: unitLimit,
                         chunkBytes: chunkBytes)
                 }.value
-                guard !flag.cancelled, isCurrent(), EditorLifetime.isOpen(editor), editor.revision == self.revision else { return }
+                guard !flag.cancelled, isCurrent(), EditorLifetime.isOpen(editor), editor.revision == self.revision
+                else { return }
                 let detail = self.show(result, in: editor, openingLineLength: lineLength)
                 publish(
                     InlineFindPublication(
@@ -575,13 +587,15 @@ struct InlineFindPublication {
             }
         }
     }
-    private func show(_ result: SearchController.InlinePreview, in editor: TTEditor, openingLineLength: UInt) -> String? {
+    private func show(_ result: SearchController.InlinePreview, in editor: TTEditor, openingLineLength: UInt) -> String?
+    {
         // A passive invalidation makes Scintilla lay out the complete visible physical line.
         // Keep typing responsive on giant unbroken lines; explicit Return still navigates.
         guard max(openingLineLength, editor.findPreviewLongestVisibleLine) <= Self.paintLineLimit else {
             clearHighlights()
             restoreSelection()
-            return result.selected == nil ? nil : "Highlights are limited on very long lines. Press Return to select a match."
+            return result.selected == nil
+                ? nil : "Highlights are limited on very long lines. Press Return to select a match."
         }
         let hits = result.highlights.filter { $0.length > 0 }
         let marks = hits.compactMap { hit -> TTByteRange? in
@@ -591,13 +605,19 @@ struct InlineFindPublication {
         if painted || !marks.isEmpty {
             painted = editor.setFindPreviewHighlights(marks) && !marks.isEmpty
         }
-        if let selected = result.selected, editor.findPreviewLineLength(atByte: UInt(selected.location)) <= Self.paintLineLimit {
+        if let selected = result.selected,
+            editor.findPreviewLineLength(atByte: UInt(selected.location)) <= Self.paintLineLimit
+        {
             if mayMoveSelection, EditorServices.current?.macros?.isRecording(in: editor) != true,
-               stillOwnsSelection(editor), editor.setSelectionAnchor(selected.location, caret: NSMaxRange(selected)) {
+                stillOwnsSelection(editor), editor.setSelectionAnchor(selected.location, caret: NSMaxRange(selected))
+            {
                 selectionAtPublication = selected
             }
-        } else { restoreSelection() }
-        return marks.count < hits.count ? "Highlights are limited on very long lines. Press Return to select a match." : nil
+        } else {
+            restoreSelection()
+        }
+        return marks.count < hits.count
+            ? "Highlights are limited on very long lines. Press Return to select a match." : nil
     }
 
 }
