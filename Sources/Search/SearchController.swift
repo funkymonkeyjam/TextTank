@@ -1433,7 +1433,7 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
     /// Macro playback deliberately retains bounded synchronous scheduling over the same engine/apply path.
     func performInline(
         options: SearchOptions, action: String, on editor: TTEditor, cancellation: TTSearchCancellation,
-        isCurrent: @escaping () -> Bool, progress: (@Sendable (Int, Int) -> Void)? = nil,
+        isCurrent: @escaping () -> Bool, progress: (@MainActor (Int, Int) -> Void)? = nil,
         completion: @escaping (InlineSearchOutcome) -> Void
     ) {
         // Above the engine's limit the document is searched as bytes; nothing is decoded whole.
@@ -1445,19 +1445,35 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         let window = editor.window
         Task { @MainActor [weak self, weak editor, weak window] in
             do {
-                let found = try await Task.detached(priority: .userInitiated) { () throws -> InlineFound in
+                // Drain real worker progress on the UI actor before delivering the result. A slow
+                // row needs only the newest report, and a small document has no progress stream.
+                let updates =
+                    large != nil && progress != nil
+                    ? AsyncStream<(Int, Int)>.makeStream(bufferingPolicy: .bufferingNewest(1)) : nil
+                let sink = updates?.continuation
+                let worker = Task.detached(priority: .userInitiated) { () throws -> InlineFound in
+                    defer { sink?.finish() }
                     if let large {
                         return .bytes(
                             try SearchSession.planBytes(
                                 large, options: options, action: action, selection: selection,
                                 search: SearchSession.ByteSearch(
-                                    chunkBytes: chunk, cancellation: cancellation, progress: progress)))
+                                    chunkBytes: chunk, cancellation: cancellation,
+                                    progress: sink.map { sink in
+                                        { @Sendable done, total in _ = sink.yield((done, total)) }
+                                    })))
                     }
                     return .report(
                         try SearchCore.search(
                             text, options: options, cancellation: cancellation,
                             purpose: action == "replaceAll" ? .allMatches : .navigation))
-                }.value
+                }
+                if let updates, let progress {
+                    for await (done, total) in updates.stream where !cancellation.cancelled {
+                        progress(done, total)
+                    }
+                }
+                let found = try await worker.value
                 guard !cancellation.cancelled else {
                     completion(.cancelled)
                     return
