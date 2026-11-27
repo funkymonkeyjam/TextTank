@@ -24,7 +24,8 @@ REVIEW_DOCUMENTS = (
     'docs/AUTOMATION-RULES.md', 'docs/EXTENSIONS-AND-RUN.md',
     'docs/parity/README.md', 'docs/parity/capabilities.json',
     'docs/parity/user-validation-2026-11-14.json',
-    'docs/research/README.md', 'docs/research/findings.md', 'docs/research/sources.json',
+    'docs/research/README.md', 'docs/research/findings.md', 'docs/research/finding-ids.md',
+    'docs/research/sources.json',
     'docs/research/utility-audit.md', 'docs/research/workspace-browser.md',
 )
 
