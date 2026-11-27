@@ -217,9 +217,12 @@ static char TTPairCloser(NSString *text) {
 // viewport. Give it a scale-matched image of just the newly painted strip instead.
 // The image is transient. Scintilla still draws the glyphs, selection and caret.
 - (BOOL)drawScrollRect:(NSRect)rect inContext:(CGContextRef)destination {
-    const CGAffineTransform transform = CGContextGetUserSpaceToDeviceSpaceTransform(destination);
+    if (!destination) return NO;
+    const CGAffineTransform transform = CGContextGetCTM(destination);
     if (transform.a <= 0 || transform.d >= 0 || transform.b != 0 || transform.c != 0) return NO;
-    const CGRect pixels = CGRectIntegral(CGContextConvertRectToDeviceSpace(destination, rect));
+    const CGRect pixels = CGRectApplyAffineTransform(rect, transform);
+    // Compositing a fractional boundary twice changes its antialiasing coverage.
+    if (!CGRectEqualToRect(pixels, CGRectIntegral(pixels))) return NO;
     const CGFloat area = pixels.size.width * pixels.size.height;
     // At most 4 MiB of pixels, independent of document length and display size.
     if (!std::isfinite(area) || area < 1 || area > 1024 * 1024) return NO;
