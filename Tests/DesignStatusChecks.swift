@@ -33,7 +33,9 @@ enum DesignStatusChecks {
         check(
             face.writes == priorWrites, "typing updates the position without rewriting the unchanged indentation menu")
         let positionButton = try requireValue(
-            descendants(typingRow).compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "status.position.0" },
+            descendants(typingRow).compactMap { $0 as? NSButton }.first {
+                $0.identifier?.rawValue == "status.position.0"
+            },
             "typing row position button")
         let titleWrites = OSAllocatedUnfairLock(initialState: 0)
         let observation = positionButton.observe(\.attributedTitle) { _, _ in titleWrites.withLock { $0 += 1 } }
@@ -47,7 +49,8 @@ enum DesignStatusChecks {
             moveWrites > 0 && titleWrites.withLock { $0 } == moveWrites && !typingRow.needsLayout,
             "a statistics-only update preserves the position title and row layout")
         check(
-            positionButton.toolTip?.contains(detail) == true && positionButton.cell?.accessibilityHelp()?.contains(detail) == true,
+            positionButton.toolTip?.contains(detail) == true
+                && positionButton.cell?.accessibilityHelp()?.contains(detail) == true,
             "the new statistics still reach the tooltip and accessibility help")
         observation.invalidate()
         let initialURL = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TEXTTANK_SUPPORT_DIRECTORY"]!)

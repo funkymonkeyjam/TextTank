@@ -542,10 +542,12 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
         values = shown
         let prior = Dictionary(uniqueKeysWithValues: popups.map { ($0.field, $0) })
         var occurrences: [String: Int] = [:]
+        var layoutChanged = !sameFields
         popups = shown.enumerated().map { index, item in
             if sameFields, previous[index] == item { return popups[index] }
             let control: any StatusFieldControl = prior[item.field] ?? makeControl(item.field)
-            control.shownText = item.text
+            let titleChanged = !sameFields || previous[index].text != item.text
+            if titleChanged { control.shownText = item.text }
             let group = item.field.identityGroup, number = occurrences[group, default: 0]
             occurrences[group] = number + 1
             if !sameFields { control.identifier = NSUserInterfaceItemIdentifier("status.\(group).\(number)") }
@@ -567,14 +569,20 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
                 help = Strings.text("status.showOptions", "Shows options for this field.")
                 control.toolTip = name
             }
-            ControlPresentation.label(name, control: control)
+            if titleChanged { ControlPresentation.label(name, control: control) }
             control.setAccessibilityHelp(help)
             control.cell?.setAccessibilityHelp(help)
+            // A completed statistics scan may change only the position field's help.
+            guard titleChanged else { return control }
             if control.superview == nil { stack.addArrangedSubview(control) }
+            let width = control.measuredWidth
             if let constraint = widths[item.field] {
-                constraint.constant = control.measuredWidth
+                if constraint.constant != width {
+                    constraint.constant = width
+                    layoutChanged = true
+                }
             } else {
-                let constraint = control.widthAnchor.constraint(equalToConstant: control.measuredWidth)
+                let constraint = control.widthAnchor.constraint(equalToConstant: width)
                 constraint.isActive = true
                 widths[item.field] = constraint
             }
@@ -596,7 +604,7 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
                 stack.addArrangedSubview(overflow)
             }
         }
-        needsLayout = true
+        if layoutChanged { needsLayout = true }
     }
     private func makeControl(_ field: StatusField) -> any StatusFieldControl {
         guard Self.commandFields.contains(field) else {
