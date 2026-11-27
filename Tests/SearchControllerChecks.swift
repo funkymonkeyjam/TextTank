@@ -30,12 +30,29 @@ private final class SelectionReadCounterEditor: TTEditor {
         return super.selectionEnd
     }
 }
-/// Progress reports arrive on the search's own thread.
+/// Record which thread delivers each report and whether any arrive after completion.
 final class ProgressTicks: @unchecked Sendable {
     private let lock = NSLock()
     private var reports = 0, reachedEnd = false
+    private var finished = false, orderedOnMain = true
+    func begin() {
+        lock.lock()
+        finished = false
+        lock.unlock()
+    }
+    func finish() {
+        lock.lock()
+        finished = true
+        lock.unlock()
+    }
+    var displayedBeforeCompletion: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return reports > 0 && orderedOnMain
+    }
     func record(_ done: Int, _ total: Int) {
         lock.lock()
+        orderedOnMain = orderedOnMain && Thread.isMainThread && !finished
         reports += 1
         if done == total, total > 0 { reachedEnd = true }
         lock.unlock()
@@ -685,15 +702,31 @@ final class ProgressTicks: @unchecked Sendable {
         check(
             controller.lastOutcome == .staleResult && editor.text == text,
             "a replacement is not applied after the selection moved while the search ran")
+        // A worker can reach the wrap boundary before the UI receives its first wakeup.
+        let pending = InlineSearchProgress()
+        pending.report(32, 64)
+        pending.report(64, 64)
+        pending.report(32, 160)
+        pending.report(96, 160)
+        pending.finish()
+        var delivered: [InlineSearchProgress.Step] = []
+        await pending.deliver { delivered.append(($0, $1)) }
+        check(
+            delivered.map(\.done) == [64, 96] && delivered.map(\.total) == [64, 160],
+            "a busy find bar receives the completed pass before progress in the wrapped range")
         // The find bar's path: the same planner through performInline, with progress.
         var inlineResult: InlineSearchOutcome?
         let ticks = ProgressTicks()
         @MainActor func inline(_ action: String, _ options: SearchOptions) async {
             inlineResult = nil
+            ticks.begin()
             controller.performInline(
                 options: options, action: action, on: editor, cancellation: TTSearchCancellation(),
                 isCurrent: { true }, progress: { done, total in ticks.record(done, total) },
-                completion: { inlineResult = $0 })
+                completion: {
+                    ticks.finish()
+                    inlineResult = $0
+                })
             await waitUntil("the inline search completion") { inlineResult != nil }
         }
         editor.text = text
@@ -708,6 +741,7 @@ final class ProgressTicks: @unchecked Sendable {
         await inline("previous", SearchOptions(query: "NA\u{cf}VE", matchCase: true))
         check(editor.selectedText == "NA\u{cf}VE", "the find bar's Previous works above the limit, with Match case")
         check(ticks.count > 0 && ticks.complete, "the find bar is told real progress for a large search")
+        check(ticks.displayedBeforeCompletion, "DS-51 inline progress reaches the main thread before completion")
         await inline("next", SearchOptions(query: "zebra"))
         if case .noMatch? = inlineResult {
             check(true, "no match above the limit is reported as no match")

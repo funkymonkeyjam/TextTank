@@ -1708,15 +1708,13 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
             // Only a document searched in windows reports progress. The label ends with an
             // ellipsis, so it is shown without being announced step by step (DS-51, DS-72).
             progress: { [weak self] done, total in
-                Task { @MainActor in
-                    guard let self, self.inlineSearchGeneration == token, self.inlineSearchPending, total > 0 else {
-                        return
-                    }
-                    self.findCount.stringValue = "Searching, \(Strings.number(min(100, done * 100 / total)))%…"
-                    // The same real progress in the status row, beside its Cancel button.
-                    if let id = self.inlineOperation {
-                        StatusOperationCenter.shared.update(id, done: done, total: total)
-                    }
+                guard let self, self.inlineSearchGeneration == token, self.inlineSearchPending, total > 0 else {
+                    return
+                }
+                self.findCount.stringValue = "Searching, \(Strings.number(min(100, done * 100 / total)))%…"
+                // The same real progress in the status row, beside its Cancel button.
+                if let id = self.inlineOperation {
+                    StatusOperationCenter.shared.update(id, done: done, total: total)
                 }
             },
             completion: { [weak self, weak editor] result in
