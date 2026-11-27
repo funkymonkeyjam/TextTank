@@ -134,7 +134,9 @@ final class DocumentTabWindow: NSWindow {
         }
         switch event.type {
         case .leftMouseDown:
-            if event.clickCount == 1 { frameClickTimer?.fire() }
+            if event.clickCount == 1, let timer = frameClickTimer, let press = framePress {
+                press.commit(timer, beforeNextDown: event, in: self)
+            }
             cancelFrameClick()
             framePress = FrameTextClick(window: self, down: event)
         case .leftMouseDragged:
@@ -254,6 +256,24 @@ final class DocumentTabWindow: NSWindow {
             selection = .other(generation: editor.selectionGeneration)
         }
         loadEpoch = EditorLifetime.document(for: editor)?.loadEpoch
+    }
+
+    func commit(_ timer: Timer, beforeNextDown event: NSEvent, in window: NSWindow) {
+        // AppKit has already located the next press. Completing the previous click can
+        // scroll Scintilla horizontally to reveal its caret, moving the new press off
+        // its original character. Keep the displayed text in place until dispatch.
+        guard view.window === window, let root = window.contentView, let border = root.superview,
+            let surface = root.hitTest(border.convert(event.locationInWindow, from: nil)),
+            ((surface as? NSClipView)?.documentView ?? surface) === view
+        else {
+            timer.fire()
+            return
+        }
+        let offset = editor.horizontalScrollOffset
+        timer.fire()
+        if view.window === window, editor.horizontalScrollOffset != offset {
+            editor.horizontalScrollOffset = offset
+        }
     }
 
     func placeCaret(in window: NSWindow, up: NSEvent) {

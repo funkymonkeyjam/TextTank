@@ -117,7 +117,7 @@ import NativeSearch
             editor.displayIfNeeded()
         }
         var eventNumber = 0
-        func click(_ location: NSPoint, draggingTo end: NSPoint? = nil, observe: (String) -> Void = { _ in }) throws {
+        func click(_ location: NSPoint, draggingTo end: NSPoint? = nil) throws {
             eventNumber += 1
             func mouse(_ type: NSEvent.EventType, _ point: NSPoint) throws -> NSEvent {
                 try requireValue(
@@ -134,9 +134,7 @@ import NativeSearch
             // the whole gesture first, then dispatch only events AppKit left queued.
             NSApp.postEvent(up, atStart: true)
             if let drag { NSApp.postEvent(drag, atStart: true) }
-            observe("before down")
             NSApp.sendEvent(down)
-            observe("after down")
             let remaining: NSEvent.EventTypeMask = [.leftMouseDragged, .leftMouseUp]
             while let next = NSApp.nextEvent(
                 matching: remaining, until: .distantPast, inMode: .default, dequeue: false),
@@ -144,7 +142,6 @@ import NativeSearch
                 let owned = NSApp.nextEvent(matching: remaining, until: .distantPast, inMode: .default, dequeue: true)
             {
                 NSApp.sendEvent(owned)
-                observe("after queued event")
             }
         }
         func settle() { RunLoop.main.run(until: Date(timeIntervalSinceNow: NSEvent.doubleClickInterval + 0.08)) }
@@ -156,31 +153,33 @@ import NativeSearch
                 && border.hitTest(border.convert(edge, from: nil)) === border,
             "final glyph right half under native resize frame")
         try click(edge)
-        settle()
+        NativeWindowEvents.wait("the deferred stationary frame click is delivered") {
+            editor.selectionCaret == byteAfter
+        }
         check(
             editor.selectionRanges.first?.caret == byteAfter, "stationary frame click places caret after final period")
         prepare()
         let left = point(0.22)
-        func observeLeft(_ phase: String) {
-            let rect = window.convertFromScreen(view.accessibilityFrame(for: glyph))
-            let target = border.hitTest(border.convert(left, from: nil))
-            print(
-                "Left glyph click", phase, "point", left, "glyph", rect, "offset", editor.horizontalScrollOffset,
-                "clip", scroll.contentView.bounds.origin, "hit",
-                target.map { String(describing: type(of: $0)) } ?? "none",
-                "byte", editor.characterByte(atWindowPoint: left, inTextView: view),
-                "caret", editor.selectionCaret, "anchor", editor.selectionAnchor, "scale", window.backingScaleFactor)
-        }
         check(
             editor.characterByte(atWindowPoint: left, inTextView: view) == byteAfter - 1,
             "the left-half click starts on the displayed final period")
-        try click(left, observe: observeLeft)
+        try click(left)
         settle()
-        observeLeft("after settle")
         check(
             editor.selectionRanges.first?.caret == byteAfter - 1,
             "left half places caret before final period: caret \(String(describing: editor.selectionRanges.first?.caret)), anchor \(editor.selectionAnchor), expected \(byteAfter - 1)"
         )
+        // Two distinct single clicks can be delivered together after the main loop was busy.
+        // The second click belongs to the glyph where it was displayed before the first
+        // click's deferred caret scrolling has run.
+        prepare()
+        let secondLeft = point(0.22)
+        try click(point(0.78))
+        try click(secondLeft)
+        settle()
+        check(
+            editor.selectionAnchor == byteAfter - 1 && editor.selectionCaret == byteAfter - 1,
+            "a second single click places the caret on the displayed left half while a frame click is pending")
         prepare()
         let dragOrigin = point(0.78), originalFrame = window.frame
         try click(dragOrigin, draggingTo: NSPoint(x: dragOrigin.x - 32, y: dragOrigin.y))
