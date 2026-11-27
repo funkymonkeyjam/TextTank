@@ -37,7 +37,7 @@ any user-facing string. Cite rules by their id (for example DS-31) in commit mes
 | Id | Decision | Date |
 |---|---|---|
 | DS-D1 | **Tab model: one workspace window that hosts the compact tab strip** (and, later, editor groups). Native `NSWindow` tabbing is rejected: pinned tabs, multi-select, groups and two views of one document cannot be built on it. Stage 0 replaces the hidden document windows with a shared native host; later stages extend its model. | 15 Nov 2026 |
-| DS-D2 | **The window's red close button quits TextTank**, after the usual review of unsaved documents. One tab closes from its own close button, File > Close or Command-W. Amended by DS-D9 (23 Nov 2026): at quit the review covers files with unsaved edits; an untitled document's unsaved text is kept and is not asked about. | 15 Nov 2026 |
+| DS-D2 | **The window's red close button quits TextTank**, after the usual review of unsaved documents. One tab closes from its own close button, File > Close or Command-W. DS-D9 defines which documents have verified recovery at quit and which require review. | 15 Nov 2026 |
 | DS-D3 | **No Close Tab button in the toolbar.** Each tab has its own. | 15 Nov 2026 |
 | DS-D4 | **The menu bar has nine menus, in this order: TextTank, File, Edit, Find, View, Compare, Tools, Window, Help.** File opens, saves and re-encodes documents and holds the workspace files. Edit holds everything that changes the text or the selection. Find holds finding, Go to Line, bookmarks and the Function List. View holds how the document is shown: the Preview submenu, Split Tab View, Wrap Lines, the Show submenu, Centered Text Column, zoom, Folding, Syntax Highlighting, the Workspace Browser, Editor Groups and the toolbar, fourteen items in all (DS-D13). Compare holds starting, reading, merging and exporting a comparison. Tools holds Macros, Automations, Run Commands and the utilities that leave the text as it is. Help holds the guides, the Command Palette and keyword help. TextTank is a close approximation of Notepad++, not a copy of its menu bar: a command sits where a person on a Mac would look first, and the Command Palette still finds it by its former menu. Group inside menus; do not add top-level menus without the owner. This replaces the frozen fourteen-menu order. | 23 Nov 2026 |
 | DS-D5 | **Distribution** (Developer ID signing and notarisation) is undecided. Do not add signing identities, entitlements or release scripts without the owner asking. | open |
@@ -52,27 +52,32 @@ Owner follow-up, 16 November 2026:
 
 Owner follow-up, 17 November 2026:
 
-- DS-D8. Syntax highlighting retains the original Notepad++ lexer style categories. Built-in
+- DS-D8. Syntax highlighting retains the original Notepad++ style categories. The 26 November
+  plan adopts tree-sitter for colouring and code structure in languages with a suitable verified
+  grammar. Its captures map to the existing categories and saved colours. Lexilla remains the
+  fallback for languages without a usable grammar, user-defined languages and very large files. Built-in
   categories use distinguishable light/dark colors, with at least 4.5:1 text/background contrast.
   Explicit user colors remain overrides. Markdown is a selectable language and is detected for
   `.md` and `.markdown` files. Its headings, emphasis, lists, links and code are highlighted.
 
 Owner decision, 23 November 2026:
 
-- DS-D9. **Unsaved untitled text survives quit.** Quitting (Command-Q, the red close button, logout
-  or restart) does not ask about an edited untitled document. Its text is first written to its
-  recovery copy, confirmed on storage and read back; only then may TextTank quit without asking. At
-  the next launch those tabs reopen without a question, in their saved order, group and pin state,
-  with their text, caret and selection, language, encoding and line endings, still untitled and still
-  marked edited, and a status message says how many were restored. Undo history is not kept: a
-  recovery copy holds text only. This applies to untitled documents only. A file with unsaved edits
-  keeps the Save / Don't Save / Cancel review at quit, and closing one untitled tab (its close
-  button, File > Close, Command-W) still asks. A document whose copy cannot be verified, that is
-  larger than 256 MiB, or that falls beyond 256 documents or 512 MiB of kept text in one quit, is
-  reviewed as before: text is never dropped to meet a bound. After a crash the same silent reopening
-  applies to untitled recovery copies; a recovery copy that belongs to a file keeps the Recover
-  question. The stored setting "Keep unsaved untitled documents when quitting" (`keepUntitledOnQuit`,
-  on unless stored off) turns all of this off and restores the earlier behaviour exactly.
+- DS-D9. **Verified unsaved text survives quit.** The 26 November decision extends the
+  23 November untitled-document behaviour to files with unsaved edits. At quit, each eligible
+  document's current text must be written to private recovery storage and read back and verified
+  before quitting without a prompt. On the next launch its tab reopens with the edits still
+  unsaved. Recovery of a file preserves its saved path and leaves its on-disk contents untouched.
+  Tabs retain their saved order, group, pin state, caret, selection, language, encoding and line
+  endings. A status message reports how many were restored. Recovery holds text only, so Undo
+  history ends at quit.
+  Command-Q, the red close button, logout and restart use the quit path. Command-W, File > Close
+  and a tab's close button still review that individual document. A failed verification or a
+  document over 256 MiB requires review. The existing limits are 256 documents and 512 MiB of kept
+  text per quit. Every document outside those limits requires review. Cancel preserves the work.
+  After a crash, untitled recovery reopens silently and a file's recovery copy retains its Recover
+  question. The 23 November implementation honours the existing “Keep unsaved untitled documents
+  when quitting” setting (`keepUntitledOnQuit`, on by default). File-backed recovery at quit is
+  planned for item 19 and must pass storage and restoration checks before it ships.
 
 - DS-D10. **Local history on save.** Each successful Save or Save As of a file keeps a private
   **earlier version**: the bytes just written, and before them the bytes that save replaced when
@@ -145,6 +150,22 @@ Owner decision, 23 November 2026:
   implies nothing about wrapping; a pane narrower than the column, and a comparison, keep the
   ordinary layout.
 
+### Decisions approved on 26 November 2026
+
+These decisions guide the planned sets. The capability matrix and architecture describe the
+implementation in the current release.
+
+- The Workspace Browser keeps its leading sidebar and keyboard behaviour (DS-D11). Open Files
+  sits above a Folders tree with disclosure triangles. Open, Refresh, Add Folder and Remove
+  Folder belong in the context menu. Recent Files remains available in File and Quick Open.
+- A path bar above the text provides Back and Forward through visited places and menus for the
+  file's path and the function at the caret. A View command hides it. Restyle the existing fold
+  markers as chevrons and verify folding quality per language.
+- Git change marks in the margin are enabled explicitly for each workspace folder. The language
+  server client is the final planned enhancement. It uses an already installed server, enabled
+  explicitly for that folder, and shows what is running with a way to stop it. Opening, importing
+  or restoring a file starts no tool and sends no document text.
+
 ## 3. Rules
 
 ### Windows and tabs
@@ -155,8 +176,7 @@ Owner decision, 23 November 2026:
   `NSVisualEffectView`, no transparent title bar, no hand-drawn buttons that imitate system ones.
 - DS-12. Closing one tab, closing the window and quitting are three separately specified behaviours
   (DS-D2). Each keeps the Save / Discard / Cancel review, and Cancel leaves everything as it was.
-  The one exception is DS-D9: at quit an untitled document's unsaved text is kept, after its recovery
-  copy is verified, instead of being reviewed. Closing a single untitled tab still asks.
+  At quit, DS-D9 defines the exception for verified recovery. Closing one edited tab still asks.
 - DS-13. Full screen must work in the workspace window. Native transitions remain system behavior.
 - DS-14. A tab is a tab to assistive technology: tab role, a label of the form "name, edited", an
   in-place update rather than a rebuild, and a close target of at least 28 by 28 points that does not
@@ -184,10 +204,12 @@ Owner decision, 23 November 2026:
 
 ### Toolbar
 
-- DS-30. Toolbar items are standard `NSToolbarItem`s with an SF Symbol and a label, for the actions used
-  most. The toolbar is customisable and remembers its arrangement. An item that offers a short list of
-  choices is a standard menu toolbar item (`NSMenuToolbarItem`); there are two, Automations (DS-D6) and
-  Editor Layout (DS-D12), and the menu bar lists everything either one offers.
+- DS-30. Use a slim, icon-only toolbar integrated with the native title bar. Each standard
+  `NSToolbarItem` retains its SF Symbol, customization label, tooltip and accessible name.
+  The default items are Workspace Browser, Find, Split Tab View, Wrap Lines, Preview, Editor
+  Layout and Automations. New, Open and Save are available in Customize Toolbar. The toolbar
+  remembers the person's arrangement. Automations (DS-D6) and Editor Layout (DS-D12) use
+  standard menu toolbar items (`NSMenuToolbarItem`), with the same commands in the menu bar.
 - DS-31. The toolbar does not repeat a control the tab strip or title bar already provides (DS-D3).
 
 ### Find
@@ -228,8 +250,10 @@ Owner decision, 23 November 2026:
 
 ### Colour, contrast and appearance
 
-- DS-60. Chrome uses semantic `NSColor`s. Editor colours come in light and dark pairs, applied when the
-  appearance changes. No new literal colour in chrome.
+- DS-60. The tab strip, line-number margin, status row and Markdown preview take their colours
+  from the editor palette in light, dark and Increase Contrast. HTML previews keep the system
+  page colour. Native controls use semantic system colours. Apply the palette when appearance
+  changes, honour user colours and meet DS-61 to DS-63. No new literal colour in chrome.
 - DS-61. Text is at least 4.5:1 against its background; marks, indicators and other non-text cues are at
   least 3:1, in light and in dark. Selection uses the system selection colours.
 - DS-62. State is never carried by colour alone or by sound alone. A beep comes with words in the status
@@ -281,8 +305,8 @@ Owner decision, 23 November 2026:
 - DS-92. Reopening should resume the work: unsaved text is kept as a recovery copy, and the same
   documents reopen at the same place. Files reopen from the last session. Untitled documents with
   unsaved text reopen from their recovery copies, without a question, after a quit or a crash
-  (DS-D9); a quiet status message says so (DS-40). A recovery copy that belongs to a file is offered
-  through the Recover question, and the file itself is never changed by recovery.
+  (DS-D9). A quiet status message reports restoration (DS-40). DS-D9 also governs file-backed
+  recovery after quit and the Recover question after a crash. Recovery preserves the on-disk file.
 
 ### Permissions and privacy
 
@@ -374,7 +398,7 @@ budget is a departure and needs the owner's agreement.
 
 These are the remaining actions from the review. Each names the work that owns it.
 
-1. The typed command catalogue, current-key and toggle validation are implemented by audit 25. Precise Undo/Redo action labels remain an explicit DS-27 gap; Scintilla history provenance has not been replaced or guessed. App declarations and typed service/application boundaries are split by audit 29; the product remains one Swift target.
+1. The typed command catalogue, current-key and toggle validation are implemented by audit 25. Precise Undo/Redo action labels remain an explicit DS-27 gap; Scintilla history provenance has not been replaced or guessed. App declarations and typed service/application boundaries are split by audit 29; the generated Xcode project now has six native targets. TextTank builds the app, tt builds the command-line helper, and TextTankCore, TextTankRuntime, EditorBridge and NativeSearch build frameworks.
 2. The workspace-window host, full screen and tab accessibility (DS-D1, DS-13, DS-14): tab stage 0.
 3. Session restore and recovered copies that keep their file (DS-92): tab stage 4 and package 23.
 4. Physical toolbar customization and VoiceOver interaction remain unverified. Standard items, favorites, native accessibility names and isolated configuration round trips have native check coverage (DS-30, DS-70).
