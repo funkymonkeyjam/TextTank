@@ -5,11 +5,31 @@ import AppKit
 import EditorBridge
 import NativeSearch
 
+@MainActor private final class ObservedStatusTitle: NSMenuItem {
+    private(set) var writes = 0
+    override var title: String {
+        didSet { MainActor.assumeIsolated { writes += 1 } }
+    }
+}
+
 enum DesignStatusChecks {
     @MainActor private static func descendants(_ view: NSView) -> [NSView] {
         [view] + view.subviews.flatMap(descendants)
     }
     @MainActor static func run() throws {
+        let typingRow = StatusBadgeRow(frame: .zero)
+        let indentation = StatusItem(field: .indent, text: "Spaces: 4")
+        typingRow.update([StatusItem(field: .position, text: "Ln 1, Col 1"), indentation])
+        let popup = try requireValue(
+            descendants(typingRow).compactMap { $0 as? NSPopUpButton }.first, "typing row indentation")
+        let menu = try requireValue(popup.menu, "typing row indentation menu")
+        let face = ObservedStatusTitle(title: indentation.text, action: nil, keyEquivalent: "")
+        menu.removeItem(at: 0)
+        menu.insertItem(face, at: 0)
+        let priorWrites = face.writes
+        typingRow.update([StatusItem(field: .position, text: "Ln 1, Col 2"), indentation])
+        check(
+            face.writes == priorWrites, "typing updates the position without rewriting the unchanged indentation menu")
         let initialURL = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TEXTTANK_SUPPORT_DIRECTORY"]!)
             .appendingPathComponent("owned-status-initial-" + UUID().uuidString + ".txt")
         try Data("saved input".utf8).write(to: initialURL)

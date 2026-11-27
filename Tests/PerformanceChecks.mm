@@ -30,8 +30,10 @@ static void within(double measured,double budget,NSString *what,const char *unit
  NSString *label=[NSString stringWithFormat:@"%@ stays within its budget",what];
  if(!check(measured<=budget,label.UTF8String)) printf("NOTE %s measured %.6f %s against a budget of %.6f %s\n",what.UTF8String,measured,unit,budget,unit);
 }
+extern "C" int measurementFrameChecks(void);
 int main(int argc,char **argv){@autoreleasepool{
  [NSApplication sharedApplication];
+ check(measurementFrameChecks()==0,"typing credits the first committed post-edit draw in the edited view");
  const bool full=argc>1 && strcmp(argv[1],"full")==0;
  std::vector<int> sizes={1,10};if(full)sizes.push_back(100);
  printf("kind,MiB,load_seconds,find_seconds,replace_seconds,undo_seconds,peak_rss_bytes\n");
