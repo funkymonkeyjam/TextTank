@@ -495,17 +495,23 @@ final class EditorWindowController: NSWindowController, NSToolbarDelegate, NSToo
         // need not cut short feedback from the command the person just performed.
         if preservingTransient && !failed && transientStatus != nil { return }
         transientStatus = nil
-        recoveryStatusFailed = failed
-        if failed, fullStatusText != message { Announce.say(message, from: hostWindow) }
         let doc = document as? TextDocument
         let compact =
             doc?.compactPausedRecoveryStatus
             ?? (doc?.recoveredOrigin == nil ? message : "Recovered copy — Save As to keep")
-        applyStatusMessage(message, compactMessage: failed ? failureSummary : compact)
+        let summary = failed ? failureSummary : compact
+        let severityChanged = recoveryStatusFailed != failed
+        guard
+            severityChanged || fullStatusText != message || compactStatusText != summary || statusLabel.superview == nil
+        else { return }
+        recoveryStatusFailed = failed
+        if failed, fullStatusText != message { Announce.say(message, from: hostWindow) }
         // The failure is carried by the words, the symbol and the heavier weight; the label
         // colour is the primary one in every state (DS-61, DS-62).
-        statusLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: failed ? .semibold : .regular)
-        updateLeadingStatus()
+        if severityChanged {
+            statusLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: failed ? .semibold : .regular)
+        }
+        applyStatusMessage(message, compactMessage: summary)
     }
     /// The follow-up button of the row, and whether it still applies.
     private var statusFollowUp: StatusFollowUp?

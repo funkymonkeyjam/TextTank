@@ -667,40 +667,35 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
             super.layout()
             return
         }
-        var hidden = Set<StatusField>()
-        func requiredWidth(_ text: String) -> CGFloat {
-            let visible = popups.filter { !hidden.contains($0.field) }
-            let textWidth =
-                ceil(
-                    (text as NSString).size(withAttributes: [
-                        .font: label.font ?? NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
-                    ]).width) + 2
-            // The action buttons, the follow-up and a running operation's indicator and Cancel
-            // keep their width; fields collapse and the message shortens to make room for them.
-            let buttons = [diskAction, diskCompare, followUpButton, cancelButton, largeFileButton, recording]
-            let actionWidth =
-                buttons.filter { $0.superview != nil && !$0.isHidden }.reduce(CGFloat(0)) {
-                    $0 + ceil($1.intrinsicContentSize.width) + stack.spacing
-                } + (progressBar.isHidden ? 0 : Self.progressWidth + stack.spacing)
-            // Once a field has left the row the More menu takes its own place in it.
-            let more = hidden.isEmpty ? 0 : overflowWidth + stack.spacing
-            return textWidth + actionWidth + more + visible.reduce(0) { $0 + (widths[$1.field]?.constant ?? 0) }
-                + CGFloat(visible.count + 1) * stack.spacing
-        }
-        func collapse(_ text: String) {
-            hidden = []
-            for field in Self.collapseOrder where requiredWidth(text) > max(0, bounds.width - 8) {
-                if popups.contains(where: { $0.field == field }) { hidden.insert(field) }
+        let spacing = stack.spacing
+        let available = max(0, bounds.width - 8)
+        let buttons = [diskAction, diskCompare, followUpButton, cancelButton, largeFileButton, recording]
+        let actionsWidth =
+            buttons.filter { $0.superview != nil && !$0.isHidden }.reduce(CGFloat.zero) {
+                $0 + ceil($1.intrinsicContentSize.width) + spacing
+            } + (progressBar.isHidden ? 0 : Self.progressWidth + spacing)
+        let fieldsWidth = popups.reduce(spacing) { $0 + (widths[$1.field]?.constant ?? 0) + spacing }
+        let font = label.font ?? NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        func fit(_ text: String) -> (hidden: Set<StatusField>, fits: Bool) {
+            var needed =
+                ceil((text as NSString).size(withAttributes: [.font: font]).width) + 2 + actionsWidth + fieldsWidth
+            var hidden = Set<StatusField>()
+            for field in Self.collapseOrder {
+                guard needed > available else { break }
+                guard let width = widths[field]?.constant else { continue }
+                if hidden.isEmpty { needed += overflowWidth + spacing }
+                hidden.insert(field)
+                needed -= width + spacing
             }
+            return (hidden, needed <= available)
         }
         var text = fullLeadingText
-        collapse(text)
-        if requiredWidth(text) > max(0, bounds.width - 8) {
-            // The full message remains the real native accessibility name and tooltip. Only
-            // path/diagnostic prose yields to the concise essential save/failure state.
+        var fitted = fit(text)
+        if !fitted.fits, text != compactLeadingText {
             text = compactLeadingText
-            collapse(text)
+            fitted = fit(text)
         }
+        let hidden = fitted.hidden
         collapsedFields = Self.collapseOrder.filter { hidden.contains($0) }
         for popup in popups {
             let shouldHide = hidden.contains(popup.field)
