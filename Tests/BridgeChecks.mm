@@ -110,7 +110,7 @@ static void scrollSurfaceChecks() {
     check(NSMinY(viewport) > 0, "strip fixture is scrolled to nonzero document coordinates");
     const auto nativeDraw = reinterpret_cast<void (*)(id, SEL, NSRect)>(
         class_getMethodImplementation(SCIContentView.class, @selector(drawRect:)));
-    for (int scale : {1, 2}) {
+    auto checkScale = [&](int scale, bool flippedCTM) {
         for (CGFloat inset : {0.0, 0.5}) {
             NSRect dirty = NSMakeRect(NSMinX(viewport) + 5 + inset, NSMinY(viewport) + 3 + inset, 190, 47);
             const size_t width = 220 * scale, height = 60 * scale;
@@ -120,8 +120,8 @@ static void scrollSurfaceChecks() {
                 auto &pixels = useStrip ? flattened : direct;
                 CGContextRef ctx = CGBitmapContextCreate(pixels.data(), width, height, 8, width * 4,
                     window.colorSpace.CGColorSpace, kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Host);
-                CGContextTranslateCTM(ctx, 0, height);
-                CGContextScaleCTM(ctx, scale, -scale);
+                if (flippedCTM) CGContextTranslateCTM(ctx, 0, height);
+                CGContextScaleCTM(ctx, scale, flippedCTM ? -scale : scale);
                 CGContextTranslateCTM(ctx, -NSMinX(viewport), -NSMinY(viewport));
                 CGContextClipToRect(ctx, dirty);
                 [NSGraphicsContext saveGraphicsState];
@@ -141,6 +141,10 @@ static void scrollSurfaceChecks() {
                   scale == 1 ? "one-times scroll strip preserves native glyphs, position and dirty clip" :
                                "Retina scroll strip preserves native glyphs, position and dirty clip");
         }
+    };
+    for (int scale : {1, 2}) {
+        checkScale(scale, true);
+        checkScale(scale, false);
     }
 }
 
