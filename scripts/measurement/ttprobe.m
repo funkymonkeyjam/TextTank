@@ -58,6 +58,13 @@ static struct {
     double lastHeartbeat, maxHeartbeatGap;
     double lastObserver;
 } G;
+// Typing waits for a draw of the edited view in the first committed group after its edit.
+static __weak NSView *keyContent;
+static double keyEdit;
+static void beginKeyEdit(double t) {
+    keyEdit = t;
+    G.framePending = NO;
+}
 static FrameHandler gOnFrame;       // called on every committed frame that contained a text-area draw
 static void (^gOnMod)(double t);    // called on SCN_MODIFIED insert/delete
 static void (^gOnSendEvent)(NSEvent *e, double tIn, double tOut);
@@ -81,6 +88,7 @@ static void hookDraw(id self, SEL _cmd, NSRect r) {
     double b = now();
     G.drawCount++; G.lastDrawEnd = b;
     if (G.firstDrawEnd == 0) G.firstDrawEnd = b;
+    if (keyEdit > 0 && (self != keyContent || a < keyEdit)) return;
     if (!G.framePending) {
         G.framePending = YES; G.fDrawStart = a; G.fFirstDrawEnd = b; G.fDrawTime = 0; G.fDrawCalls = 0; G.fView = self;
     }
@@ -91,7 +99,7 @@ static void hookNotify(id self, SEL _cmd, SCNotification *n) {
     unsigned code = n->nmhdr.code;
     if (code == SCN_MODIFIED && (n->modificationType & (SC_MOD_INSERTTEXT | SC_MOD_DELETETEXT))) {
         double t = now(); G.lastMod = t; G.modCount++;
-        if (gOnMod) gOnMod(t);
+        if (gOnMod && [keyContent isDescendantOf:self]) gOnMod(t);
     } else if (code == SCN_UPDATEUI) G.lastUpdateUI = now();
     ((void (*)(id, SEL, SCNotification *))gOrigNotify)(self, _cmd, n);
 }
@@ -322,6 +330,7 @@ static NSString *gTypeText = @"the quick brown fox jumps over the lazy dog ";
 static void typeNext(NSDictionary *s);
 static void typeRecord(NSDictionary *s, NSDictionary *f) {
     K.active = NO;
+    keyEdit = 0;
     double t0 = K.tPost;
     [K.rows addObject:@[N(K.tDeq > 0 ? K.tDeq - t0 : 0), N(K.tMod > 0 ? K.tMod - t0 : 0), N(K.tSendEnd > 0 ? K.tSendEnd - t0 : 0),
                         f ? @([f[@"drawStart"] doubleValue] - t0) : (id)[NSNull null], f ? @([f[@"lastDrawEnd"] doubleValue] - t0) : (id)[NSNull null],
@@ -333,6 +342,7 @@ static void typeRecord(NSDictionary *s, NSDictionary *f) {
 }
 static void typeNext(NSDictionary *s) {
     if (K.i >= K.count) {
+        keyContent = nil; keyEdit = 0;
         gOnMod = nil; gOnFrame = nil; gOnSendEvent = nil; gOnSendIn = nil;
         NSMutableDictionary *d = [@{@"event": @"type", @"label": s[@"label"] ?: @"", @"columns": @[@"dequeue", @"mod", @"sendEventEnd", @"drawStart", @"drawEnd", @"commit", @"drawTime", @"commitSource", @"maxHeartbeatGapPostToDequeue"],
                                     @"rows": K.rows} mutableCopy];
@@ -352,10 +362,11 @@ static void stepType(NSDictionary *s) {
     id sv = sciView(); if (sv && ![gTouched containsObject:sv]) [gTouched addObject:sv];
     NSView *content = activeContent();
     if (mainWin().firstResponder != content) [mainWin() makeFirstResponder:content];
+    keyContent = content;
     K.i = 0; K.count = [s[@"count"] intValue] ?: 200; K.rows = [NSMutableArray array]; K.active = NO;
     gOnSendEvent = ^(NSEvent *e, double a, double b) { if (K.active && e.type == NSEventTypeKeyDown && K.tDeq == 0) { K.tDeq = a; K.tSendEnd = b; } };
     gOnSendIn = ^(NSEvent *e, double a) { if (K.active && e.type == NSEventTypeKeyDown && K.tDeq == 0) K.hbGap = G.maxHeartbeatGap; };
-    gOnMod = ^(double t) { if (K.active && K.tMod == 0) K.tMod = t; };
+    gOnMod = ^(double t) { if (K.active && K.tMod == 0) { K.tMod = t; beginKeyEdit(t); } };
     gOnFrame = ^(NSDictionary *f) { if (K.active && K.tMod > 0 && [f[@"drawStart"] doubleValue] >= K.tMod) typeRecord(s, f); };
     after(0.3, ^{ typeNext(s); });
 }
@@ -463,7 +474,7 @@ static void stepTabSwitch(NSDictionary *s) {
     };
     gOnSendEvent = ^(NSEvent *e, double a, double b) { if (active && e.type == NSEventTypeKeyDown && tSwitch == 0) tSwitch = b; };
     one = ^{
-        if (i >= count) { gOnFrame = nil; gOnSendEvent = nil; emit(@{@"event": @"tabswitch", @"label": s[@"label"] ?: @"", @"columns": @[@"keyHandled", @"commit", @"drawTime", @"lengthAfter"], @"rows": rows}); nextStep(); return; }
+        if (i >= count) { one = nil; gOnFrame = nil; gOnSendEvent = nil; emit(@{@"event": @"tabswitch", @"label": s[@"label"] ?: @"", @"columns": @[@"keyHandled", @"commit", @"drawTime", @"lengthAfter"], @"rows": rows}); nextStep(); return; }
         prev = activeContent(); tSwitch = tCommit = 0; active = YES; tPost = now();
         postKey('\t', NSEventModifierFlagControl);
         waitUntil(^BOOL { return tCommit > 0; }, 5, ^(BOOL ok) {
@@ -477,21 +488,22 @@ static void stepTabSwitch(NSDictionary *s) {
 }
 // ---- listen_keys: passively time key events that arrive from OUTSIDE (CGEventPostToPid through the window server)
 static void listenInView(NSDictionary *s, NSView *content) {
+    keyContent = content;
     int count = [s[@"count"] intValue] ?: 200; NSMutableArray *rows = [NSMutableArray array];
     __block BOOL have = NO, finished = NO; __block double ts = 0, tIn = 0, tMod = 0, tEnd = 0;
     id sv = sciView(); if (sv && ![gTouched containsObject:sv]) [gTouched addObject:sv];
     void (^finish)(NSString *) = ^(NSString *why) {
-        if (finished) return; finished = YES; gOnSendIn = nil; gOnSendEvent = nil; gOnMod = nil; gOnFrame = nil;
+        if (finished) return; finished = YES; keyEdit = 0; keyContent = nil; gOnSendIn = nil; gOnSendEvent = nil; gOnMod = nil; gOnFrame = nil;
         NSMutableDictionary *d = [@{@"event": @"listen", @"label": s[@"label"] ?: @"", @"ended": why,
                                     @"columns": @[@"eventTimestamp", @"sendEventIn", @"mod", @"sendEventEnd", @"drawStart", @"drawEnd", @"commit", @"drawTime"], @"rows": rows} mutableCopy];
         [d addEntriesFromDictionary:editorInfo()]; emit(d); nextStep();
     };
     gOnSendIn = ^(NSEvent *e, double t) { if (e.type == NSEventTypeKeyDown) { ts = e.timestamp; tIn = t; tMod = tEnd = 0; have = YES; } };
     gOnSendEvent = ^(NSEvent *e, double a, double b) { if (have && e.type == NSEventTypeKeyDown) tEnd = b; };
-    gOnMod = ^(double t) { if (have && tMod == 0) tMod = t; };
+    gOnMod = ^(double t) { if (have && tMod == 0) { tMod = t; beginKeyEdit(t); } };
     gOnFrame = ^(NSDictionary *f) {
         if (!have || tMod == 0 || [f[@"drawStart"] doubleValue] < tMod) return;
-        [rows addObject:@[@(ts), @(tIn), @(tMod), @(tEnd), f[@"drawStart"], f[@"lastDrawEnd"], f[@"commit"], f[@"drawTime"]]]; have = NO;
+        [rows addObject:@[@(ts), @(tIn), @(tMod), @(tEnd), f[@"drawStart"], f[@"lastDrawEnd"], f[@"commit"], f[@"drawTime"]]]; have = NO; keyEdit = 0;
         if ((int)rows.count >= count) finish(@"count");
     };
     emit(@{@"event": @"listening", @"label": s[@"label"] ?: @"", @"pid": @(getpid()), @"t": @(now())});

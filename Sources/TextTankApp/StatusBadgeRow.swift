@@ -519,6 +519,7 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
     func setLeadingStatus(_ label: NSTextField, fullText: String, compactText: String) {
+        guard leadingLabel !== label || fullLeadingText != fullText || compactLeadingText != compactText else { return }
         if leadingLabel !== label {
             leadingLabel?.removeFromSuperview()
             leadingLabel = label
@@ -536,15 +537,18 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
     func update(_ items: [StatusItem]) {
         let shown = items.filter { Self.rowFields.contains($0.field) }
         guard shown != values else { return }
+        let previous = values
+        let sameFields = shown.elementsEqual(previous) { $0.field == $1.field }
         values = shown
         let prior = Dictionary(uniqueKeysWithValues: popups.map { ($0.field, $0) })
         var occurrences: [String: Int] = [:]
-        popups = shown.map { item in
+        popups = shown.enumerated().map { index, item in
+            if sameFields, previous[index] == item { return popups[index] }
             let control: any StatusFieldControl = prior[item.field] ?? makeControl(item.field)
             control.shownText = item.text
             let group = item.field.identityGroup, number = occurrences[group, default: 0]
             occurrences[group] = number + 1
-            control.identifier = NSUserInterfaceItemIdentifier("status.\(group).\(number)")
+            if !sameFields { control.identifier = NSUserInterfaceItemIdentifier("status.\(group).\(number)") }
             let description = String(
                 format: Strings.text("status.fieldValue", "%@: %@"), item.field.displayName, item.text)
             // DS-70: the name says what the field shows and what activating it does.
@@ -584,11 +588,13 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
         }
         // Keep a stable visual order even when selection controls appear between existing fields.
         // The More menu stays at the trailing edge.
-        for control in popups { stack.removeArrangedSubview(control) }
-        for control in popups { stack.addArrangedSubview(control) }
-        if overflow.superview != nil {
-            stack.removeArrangedSubview(overflow)
-            stack.addArrangedSubview(overflow)
+        if !sameFields {
+            for control in popups { stack.removeArrangedSubview(control) }
+            for control in popups { stack.addArrangedSubview(control) }
+            if overflow.superview != nil {
+                stack.removeArrangedSubview(overflow)
+                stack.addArrangedSubview(overflow)
+            }
         }
         needsLayout = true
     }

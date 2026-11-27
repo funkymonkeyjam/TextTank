@@ -153,3 +153,8 @@ Choose **TextTank → Install tt Command-Line Tool…** and select a directory y
 - `tt -- -leading-dash.txt` opens a filename beginning with a dash.
 
 The app and tool must run in the same macOS login session. The tool reports open, decode and comparison errors on standard error and exits unsuccessfully. Closing a different document leaves a waiting invocation active.
+
+
+### Release typing measurements
+
+The isolated responsiveness harness compiles `scripts/measurement/ttprobe.m` as a measurement-only library and loads it into a private Release instance with synthetic documents. Its typing and external-key fixtures end each key measurement at the first run-loop commit marker containing a draw of the edited text view that **began after the edit notification**. A group of draws can span the edit. Its earlier draws do not disqualify the group's later redraw of the edited view. The reported time excludes display scanout. Keep raw results, record the probe revision and leave a measurement instance open if normal Quit is blocked.
