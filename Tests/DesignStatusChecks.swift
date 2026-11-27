@@ -19,7 +19,7 @@ enum DesignStatusChecks {
         [view] + view.subviews.flatMap(descendants)
     }
     @MainActor static func run() throws {
-        let typingRow = StatusBadgeRow(frame: .zero)
+        let typingRow = StatusBadgeRow(frame: NSRect(x: 0, y: 0, width: 800, height: StatusBadgeRow.height))
         let indentation = StatusItem(field: .indent, text: "Spaces: 4")
         typingRow.update([StatusItem(field: .position, text: "Ln 1, Col 1"), indentation])
         let popup = try requireValue(
@@ -43,7 +43,8 @@ enum DesignStatusChecks {
         typingRow.update([movedPosition, indentation])
         let moveWrites = titleWrites.withLock { $0 }
         let detail = "3 characters"
-        typingRow.needsLayout = false
+        typingRow.layoutSubtreeIfNeeded()
+        check(!typingRow.needsLayout, "position row finished its initial native layout")
         typingRow.update([StatusItem(field: .position, text: movedPosition.text, detail: detail), indentation])
         check(
             moveWrites > 0 && titleWrites.withLock { $0 } == moveWrites && !typingRow.needsLayout,
