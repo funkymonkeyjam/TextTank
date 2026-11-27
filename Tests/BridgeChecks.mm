@@ -74,6 +74,57 @@ static void gutterScrollingChecks() {
     check(scrollTo(40) && !filler.needsDisplay, "subsequent scrolling with no filler avoids a second ruler repaint");
 }
 
+@interface SCIContentView (ScrollSurfaceChecks)
+- (BOOL)drawScrollRect:(NSRect)rect inContext:(CGContextRef)destination;
+@end
+
+static void scrollSurfaceChecks() {
+    TTEditor *editor = [[TTEditor alloc] initWithFrame:NSMakeRect(0, 0, 480, 240)];
+    NSWindow *window = [[NSWindow alloc] initWithContentRect:editor.frame styleMask:NSWindowStyleMaskBorderless
+        backing:NSBackingStoreBuffered defer:NO];
+    window.colorSpace = NSColorSpace.sRGBColorSpace;
+    window.contentView = editor;
+    editor.text = [@"" stringByPaddingToLength:8000 withString:@"Ab é中 gamma 0123456789\n" startingAtIndex:0];
+    [editor layoutSubtreeIfNeeded];
+    ScintillaView *engine = (ScintillaView *)editor.subviews.firstObject;
+    [engine message:SCI_SETFIRSTVISIBLELINE wParam:10];
+    SCIContentView *content = engine.content;
+    const BOOL supported = [content respondsToSelector:@selector(drawScrollRect:inContext:)];
+    check(supported, "scrolling can flatten an exposed strip before the backing layer presents the viewport");
+    if (!supported) return;
+    NSRect viewport = engine.scrollView.contentView.bounds;
+    NSRect dirty = NSMakeRect(NSMinX(viewport) + 5.5, NSMinY(viewport) + 3.5, 190, 47);
+    check(NSMinY(viewport) > 0, "strip fixture is scrolled to nonzero document coordinates");
+    for (int scale : {1, 2}) {
+        const size_t width = 220 * scale, height = 60 * scale;
+        std::vector<uint8_t> direct(width * height * 4), flattened(direct.size());
+        bool rendered = false;
+        for (bool useStrip : {false, true}) {
+            auto &pixels = useStrip ? flattened : direct;
+            CGContextRef ctx = CGBitmapContextCreate(pixels.data(), width, height, 8, width * 4,
+                window.colorSpace.CGColorSpace, kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Host);
+            CGContextTranslateCTM(ctx, 0, height);
+            CGContextScaleCTM(ctx, scale, -scale);
+            CGContextTranslateCTM(ctx, -NSMinX(viewport), -NSMinY(viewport));
+            CGContextClipToRect(ctx, dirty);
+            [NSGraphicsContext saveGraphicsState];
+            NSGraphicsContext.currentContext = [NSGraphicsContext graphicsContextWithCGContext:ctx flipped:YES];
+            if (useStrip) rendered = [content drawScrollRect:dirty inContext:ctx];
+            else [content drawRect:dirty];
+            [NSGraphicsContext restoreGraphicsState];
+            CGContextRelease(ctx);
+        }
+        size_t different = 0, dark = 0, light = 0;
+        for (size_t i = 0; i < direct.size(); i += 4) {
+            if (direct[i+3] == 255) { dark += direct[i] < 100; light += direct[i] > 200; }
+            if (memcmp(&direct[i], &flattened[i], 4) != 0) ++different;
+        }
+        check(rendered && dark > 0 && light > 0 && different == 0,
+              scale == 1 ? "one-times scroll strip preserves native glyphs, position and dirty clip" :
+                           "Retina scroll strip preserves native glyphs, position and dirty clip");
+    }
+}
+
 static void bulkLoaderStyleChecks() {
     NSString *source = @"int main() {\n  return 42; // café\n}\n";
     NSData *bytes = [source dataUsingEncoding:NSUTF8StringEncoding];
@@ -756,6 +807,7 @@ int main(int argc, char **argv) {
         ttchecks::section("Current line and indentation guides", currentLineAndGuideChecks);
         ttchecks::section("Base font metrics", baseFontMetricsChecks);
         ttchecks::section("Scroll gutter repaint", gutterScrollingChecks);
+        ttchecks::section("Scroll surface pixels", scrollSurfaceChecks);
         ttchecks::section("Live brace feedback", braceHighlightChecks);
         ttchecks::section("D1 comparison drop and gutter isolation", [&] {
             TTEditor *renderer=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,400,240)];
