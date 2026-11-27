@@ -117,7 +117,7 @@ import NativeSearch
             editor.displayIfNeeded()
         }
         var eventNumber = 0
-        func click(_ location: NSPoint, draggingTo end: NSPoint? = nil) throws {
+        func click(_ location: NSPoint, draggingTo end: NSPoint? = nil, observe: (String) -> Void = { _ in }) throws {
             eventNumber += 1
             func mouse(_ type: NSEvent.EventType, _ point: NSPoint) throws -> NSEvent {
                 try requireValue(
@@ -134,7 +134,9 @@ import NativeSearch
             // the whole gesture first, then dispatch only events AppKit left queued.
             NSApp.postEvent(up, atStart: true)
             if let drag { NSApp.postEvent(drag, atStart: true) }
+            observe("before down")
             NSApp.sendEvent(down)
+            observe("after down")
             let remaining: NSEvent.EventTypeMask = [.leftMouseDragged, .leftMouseUp]
             while let next = NSApp.nextEvent(
                 matching: remaining, until: .distantPast, inMode: .default, dequeue: false),
@@ -142,6 +144,7 @@ import NativeSearch
                 let owned = NSApp.nextEvent(matching: remaining, until: .distantPast, inMode: .default, dequeue: true)
             {
                 NSApp.sendEvent(owned)
+                observe("after queued event")
             }
         }
         func settle() { RunLoop.main.run(until: Date(timeIntervalSinceNow: NSEvent.doubleClickInterval + 0.08)) }
@@ -158,8 +161,22 @@ import NativeSearch
             editor.selectionRanges.first?.caret == byteAfter, "stationary frame click places caret after final period")
         prepare()
         let left = point(0.22)
-        try click(left)
+        func observeLeft(_ phase: String) {
+            let rect = window.convertFromScreen(view.accessibilityFrame(for: glyph))
+            let target = border.hitTest(border.convert(left, from: nil))
+            print(
+                "Left glyph click", phase, "point", left, "glyph", rect, "offset", editor.horizontalScrollOffset,
+                "clip", scroll.contentView.bounds.origin, "hit",
+                target.map { String(describing: type(of: $0)) } ?? "none",
+                "byte", editor.characterByte(atWindowPoint: left, inTextView: view),
+                "caret", editor.selectionCaret, "anchor", editor.selectionAnchor, "scale", window.backingScaleFactor)
+        }
+        check(
+            editor.characterByte(atWindowPoint: left, inTextView: view) == byteAfter - 1,
+            "the left-half click starts on the displayed final period")
+        try click(left, observe: observeLeft)
         settle()
+        observeLeft("after settle")
         check(
             editor.selectionRanges.first?.caret == byteAfter - 1,
             "left half places caret before final period: caret \(String(describing: editor.selectionRanges.first?.caret)), anchor \(editor.selectionAnchor), expected \(byteAfter - 1)"
