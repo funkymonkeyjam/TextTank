@@ -32,6 +32,24 @@ enum DesignStatusChecks {
         typingRow.update([StatusItem(field: .position, text: "Ln 1, Col 2"), indentation])
         check(
             face.writes == priorWrites, "typing updates the position without rewriting the unchanged indentation menu")
+        let positionButton = try requireValue(
+            descendants(typingRow).compactMap { $0 as? NSButton }.first { $0.identifier?.rawValue == "status.position.0" },
+            "typing row position button")
+        let titleWrites = OSAllocatedUnfairLock(initialState: 0)
+        let observation = positionButton.observe(\.attributedTitle) { _, _ in titleWrites.withLock { $0 += 1 } }
+        let movedPosition = StatusItem(field: .position, text: "Ln 1, Col 3")
+        typingRow.update([movedPosition, indentation])
+        let moveWrites = titleWrites.withLock { $0 }
+        let detail = "3 characters"
+        typingRow.needsLayout = false
+        typingRow.update([StatusItem(field: .position, text: movedPosition.text, detail: detail), indentation])
+        check(
+            moveWrites > 0 && titleWrites.withLock { $0 } == moveWrites && !typingRow.needsLayout,
+            "a statistics-only update preserves the position title and row layout")
+        check(
+            positionButton.toolTip?.contains(detail) == true && positionButton.cell?.accessibilityHelp()?.contains(detail) == true,
+            "the new statistics still reach the tooltip and accessibility help")
+        observation.invalidate()
         let initialURL = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TEXTTANK_SUPPORT_DIRECTORY"]!)
             .appendingPathComponent("owned-status-initial-" + UUID().uuidString + ".txt")
         try Data("saved input".utf8).write(to: initialURL)
