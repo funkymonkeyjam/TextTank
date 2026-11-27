@@ -1,14 +1,16 @@
 @testable import TextTankCore
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
+import os
 @testable import TextTankRuntime
 import EditorBridge
 import NativeSearch
 
 @MainActor private final class ObservedStatusTitle: NSMenuItem {
-    private(set) var writes = 0
+    private nonisolated let count = OSAllocatedUnfairLock(initialState: 0)
+    var writes: Int { count.withLock { $0 } }
     override var title: String {
-        didSet { MainActor.assumeIsolated { writes += 1 } }
+        didSet { count.withLock { $0 += 1 } }
     }
 }
 
