@@ -218,8 +218,16 @@ static char TTPairCloser(NSString *text) {
 // The image is transient. Scintilla still draws the glyphs, selection and caret.
 - (BOOL)drawScrollRect:(NSRect)rect inContext:(CGContextRef)destination {
     if (!destination) return NO;
-    const CGAffineTransform transform = CGContextGetCTM(destination);
-    if (transform.a <= 0 || transform.d >= 0 || transform.b != 0 || transform.c != 0) return NO;
+    // Use the device scale, including AppKit's recording-context base transform.
+    // Match the destination CTM's vertical orientation for identical glyph rasterization.
+    CGAffineTransform transform = CGContextGetUserSpaceToDeviceSpaceTransform(destination);
+    const CGAffineTransform drawing = CGContextGetCTM(destination);
+    if (transform.a <= 0 || transform.d == 0 || transform.b != 0 || transform.c != 0 ||
+        drawing.a <= 0 || drawing.d == 0 || drawing.b != 0 || drawing.c != 0) return NO;
+    if (std::signbit(transform.d) != std::signbit(drawing.d)) {
+        transform.d = -transform.d;
+        transform.ty = -transform.ty;
+    }
     const CGRect pixels = CGRectApplyAffineTransform(rect, transform);
     // Compositing a fractional boundary twice changes its antialiasing coverage.
     if (!CGRectEqualToRect(pixels, CGRectIntegral(pixels))) return NO;
@@ -229,7 +237,7 @@ static char TTPairCloser(NSString *text) {
     CGColorSpaceRef color = self.window.colorSpace.CGColorSpace;
     if (!color || CGColorSpaceGetModel(color) != kCGColorSpaceModelRGB) return NO;
     CGContextRef bitmap = CGBitmapContextCreate(nullptr, (size_t)pixels.size.width, (size_t)pixels.size.height,
-        8, 0, color, kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Host);
+        8, 4 * (size_t)pixels.size.width, color, kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Host);
     if (!bitmap) return NO;
     CGAffineTransform local = transform;
     local.tx -= pixels.origin.x;
