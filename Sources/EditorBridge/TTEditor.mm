@@ -1228,8 +1228,12 @@ static constexpr int TTNamedHistoryBase = 0x54540000;
 /// font) or the margin width.
 - (void)invalidateLineNumbersIfChanged {
     const sptr_t count = [_engine message:SCI_GETLINECOUNT];
-    const TTLineNumberState state = {count, (sptr_t)[_engine message:SCI_VISIBLEFROMDOCLINE wParam:count], (sptr_t)[_engine message:SCI_GETFIRSTVISIBLELINE],
+    TTLineNumberState state = {count, (sptr_t)[_engine message:SCI_VISIBLEFROMDOCLINE wParam:count], (sptr_t)[_engine message:SCI_GETFIRSTVISIBLELINE],
         (sptr_t)[_engine message:SCI_TEXTHEIGHT wParam:0], (sptr_t)[_engine message:SCI_GETMARGINWIDTHN wParam:0]};
+    // All positions above the first filler row display the same empty overlay.
+    // Keep that state distinct so entering or leaving the filler still redraws it.
+    const CGFloat fillerY = (state.rows - state.top) * (CGFloat)state.rowHeight;
+    if (state.margin <= 0 || state.rowHeight <= 0 || fillerY >= NSHeight(_emptyLineNumbers.bounds)) state = {};
     if (memcmp(&state, &_lineNumberState, sizeof(state)) == 0) return;
     _lineNumberState = state;
     _emptyLineNumbers.needsDisplay = YES;
