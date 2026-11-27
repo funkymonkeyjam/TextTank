@@ -51,6 +51,15 @@
 - (void)invalidateLineNumbersIfChanged;
 @end
 
+@interface TTDisplayRequestObserver : NSObject
+@property(nonatomic) NSUInteger requests;
+@end
+@implementation TTDisplayRequestObserver
+- (void)observeValueForKeyPath:(NSString *)path ofObject:(id)object change:(NSDictionary *)change context:(void *)context {
+    ++_requests;
+}
+@end
+
 static void gutterScrollingChecks() {
     TTEditor *editor = [[TTEditor alloc] initWithFrame:NSMakeRect(0, 0, 480, 240)];
     NSWindow *window = [[NSWindow alloc] initWithContentRect:editor.frame styleMask:NSWindowStyleMaskBorderless
@@ -61,17 +70,20 @@ static void gutterScrollingChecks() {
     ScintillaView *engine = (ScintillaView *)editor.subviews.firstObject;
     NSView *filler = [editor valueForKey:@"emptyLineNumbers"];
     [engine message:SCI_SETENDATLASTLINE wParam:0];
+    TTDisplayRequestObserver *observer = [TTDisplayRequestObserver new];
+    [filler addObserver:observer forKeyPath:@"needsDisplay" options:0 context:nullptr];
     auto scrollTo = [&](NSInteger top) {
-        filler.needsDisplay = NO;
+        observer.requests = 0;
         [engine message:SCI_SETFIRSTVISIBLELINE wParam:top];
         [editor invalidateLineNumbersIfChanged];
         return [engine message:SCI_GETFIRSTVISIBLELINE] == top;
     };
     check(scrollTo(0) && NSHeight(filler.bounds) > 0, "scroll fixture has a visible ruler at the start of a long document");
-    check(scrollTo(20) && !filler.needsDisplay, "scrolling inside the document leaves the blank number extension clean");
-    check(scrollTo(199) && filler.needsDisplay, "scrolling into the final rows repaints the newly visible filler numbers");
-    check(scrollTo(20) && filler.needsDisplay, "scrolling away from the end clears the old filler numbers");
-    check(scrollTo(40) && !filler.needsDisplay, "subsequent scrolling with no filler avoids a second ruler repaint");
+    check(scrollTo(20) && observer.requests == 0, "scrolling inside the document leaves the blank number extension clean");
+    check(scrollTo(199) && observer.requests > 0, "scrolling into the final rows repaints the newly visible filler numbers");
+    check(scrollTo(20) && observer.requests > 0, "scrolling away from the end clears the old filler numbers");
+    check(scrollTo(40) && observer.requests == 0, "subsequent scrolling with no filler avoids a second ruler repaint");
+    [filler removeObserver:observer forKeyPath:@"needsDisplay"];
 }
 
 @interface SCIContentView (ScrollSurfaceChecks)
