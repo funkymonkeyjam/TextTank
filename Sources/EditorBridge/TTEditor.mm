@@ -210,7 +210,53 @@ static char TTPairCloser(NSString *text) {
 @property(nonatomic, weak) TTEditor *editor;
 @property(nonatomic, copy) NSString *directPairKey;
 @end
-@implementation TTContentView
+@implementation TTContentView {
+    NSRect _lastDrawnViewport;
+}
+// A scrolling clip view can replay the text drawing commands for every line in the
+// viewport. Give it a scale-matched image of just the newly painted strip instead.
+// The image is transient. Scintilla still draws the glyphs, selection and caret.
+- (BOOL)drawScrollRect:(NSRect)rect inContext:(CGContextRef)destination {
+    const CGAffineTransform transform = CGContextGetUserSpaceToDeviceSpaceTransform(destination);
+    if (transform.a <= 0 || transform.d >= 0 || transform.b != 0 || transform.c != 0) return NO;
+    const CGRect pixels = CGRectIntegral(CGContextConvertRectToDeviceSpace(destination, rect));
+    const CGFloat area = pixels.size.width * pixels.size.height;
+    // At most 4 MiB of pixels, independent of document length and display size.
+    if (!std::isfinite(area) || area < 1 || area > 1024 * 1024) return NO;
+    CGColorSpaceRef color = self.window.colorSpace.CGColorSpace;
+    if (!color || CGColorSpaceGetModel(color) != kCGColorSpaceModelRGB) return NO;
+    CGContextRef bitmap = CGBitmapContextCreate(nullptr, (size_t)pixels.size.width, (size_t)pixels.size.height,
+        8, 0, color, kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Host);
+    if (!bitmap) return NO;
+    CGAffineTransform local = transform;
+    local.tx -= pixels.origin.x;
+    local.ty -= pixels.origin.y;
+    CGContextConcatCTM(bitmap, local);
+    [NSGraphicsContext saveGraphicsState];
+    NSGraphicsContext.currentContext = [NSGraphicsContext graphicsContextWithCGContext:bitmap flipped:self.flipped];
+    [super drawRect:rect];
+    [NSGraphicsContext restoreGraphicsState];
+    CGImageRef image = CGBitmapContextCreateImage(bitmap);
+    CGContextRelease(bitmap);
+    if (!image) return NO;
+    CGContextSaveGState(destination);
+    CGContextConcatCTM(destination, CGAffineTransformInvert(transform));
+    CGContextDrawImage(destination, pixels, image);
+    CGContextRestoreGState(destination);
+    CGImageRelease(image);
+    return YES;
+}
+
+- (void)drawRect:(NSRect)dirtyRect {
+    const NSRect visible = self.visibleRect;
+    const BOOL scrolled = !NSIsEmptyRect(_lastDrawnViewport) && NSEqualSizes(visible.size, _lastDrawnViewport.size) &&
+        !NSEqualPoints(visible.origin, _lastDrawnViewport.origin);
+    _lastDrawnViewport = visible;
+    if (scrolled && !NSPrintOperation.currentOperation && !NSIsEmptyRect(dirtyRect) &&
+        !NSContainsRect(dirtyRect, visible) && [self drawScrollRect:dirtyRect inContext:NSGraphicsContext.currentContext.CGContext]) return;
+    [super drawRect:dirtyRect];
+}
+
 - (void)keyDown:(NSEvent *)event {
     TTEditor *editor = self.editor;
     if (!editor) { [self dispatchNativeKey:event]; return; }
