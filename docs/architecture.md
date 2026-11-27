@@ -582,7 +582,7 @@ actor-owned result before stopping the nested modal loop in that same turn.
 The workspace uses `.none` document transition animation (DS-D7). New, Open, switching and Close mount retained presentations inside the same window, with no sibling ordering or frame copying. One host frame is tracked. Full screen uses native transitions; physical keyboard, VoiceOver and full-screen interaction require separate observations. Explicit document lifecycle notifications keep the workspace browser independent of native-window creation and closing.
 
 
-A stationary single click over text inside the native resize edge waits for the system double-click interval. A following keyboard command first commits the click. If another single press arrives over the same text view, the workspace commits the earlier click and preserves the horizontal offset at which the new press arrived. Scintilla then handles the new selection at its displayed position. Native resize drags and double-clicks retain priority (DS-D1, DS-10, DS-11, DS-13).
+A stationary single click over text inside the native resize edge waits for the system double-click interval. A following keyboard command first commits the click. If another single press arrives over the same text view, the workspace commits the earlier click and preserves the horizontal offset at which the new press arrived. Scintilla then handles the new selection at its displayed position. The content view records the window, timestamp and event number for the down and up independently. When AppKit also forwards a frame gesture that the workspace completed, each phase reaches Scintilla once. Native resize drags and double-clicks retain priority (DS-D1, DS-10, DS-11, DS-13).
 
 ### Stage 1 tab commands
 

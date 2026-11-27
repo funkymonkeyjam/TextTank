@@ -284,8 +284,7 @@ final class DocumentTabWindow: NSWindow {
             current.selection == selection,
             window.makeFirstResponder(view)
         else { return }
-        view.mouseDown(with: down)
-        view.mouseUp(with: up)
+        editor.completeFrameClick(down: down, up: up, in: view)
     }
 }
 
