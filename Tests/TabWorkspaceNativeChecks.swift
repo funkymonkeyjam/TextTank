@@ -178,7 +178,7 @@ import NativeSearch
         prepare()
         let secondLeft = point(0.22)
         let earlier = try click(point(0.78))
-        try click(secondLeft)
+        let later = try click(secondLeft)
         settle()
         check(
             editor.selectionAnchor == byteAfter - 1 && editor.selectionCaret == byteAfter - 1,
@@ -193,6 +193,13 @@ import NativeSearch
             editor.selectionAnchor == 2 && editor.selectionCaret == 2
                 && editor.horizontalScrollOffset == beforeDuplicate,
             "delayed native delivery of a completed frame gesture preserves a newer selection and scroll position")
+        // The later click reached the native view first. A fallback for the same pair
+        // must also leave the newer selection alone in this delivery order.
+        editor.completeFrameClick(down: later.down, up: later.up, in: view)
+        check(
+            editor.selectionAnchor == 2 && editor.selectionCaret == 2
+                && editor.horizontalScrollOffset == beforeDuplicate,
+            "frame fallback after native delivery preserves the newer selection and scroll position")
         prepare()
         let dragOrigin = point(0.78), originalFrame = window.frame
         try click(dragOrigin, draggingTo: NSPoint(x: dragOrigin.x - 32, y: dragOrigin.y))
