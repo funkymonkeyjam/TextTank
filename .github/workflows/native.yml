@@ -38,8 +38,7 @@ jobs:
           test "$(uname -m)" = arm64
           test "$(xcodebuild -version | head -n 1)" = "Xcode $XCODE_VERSION"
       # swift-format output differs between toolchain versions.
-      - name: Lint Swift layout (advisory)
-        continue-on-error: true
+      - name: Lint Swift layout
         run: scripts/swift-format.sh lint
       - name: Verify generated project is current
         run: |

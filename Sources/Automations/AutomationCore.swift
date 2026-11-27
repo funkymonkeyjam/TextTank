@@ -174,7 +174,9 @@ package struct AutomationDefinition: Codable, Equatable, Identifiable, Sendable 
         try validate(requiringValues: true)
         try control?.checkCancellation()
         guard input.utf8.count <= Self.maximumTransformBytes else {
-            throw AutomationError.invalid("Automation input exceeds \(SizePolicy.describe(SizePolicy.standard.automationText)). Use a smaller document or selection.")
+            throw AutomationError.invalid(
+                "Automation input exceeds \(SizePolicy.describe(SizePolicy.standard.automationText)). Use a smaller document or selection."
+            )
         }
         var result = input
         var regexTimeRemaining = Self.regexBudget
@@ -272,7 +274,8 @@ package struct AutomationDefinition: Codable, Equatable, Identifiable, Sendable 
                 query: step.find ?? "", replacement: step.replacement ?? "", mode: .regularExpression, matchCase: true)
             let token = control?.cancellation ?? TTSearchCancellation()
             let started = ProcessInfo.processInfo.systemUptime
-            let found = try SearchCore.search(input, options: options, cancellation: token, timeLimit: regexTimeRemaining)
+            let found = try SearchCore.search(
+                input, options: options, cancellation: token, timeLimit: regexTimeRemaining)
             regexTimeRemaining -= ProcessInfo.processInfo.systemUptime - started
             try control?.checkCancellation()
             guard regexTimeRemaining >= 0 else {
@@ -369,7 +372,9 @@ package struct AutomationDefinition: Codable, Equatable, Identifiable, Sendable 
             result = body.joined(separator: parts.eol) + (parts.trailing && !body.isEmpty ? parts.eol : "")
         }
         guard result.utf8.count <= maximumTransformBytes else {
-            throw AutomationError.invalid("Automation result exceeds \(SizePolicy.describe(SizePolicy.standard.automationText)). Use a smaller input or shorten the replacement.")
+            throw AutomationError.invalid(
+                "Automation result exceeds \(SizePolicy.describe(SizePolicy.standard.automationText)). Use a smaller input or shorten the replacement."
+            )
         }
         return result
     }
@@ -383,7 +388,9 @@ package struct AutomationDefinition: Codable, Equatable, Identifiable, Sendable 
             try control?.checkCancellation()
             let count = part.utf8.count
             guard count <= maximumTransformBytes - bytes else {
-                throw AutomationError.invalid("Automation result exceeds \(SizePolicy.describe(SizePolicy.standard.automationText)). Use a smaller input or shorten the replacement.")
+                throw AutomationError.invalid(
+                    "Automation result exceeds \(SizePolicy.describe(SizePolicy.standard.automationText)). Use a smaller input or shorten the replacement."
+                )
             }
             bytes += count
             output.append(contentsOf: part)
@@ -403,7 +410,10 @@ package struct AutomationDefinition: Codable, Equatable, Identifiable, Sendable 
     /// Draft-only test harness: never resolves inputs/parameters or invokes an output.
     package func testSample(_ input: String, control: AutomationRunControl? = nil) throws -> String {
         try validate(requiringValues: true)
-        guard input.utf8.count <= SizePolicy.standard.automationStepPreviewSample else { throw AutomationError.invalid("Use a sample of at most \(SizePolicy.describe(SizePolicy.standard.automationStepPreviewSample)).") }
+        guard input.utf8.count <= SizePolicy.standard.automationStepPreviewSample else {
+            throw AutomationError.invalid(
+                "Use a sample of at most \(SizePolicy.describe(SizePolicy.standard.automationStepPreviewSample)).")
+        }
         var text = input
         let started = ProcessInfo.processInfo.systemUptime
         // One budget for every pattern rule, exactly as in a run.
@@ -418,7 +428,10 @@ package struct AutomationDefinition: Codable, Equatable, Identifiable, Sendable 
                 // Conservative bound before allocating expanded replacement text.
                 let possibleMatches = text.utf8.count / max(1, find.utf8.count)
                 guard replacement.utf8.count <= SizePolicy.standard.automationSample,
-                    possibleMatches <= (SizePolicy.standard.automationSample - min(text.utf8.count, SizePolicy.standard.automationSample)) / max(1, replacement.utf8.count)
+                    possibleMatches
+                        <= (SizePolicy.standard.automationSample
+                            - min(text.utf8.count, SizePolicy.standard.automationSample))
+                        / max(1, replacement.utf8.count)
                 else {
                     throw AutomationError.invalid(
                         "This replacement could exceed the \(SizePolicy.describe(SizePolicy.standard.automationSample)) sample-result limit. Use a smaller sample or replacement."
@@ -426,8 +439,13 @@ package struct AutomationDefinition: Codable, Equatable, Identifiable, Sendable 
                 }
             }
             text = try Self.apply(
-                step, to: text, regexTimeRemaining: &regexTimeRemaining, control: control, maximumResultBytes: SizePolicy.standard.automationSample)
-            guard text.utf8.count <= SizePolicy.standard.automationSample else { throw AutomationError.invalid("Sample result exceeds \(SizePolicy.describe(SizePolicy.standard.automationSample)). Use a smaller sample or shorten the replacement.") }
+                step, to: text, regexTimeRemaining: &regexTimeRemaining, control: control,
+                maximumResultBytes: SizePolicy.standard.automationSample)
+            guard text.utf8.count <= SizePolicy.standard.automationSample else {
+                throw AutomationError.invalid(
+                    "Sample result exceeds \(SizePolicy.describe(SizePolicy.standard.automationSample)). Use a smaller sample or shorten the replacement."
+                )
+            }
         }
         try control?.checkpoint(completed: steps.count, total: steps.count)
         try control?.checkCancellation()
@@ -685,10 +703,13 @@ extension AutomationDefinition.Step {
             guard awaitsValue || !pattern.isEmpty, pattern.count <= 500, let replacement,
                 replacement.utf16.count <= 1_048_576
             else {
-                throw AutomationError.invalid("Regex Replace needs a pattern of 1–500 characters and a replacement of at most 1 Mi UTF-16 units, which may be empty.")
+                throw AutomationError.invalid(
+                    "Regex Replace needs a pattern of 1–500 characters and a replacement of at most 1 Mi UTF-16 units, which may be empty."
+                )
             }
             if !pattern.isEmpty {
-                _ = try SearchCore.search("", options: .init(query: pattern, mode: .regularExpression, matchCase: true),
+                _ = try SearchCore.search(
+                    "", options: .init(query: pattern, mode: .regularExpression, matchCase: true),
                     limit: 1, timeLimit: AutomationDefinition.regexBudget)
             }
         } else if kind == .clearLinesMatching {
@@ -914,7 +935,11 @@ package struct AutomationLibrary: VersionedLibrary, Equatable {
     }
 
     static package let libraryContext = "Automations"
-    static package var librarySizeError: Error { AutomationError.invalid("Automation configuration exceeds \(SizePolicy.describe(SizePolicy.standard.automationLibrary)). Shorten a workflow or remove unwanted workflows.") }
+    static package var librarySizeError: Error {
+        AutomationError.invalid(
+            "Automation configuration exceeds \(SizePolicy.describe(SizePolicy.standard.automationLibrary)). Shorten a workflow or remove unwanted workflows."
+        )
+    }
     static package let maximumBytes = SizePolicy.standard.automationLibrary
     package var version: Int
     package var workflows: [AutomationDefinition]
@@ -1045,7 +1070,11 @@ package struct AutomationRuleSet: VersionedLibrary {
     }
 
     static package let libraryContext = "Rules"
-    static package var librarySizeError: Error { AutomationError.invalid("Rule files must be at most \(SizePolicy.describe(SizePolicy.standard.automationRule)). Shorten the rules or split them into separate files.") }
+    static package var librarySizeError: Error {
+        AutomationError.invalid(
+            "Rule files must be at most \(SizePolicy.describe(SizePolicy.standard.automationRule)). Shorten the rules or split them into separate files."
+        )
+    }
     static package let maximumBytes = SizePolicy.standard.automationRule
     static package let libraryEncodingOptions: JSONEncoder.OutputFormatting = [.prettyPrinted, .sortedKeys]
     package var version: Int
@@ -1063,7 +1092,11 @@ package struct AutomationRuleSet: VersionedLibrary {
 package enum AutomationRuleImport {
     static package let fallbackName = "Imported rules"
     static package func ruleSets(from data: Data) throws -> (sets: [AutomationRuleSet], fromLibrary: Bool) {
-        guard data.count <= SizePolicy.standard.automationRule else { throw AutomationError.invalid("Rule files must be at most \(SizePolicy.describe(SizePolicy.standard.automationRule)). Shorten the rules or split them into separate files.") }
+        guard data.count <= SizePolicy.standard.automationRule else {
+            throw AutomationError.invalid(
+                "Rule files must be at most \(SizePolicy.describe(SizePolicy.standard.automationRule)). Shorten the rules or split them into separate files."
+            )
+        }
         let decoder = JSONDecoder()
         let ruleSet: AutomationRuleSet
         do { ruleSet = try decoder.decode(AutomationRuleSet.self, from: data) } catch is DecodingError {

@@ -48,7 +48,9 @@ import EditorBridge
     }
     /// The settings file as it is on disk; empty when there is none yet.
     private static func stored(_ app: AppDelegate) -> [String: Any] {
-        (try? Data(contentsOf: app.settings.url)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        (try? Data(contentsOf: app.settings.url)).flatMap {
+            try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
+        }
             ?? [:]
     }
 
@@ -94,14 +96,16 @@ import EditorBridge
         }
         check(
             view.items.filter { !$0.isSeparatorItem && !$0.isHidden }.count == 14 && crowded(view, "View").isEmpty,
-            "DS-23 View's top level has 14 items and no level under it lists more than twenty: \(crowded(view, "View"))")
+            "DS-23 View's top level has 14 items and no level under it lists more than twenty: \(crowded(view, "View"))"
+        )
         let show = try requireValue(view.items.first { $0.title == "Show" }?.submenu, "View > Show")
         check(
             show.items.map { $0.isSeparatorItem ? "|" : $0.title } == [
                 "Line Numbers", "Whitespace", "Line Endings", "|", "Indentation Guides", "Current Line Highlight",
                 "Matching Braces", "|", "Change Bars"
             ] && !view.items.contains { $0.title == "Guides and Highlights" || $0.title == "Close Split View" },
-            "DS-D13 Show holds the seven toggles in three sections; Guides and Highlights and Close Split View have no row")
+            "DS-D13 Show holds the seven toggles in three sections; Guides and Highlights and Close Split View have no row"
+        )
 
         // Every command the View menu had keeps its action, target role and represented object.
         func commands(_ menu: NSMenu) -> [String] {
@@ -130,12 +134,14 @@ import EditorBridge
             "runToolbarCustomizationPalette://responder/", "command:/zoomIn/responder/="
         ]
         let added = [
-            "toggleSyncPreviewScrolling://responder/", "toggleChangeBars://explicit/", "toggleCenteredColumn://explicit/"
+            "toggleSyncPreviewScrolling://responder/", "toggleChangeBars://explicit/",
+            "toggleCenteredColumn://explicit/"
         ]
         let now = commands(view)
         check(
             now.sorted() == (before + added).sorted(),
-            "DS-D13 the regrouped View menu lists every command it had exactly once more, less Close Split View, plus the three additions (lost: \(before.filter { !now.contains($0) }); new: \(now.filter { !(before + added).contains($0) }))")
+            "DS-D13 the regrouped View menu lists every command it had exactly once more, less Close Split View, plus the three additions (lost: \(before.filter { !now.contains($0) }); new: \(now.filter { !(before + added).contains($0) }))"
+        )
 
         // The same rows as the golden menu fixture, which the document suite compares whole.
         // The language and group submenus belong to other checks and change with open tabs.
@@ -156,7 +162,8 @@ import EditorBridge
         let viewIndex = try requireValue(bar.items.firstIndex { $0.title == "View" }, "View's place in the menu bar")
         let fixture =
             try JSONSerialization.jsonObject(
-                with: Data(contentsOf: TestPaths.fixtures.appendingPathComponent("menu-tree.json"))) as! [[String: String]]
+                with: Data(contentsOf: TestPaths.fixtures.appendingPathComponent("menu-tree.json")))
+            as! [[String: String]]
         let live = snapshot(view, path: [viewIndex])
         let dynamicPrefixes = live.filter { ["Syntax Highlighting", "Editor Groups"].contains($0["title"] ?? "") }
             .compactMap { $0["position"].map { $0 + "." } }
@@ -187,11 +194,16 @@ import EditorBridge
             return (whole(menu, [viewIndex, index]), fixture.filter { ($0["position"] ?? "").hasPrefix(prefix) })
         }
         let languages = subtree("Syntax Highlighting"), groups = subtree("Editor Groups")
-        print("NOTE Syntax Highlighting rows: live \(languages.live.count), fixture \(languages.golden.count), equal \(languages.live == languages.golden); differing \(languages.live.filter { !languages.golden.contains($0) }.prefix(4)) / \(languages.golden.filter { !languages.live.contains($0) }.prefix(4))")
-        print("NOTE Editor Groups rows: live \(groups.live.count), fixture \(groups.golden.count), equal \(groups.live == groups.golden); differing \(groups.live.filter { !groups.golden.contains($0) }.prefix(4)) / \(groups.golden.filter { !groups.live.contains($0) }.prefix(4))")
+        print(
+            "NOTE Syntax Highlighting rows: live \(languages.live.count), fixture \(languages.golden.count), equal \(languages.live == languages.golden); differing \(languages.live.filter { !languages.golden.contains($0) }.prefix(4)) / \(languages.golden.filter { !languages.live.contains($0) }.prefix(4))"
+        )
+        print(
+            "NOTE Editor Groups rows: live \(groups.live.count), fixture \(groups.golden.count), equal \(groups.live == groups.golden); differing \(groups.live.filter { !groups.golden.contains($0) }.prefix(4)) / \(groups.golden.filter { !groups.live.contains($0) }.prefix(4))"
+        )
         check(
             dynamicPrefixes.count == 2 && live == golden,
-            "DS-D13 the View rows of Tests/Fixtures/menu-tree.json are the menu as it is built (differing: \(live.filter { !golden.contains($0) }.prefix(6)) / \(golden.filter { !live.contains($0) }.prefix(6)))")
+            "DS-D13 the View rows of Tests/Fixtures/menu-tree.json are the menu as it is built (differing: \(live.filter { !golden.contains($0) }.prefix(6)) / \(golden.filter { !live.contains($0) }.prefix(6)))"
+        )
 
         // A moved command is the same command to the shortcut model, listed at its new place.
         let catalog = ShortcutCatalog.catalog(in: bar)
@@ -247,7 +259,10 @@ import EditorBridge
         let unfound = places.filter {
             !found($0.old).contains($0.new) || !found($0.name).contains($0.new) || !found($0.new).contains($0.new)
         }.map(\.old)
-        check(unfound.isEmpty, "DS-D13 the palette finds each View command by its former path, its former name and its new path: \(unfound)")
+        check(
+            unfound.isEmpty,
+            "DS-D13 the palette finds each View command by its former path, its former name and its new path: \(unfound)"
+        )
         check(
             found("View › Preview › Sync Scrolling in Both") == ["View › Preview › Sync Scrolling in Both"]
                 && found("show change bars") == ["View › Show › Change Bars"]
@@ -259,17 +274,20 @@ import EditorBridge
                 "Show Line Numbers", "Show Whitespace", "Show Line Endings", "Show Indentation Guides",
                 "Show Current Line Highlight", "Show Matching Braces", "Show Change Bars"
             ] && shown.allSatisfy { $0.name == $0.row.title && $0.path == "View › Show › " + $0.item.title },
-            "DS-24 a Show item is titled by what it shows in the menu, and the palette names the command in full: \(shown.map(\.row.title))")
+            "DS-24 a Show item is titled by what it shows in the menu, and the palette names the command in full: \(shown.map(\.row.title))"
+        )
         check(
             found("View › Guides and Highlights") == [
-                "View › Show › Indentation Guides", "View › Show › Current Line Highlight", "View › Show › Matching Braces"
+                "View › Show › Indentation Guides", "View › Show › Current Line Highlight",
+                "View › Show › Matching Braces"
             ]
                 && CommandDiscovery.rows(entries, matching: "View › Guides and Highlights").map(\.detail)
                     == ["View › Show", "View › Show", "View › Show"]
                 && CommandDiscovery.rows(entries, matching: "View › Guides and Highlights").map(\.title) == [
                     "Show Indentation Guides", "Show Current Line Highlight", "Show Matching Braces"
                 ],
-            "searching the old path View › Guides and Highlights finds exactly the three guide commands, each shown with its new place, View › Show: \(found("View › Guides and Highlights"))")
+            "searching the old path View › Guides and Highlights finds exactly the three guide commands, each shown with its new place, View › Show: \(found("View › Guides and Highlights"))"
+        )
         check(
             CommandDiscovery.rows(entries, matching: "show whitespace").first?.title == "Show Whitespace"
                 && CommandDiscovery.rows(entries, matching: "close split").map(\.title) == ["Split Tab View"]
@@ -298,27 +316,35 @@ import EditorBridge
         check(tab.secondary == nil, "closeSplit with no split changes nothing")
         tab.clone(nil)
         let close = NSMenuItem(title: "", action: #selector(EditorWindowController.closeSplit(_:)), keyEquivalent: "")
-        check(tab.secondary != nil && tab.validateMenuItem(close), "fixture: split again; closeSplit validates while split")
+        check(
+            tab.secondary != nil && tab.validateMenuItem(close),
+            "fixture: split again; closeSplit validates while split")
         tab.closeSplit(close)
-        check(tab.secondary == nil && !tab.validateMenuItem(close), "closeSplit still closes the split, and is disabled without one")
+        check(
+            tab.secondary == nil && !tab.validateMenuItem(close),
+            "closeSplit still closes the split, and is disabled without one")
 
         // A shortcut saved for Close Split View before the upgrade.
         let context = app.settings.shortcutContext
         func load(_ shortcuts: String) throws -> (settings: EditorSettings, issues: [ShortcutLoadIssue]) {
             try EditorSettings.load(
-                Data(#"{"version":2,"tabWidth":4,"useTabs":true,"wrap":false,"appearance":"system","shortcuts":\#(shortcuts)}"#.utf8),
+                Data(
+                    #"{"version":2,"tabWidth":4,"useTabs":true,"wrap":false,"appearance":"system","shortcuts":\#(shortcuts)}"#
+                        .utf8),
                 context: context)
         }
         let upgraded = try load(#"{"closeSplit:":"ctrl+opt+k"}"#)
         check(
             upgraded.settings.shortcuts == ["clone:": "ctrl+opt+k"] && upgraded.issues.isEmpty,
-            "a shortcut saved for Close Split View becomes Split Tab View's, and nothing is reported as ignored: \(upgraded.settings.shortcuts) \(upgraded.issues.map(\.message))")
+            "a shortcut saved for Close Split View becomes Split Tab View's, and nothing is reported as ignored: \(upgraded.settings.shortcuts) \(upgraded.issues.map(\.message))"
+        )
         let both = try load(#"{"closeSplit:":"ctrl+opt+k","clone:":"ctrl+opt+j"}"#)
         check(
             both.settings.shortcuts == ["clone:": "ctrl+opt+j"] && both.issues.isEmpty,
             "Split Tab View's own saved shortcut stays, and the Close Split View one is dropped without a notice")
         let removed = try load(#"{"closeSplit:":""}"#)
-        check(removed.settings.shortcuts.isEmpty && removed.issues.isEmpty, "an entry that only removed a key is dropped")
+        check(
+            removed.settings.shortcuts.isEmpty && removed.issues.isEmpty, "an entry that only removed a key is dropped")
         let before = app.settings.value
         try app.settings.save(upgraded.settings)
         defer { _ = try? app.settings.save(before) }
@@ -339,7 +365,8 @@ import EditorBridge
         let plain = DocumentFactory.makeUntitled()
         check(
             sync.target == nil && state(sync, in: host).0 == false,
-            "DS-21 Sync Scrolling in Both is disabled, with the rest of the Preview submenu, for a document with no preview")
+            "DS-21 Sync Scrolling in Both is disabled, with the rest of the Preview submenu, for a document with no preview"
+        )
         plain.presentation?.toggleSyncPreviewScrolling(sync)
         check(app.settings.value.syncsPreviewScrolling, "and does nothing if it is sent anyway")
         plain.close()
@@ -347,14 +374,18 @@ import EditorBridge
         let (document, tab) = try open("sync.md", "# Sync\n", in: folder)
         defer { document.close() }
         check(host.active === tab, "fixture: the Markdown tab is active")
-        check(state(sync, in: host) == (true, .on), "DS-22 it is enabled for a Markdown document and checked by default")
+        check(
+            state(sync, in: host) == (true, .on), "DS-22 it is enabled for a Markdown document and checked by default")
         app.settings.showSettings(nil)
         let form = try requireValue(
-            FormPanel.visible.last { $0.window.identifier?.rawValue == "TextTank.Settings" }, "fixture: Settings window")
+            FormPanel.visible.last { $0.window.identifier?.rawValue == "TextTank.Settings" }, "fixture: Settings window"
+        )
         defer { form.close() }
         let content = try requireValue(form.window.contentView, "fixture: Settings content")
         let box = try requireValue(
-            descendants(of: content, as: NSButton.self).first { $0.identifier?.rawValue == "settings.syncPreviewScrolling" },
+            descendants(of: content, as: NSButton.self).first {
+                $0.identifier?.rawValue == "settings.syncPreviewScrolling"
+            },
             "fixture: the Sync scrolling in Both row")
         check(box.state == .on, "fixture: the Settings row starts on")
         check(choose(sync, in: host), "choosing the menu item")
@@ -384,7 +415,9 @@ import EditorBridge
                 && [edited, fresh].allSatisfy { !$0.editor.changeBarsVisible && !$0.editor.changeTrackingActive },
             "Change Bars is off by default: no margin, nothing recorded, no stored key")
         edited.editor.setSelectionAnchor(0, caret: 0)
-        check(edited.editor.replaceSelection("typed ") && edited.editor.text == "typed alpha\nbeta\n", "fixture: an edit made before the toggle")
+        check(
+            edited.editor.replaceSelection("typed ") && edited.editor.text == "typed alpha\nbeta\n",
+            "fixture: an edit made before the toggle")
         freshTab.clone(nil)
         let clone = try requireValue(freshTab.secondary, "fixture: a split view of the unedited document")
 
@@ -402,7 +435,8 @@ import EditorBridge
             edited.editor.changeBarsVisible && !edited.editor.changeTrackingActive && host.active === freshTab
                 && !editedTab.isPresented && editedTab.statusText != pending
                 && EditorSettingsApplication.awaitsChangeBarsExplanation(editedTab) && freshTab.statusText != pending,
-            "a document edited earlier shows the margin with no bars; its tab is behind another, so the explanation waits for it: \(editedTab.statusText)")
+            "a document edited earlier shows the margin with no bars; its tab is behind another, so the explanation waits for it: \(editedTab.statusText)"
+        )
         host.activate(editedTab)
         check(
             editedTab.isPresented && editedTab.statusText == pending
@@ -411,7 +445,8 @@ import EditorBridge
         host.activate(freshTab)
         host.activate(editedTab)
         check(
-            bars.toolTip == EditorSettingsApplication.changeBarsHelp && bars.toolTip?.contains("revert or reopen") == true,
+            bars.toolTip == EditorSettingsApplication.changeBarsHelp
+                && bars.toolTip?.contains("revert or reopen") == true,
             "DS-85 the menu item's help says what the bars mean and when a document edited earlier gets them")
         check(
             edited.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
@@ -433,7 +468,9 @@ import EditorBridge
         host.activate(freshTab)
         off.changeBars = true
         try app.settings.save(off)
-        check(EditorSettingsApplication.awaitsChangeBarsExplanation(staleTab), "fixture: its hidden tab owes the explanation")
+        check(
+            EditorSettingsApplication.awaitsChangeBarsExplanation(staleTab),
+            "fixture: its hidden tab owes the explanation")
         try stale.read(from: Data("x\n".utf8), ofType: TextDocument.plainTextType)
         host.activate(staleTab)
         check(
@@ -447,7 +484,9 @@ import EditorBridge
             later.editor.changeBarsVisible && later.editor.changeTrackingActive && host.active === laterTab,
             "a document opened afterwards has change bars from the start")
         let untitled = DocumentFactory.makeUntitled()
-        check(untitled.editor.changeBarsVisible && untitled.editor.changeTrackingActive, "and so has a new untitled document")
+        check(
+            untitled.editor.changeBarsVisible && untitled.editor.changeTrackingActive,
+            "and so has a new untitled document")
         untitled.close()
 
         // Large-file mode: above the highlighting limit nothing is shown or recorded.
@@ -455,7 +494,8 @@ import EditorBridge
         let (large, largeTab) = try open("large.txt", long, in: folder)
         defer { large.close() }
         check(
-            large.deferredLargeFileLanguage != nil && !large.editor.changeBarsVisible && !large.editor.changeTrackingActive,
+            large.deferredLargeFileLanguage != nil && !large.editor.changeBarsVisible
+                && !large.editor.changeTrackingActive,
             "a large-file document shows no change bars and records nothing")
         largeTab.clone(nil)
         check(
@@ -476,12 +516,15 @@ import EditorBridge
             !app.settings.value.changeBarsEnabled && state(bars, in: host) == (true, .off)
                 && !fresh.editor.changeBarsVisible && !clone.changeBarsVisible && fresh.editor.changeTrackingActive,
             "hides the margin in every view and keeps the record of a document that had one")
-        check(choose(bars, in: host) && fresh.editor.changeBarsVisible && fresh.editor.changeTrackingActive, "and on again shows it")
+        check(
+            choose(bars, in: host) && fresh.editor.changeBarsVisible && fresh.editor.changeTrackingActive,
+            "and on again shows it")
 
         // The Settings row is the same value.
         app.settings.showSettings(nil)
         let form = try requireValue(
-            FormPanel.visible.last { $0.window.identifier?.rawValue == "TextTank.Settings" }, "fixture: Settings window")
+            FormPanel.visible.last { $0.window.identifier?.rawValue == "TextTank.Settings" }, "fixture: Settings window"
+        )
         defer { form.close() }
         let content = try requireValue(form.window.contentView, "fixture: Settings content")
         let box = try requireValue(
@@ -493,7 +536,8 @@ import EditorBridge
             "DS-85 the Settings row carries the same standing explanation, to the pointer and to assistive technology")
         box.performClick(nil)
         check(
-            !app.settings.value.changeBarsEnabled && state(bars, in: host) == (true, .off) && !fresh.editor.changeBarsVisible,
+            !app.settings.value.changeBarsEnabled && state(bars, in: host) == (true, .off)
+                && !fresh.editor.changeBarsVisible,
             "and turning it off there unchecks the menu item and hides the margin")
         freshTab.closeSplit(nil)
     }
@@ -518,8 +562,12 @@ import EditorBridge
         else { return "no gutter" }
         // The engine redraws its gutter on the pass after the one that changed it.
         ruler.needsDisplay = true
-        if let warm = ruler.bitmapImageRepForCachingDisplay(in: ruler.bounds) { ruler.cacheDisplay(in: ruler.bounds, to: warm) }
-        if let warm = content.bitmapImageRepForCachingDisplay(in: content.bounds) { content.cacheDisplay(in: content.bounds, to: warm) }
+        if let warm = ruler.bitmapImageRepForCachingDisplay(in: ruler.bounds) {
+            ruler.cacheDisplay(in: ruler.bounds, to: warm)
+        }
+        if let warm = content.bitmapImageRepForCachingDisplay(in: content.bounds) {
+            content.cacheDisplay(in: content.bounds, to: warm)
+        }
         RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         content.cacheDisplay(in: content.bounds, to: rep)
         let scale = Double(rep.pixelsWide) / Double(content.bounds.width)
@@ -530,7 +578,9 @@ import EditorBridge
         func parts(_ bgr: Int) -> [Double] { [0, 8, 16].map { Double((bgr >> $0) & 0xFF) / 255 } }
         let unsaved = parts(editor.unsavedChangeColour), saved = parts(editor.savedChangeColour)
         func kind(_ x: Double, _ y: Double) -> Character {
-            guard let colour = rep.colorAt(x: Int(x * scale), y: Int(y * scale))?.usingColorSpace(.sRGB) else { return "?" }
+            guard let colour = rep.colorAt(x: Int(x * scale), y: Int(y * scale))?.usingColorSpace(.sRGB) else {
+                return "?"
+            }
             let seen = [Double(colour.redComponent), Double(colour.greenComponent), Double(colour.blueComponent)]
             func distance(_ other: [Double]) -> Double { zip(seen, other).map { abs($0 - $1) }.reduce(0, +) }
             // The window is drawn in its display's colour space; the two bar colours are 0.9 apart.
@@ -562,7 +612,8 @@ import EditorBridge
         let url = folder.appendingPathComponent("saved.txt"), copy = folder.appendingPathComponent("saved-as.txt")
         try Data("one\ntwo\nthree\n".utf8).write(to: url)
         // Opened the way a file is opened from disk, which is also how a session restores it.
-        let document = try DocumentFactory.openCaptured(WorkspaceStore.captureRegularFile(url, maximumBytes: Int.max), from: url)
+        let document = try DocumentFactory.openCaptured(
+            WorkspaceStore.captureRegularFile(url, maximumBytes: Int.max), from: url)
         defer { document.close() }
         let tab = try requireValue(document.presentation, "fixture: the file's tab"), editor = document.editor
         host.activate(tab)
@@ -573,8 +624,11 @@ import EditorBridge
         }
         check(
             editor.changeBarsVisible && editor.changeTrackingActive && bars() == "---" && !document.isDocumentEdited,
-            "a file opened from disk, as a restored session opens it, records changes and starts with no bars: \(bars())")
-        check(type("2", at: 4) && bars() == "-U-" && document.isDocumentEdited, "an edit is a wide unsaved bar: \(bars())")
+            "a file opened from disk, as a restored session opens it, records changes and starts with no bars: \(bars())"
+        )
+        check(
+            type("2", at: 4) && bars() == "-U-" && document.isDocumentEdited, "an edit is a wide unsaved bar: \(bars())"
+        )
         try document.writeSafely(to: url, ofType: TextDocument.plainTextType, for: .saveOperation)
         check(
             try bars() == "-S-" && !editor.modified && String(contentsOf: url, encoding: .utf8) == "one\n2two\nthree\n",
@@ -582,7 +636,8 @@ import EditorBridge
         check(type("3", at: 9) && bars() == "-SU", "a later edit is unsaved beside the saved one: \(bars())")
         try document.writeSafely(to: copy, ofType: TextDocument.plainTextType, for: .saveAsOperation)
         check(
-            try bars() == "-SS" && !editor.modified && String(contentsOf: copy, encoding: .utf8) == "one\n2two\n3three\n",
+            try bars() == "-SS" && !editor.modified
+                && String(contentsOf: copy, encoding: .utf8) == "one\n2two\n3three\n",
             "Save As to another file marks everything written as saved: \(bars())")
         check(type("1", at: 0) && bars() == "USS", "fixture: one more unsaved edit: \(bars())")
         check(
@@ -616,7 +671,8 @@ import EditorBridge
         host: WorkspaceWindowController
     ) throws {
         struct Output: Equatable {
-            var printed: String, page: NSSize, glyphs: Int, used: NSRect, saved: Data, rtf: Data, html: Data, plain: String
+            var printed: String, page: NSSize, glyphs: Int, used: NSRect, saved: Data, rtf: Data, html: Data,
+                plain: String
         }
         func output() throws -> Output {
             host.activate(tab)
@@ -627,23 +683,30 @@ import EditorBridge
             layout.ensureLayout(for: container)
             let rtf = try app.utilities.exportData(format: "rtf"), html = try app.utilities.exportData(format: "html")
             return Output(
-                printed: page.string, page: page.frame.size, glyphs: layout.numberOfGlyphs, used: layout.usedRect(for: container),
+                printed: page.string, page: page.frame.size, glyphs: layout.numberOfGlyphs,
+                used: layout.usedRect(for: container),
                 saved: try document.data(ofType: TextDocument.plainTextType), rtf: rtf.0, html: html.0, plain: rtf.1)
         }
-        check(app.settings.value.centeredColumnEnabled && tab.primaryEditor.centeredColumnCharacters == 90, "fixture: the column is on")
+        check(
+            app.settings.value.centeredColumnEnabled && tab.primaryEditor.centeredColumnCharacters == 90,
+            "fixture: the column is on")
         let on = try output()
         tab.primaryEditor.wrap = true
         let onWrapped = try output()
         tab.primaryEditor.wrap = false
         check(choose(column, in: host) && tab.primaryEditor.centeredColumnCharacters == 0, "fixture: the column is off")
         let off = try output()
-        check(choose(column, in: host) && tab.primaryEditor.centeredColumnCharacters == 90, "fixture: the column is on again")
+        check(
+            choose(column, in: host) && tab.primaryEditor.centeredColumnCharacters == 90,
+            "fixture: the column is on again")
         check(
             on.printed == text && on.printed == off.printed && on.page == off.page && on.glyphs == off.glyphs
                 && on.used == off.used && on.glyphs > 0,
-            "the printed page is the same text in the same layout with Centered Text Column on and off (\(on.page) / \(off.page))")
+            "the printed page is the same text in the same layout with Centered Text Column on and off (\(on.page) / \(off.page))"
+        )
         check(
-            on.saved == off.saved && on.rtf == off.rtf && on.html == off.html && on.plain == off.plain && on.plain == text
+            on.saved == off.saved && on.rtf == off.rtf && on.html == off.html && on.plain == off.plain
+                && on.plain == text
                 && !on.rtf.isEmpty && !on.html.isEmpty,
             "the saved bytes and the RTF and HTML exports are byte for byte the same with it on and off")
         check(onWrapped == on, "and with Wrap Lines on, when the column has both margins")
@@ -671,7 +734,9 @@ import EditorBridge
             state(column, in: host) == (true, .off) && editor.centeredColumnCharacters == 0
                 && (stored(app)["centeredColumn"]) == nil && plain.0 == plain.1 && plain.0 < 8,
             "Centered Text Column is off by default: the ordinary margins (\(plain)), no stored key")
-        check(textArea(editor) > 90 * digit + 40, "fixture: the text area (\(textArea(editor))) is wider than 90 characters (\(90 * digit))")
+        check(
+            textArea(editor) > 90 * digit + 40,
+            "fixture: the text area (\(textArea(editor))) is wider than 90 characters (\(90 * digit))")
 
         check(choose(column, in: host), "choosing View > Centered Text Column")
         func centered(_ view: TTEditor, _ characters: Int) -> Bool {
@@ -694,7 +759,8 @@ import EditorBridge
         check(
             app.settings.value.centeredColumn == true && (stored(app)["centeredColumn"] as? Bool) == true
                 && state(column, in: host) == (true, .on) && centered(editor, 90),
-            "stores the choice, checks the item and centres a 90-character column: margins \(editor.textMarginLeft) and \(editor.textMarginRight) of \(textArea(editor))")
+            "stores the choice, checks the item and centres a 90-character column: margins \(editor.textMarginLeft) and \(editor.textMarginRight) of \(textArea(editor))"
+        )
         check(
             editor.text == text && !document.isDocumentEdited && !editor.wrap,
             "the document, its edited state and Wrap Lines are untouched")
@@ -719,12 +785,15 @@ import EditorBridge
         // The gutter takes its new width, and the text area gives it up, at the next drawing pass.
         host.window?.displayIfNeeded()
         let withBars = (editor.textMarginLeft, editor.textMarginRight, textArea(editor))
-        check(centered(editor, 90) && withBars.2 == textArea(editor), "with change bars shown the column is centred in the text area beside the wider gutter")
+        check(
+            centered(editor, 90) && withBars.2 == textArea(editor),
+            "with change bars shown the column is centred in the text area beside the wider gutter")
         // At the window's own size, at a height the text just fits, at a small display's, and at
         // the smallest window; with scrollers that overlay the text and with ones that are always
         // shown and take width from it, as on a Mac with a mouse. The margins follow the text
         // area's width and never its height.
-        let scroll = try requireValue(descendants(of: editor, as: NSScrollView.self).first, "fixture: the editor's scroll view")
+        let scroll = try requireValue(
+            descendants(of: editor, as: NSScrollView.self).first, "fixture: the editor's scroll view")
         let styleBefore = scroll.scrollerStyle
         func settle() {
             // The scroll view places its gutter and scrollers over two passes after a change.
@@ -750,21 +819,25 @@ import EditorBridge
         settle()
         check(
             shownOrigin == 0 && scroll.contentView.bounds.origin.x == 0,
-            "hiding change bars leaves the text at its left edge: scrolled \(shownOrigin) with bars and \(scroll.contentView.bounds.origin.x) without")
+            "hiding change bars leaves the text at its left edge: scrolled \(shownOrigin) with bars and \(scroll.contentView.bounds.origin.x) without"
+        )
         bars.changeBars = true
         try app.settings.save(bars)
         // A height at which the 40 lines just fit, so that a bar is what brings the scroller in.
         settle()
-        let fitting = window.contentView!.frame.height + CGFloat(41 * editor.comparisonLineHeight + 6) - editor.frame.height
+        let fitting =
+            window.contentView!.frame.height + CGFloat(41 * editor.comparisonLineHeight + 6) - editor.frame.height
         for size in [
-            NSSize(width: 1400, height: 700), NSSize(width: 1400, height: fitting), NSSize(width: 1024, height: fitting),
+            NSSize(width: 1400, height: 700), NSSize(width: 1400, height: fitting),
+            NSSize(width: 1024, height: fitting),
             NSSize(width: 1024, height: 640), window.contentMinSize
         ] {
             for style in [NSScroller.Style.overlay, .legacy] {
                 window.setContentSize(size)
                 scroll.scrollerStyle = style
                 settle()
-                let label = "\(Int(size.width)) × \(Int(size.height)), \(style == .legacy ? "legacy" : "overlay") scrollers"
+                let label =
+                    "\(Int(size.width)) × \(Int(size.height)), \(style == .legacy ? "legacy" : "overlay") scrollers"
                 let before = (editor.textMarginLeft, editor.textMarginRight, textArea(editor))
                 var widths: [Int] = [before.2]
                 func barShown() -> Bool { style == .legacy && scroll.verticalScroller?.isHidden == false }
@@ -775,7 +848,8 @@ import EditorBridge
                     barsShown.insert(barShown())
                     // Same width, same margins; another width, the margins that width gives.
                     return follows(editor, 90) && editor.changeBarsVisible && editor.changeTrackingActive
-                        && (textArea(editor) != before.2 || (editor.textMarginLeft, editor.textMarginRight) == (before.0, before.1))
+                        && (textArea(editor) != before.2
+                            || (editor.textMarginLeft, editor.textMarginRight) == (before.0, before.1))
                 }
                 let atRest = follows(editor, 90)
                 tab.showFind(nil)
@@ -791,36 +865,45 @@ import EditorBridge
                 let after = holds() && !tab.findBarVisible && !tab.goToLineBarVisible
                 check(
                     atRest && findOnly && withReplace && withGoToLine && after,
-                    "at \(label), showing and hiding the find bar, its Replace row and the inline Go to Line bar leaves the margins what the text area's width gives, and the change-bar margin in place (rest \(atRest), find \(findOnly), replace \(withReplace), go to line \(withGoToLine), after \(after); text area \(widths))")
+                    "at \(label), showing and hiding the find bar, its Replace row and the inline Go to Line bar leaves the margins what the text area's width gives, and the change-bar margin in place (rest \(atRest), find \(findOnly), replace \(withReplace), go to line \(withGoToLine), after \(after); text area \(widths))"
+                )
                 // Overlay scrollers take no width, so there the text area and margins never move.
                 // Overlay scrollers take no width, so there the text area is the pane beside the
                 // gutter and never moves. Scroll bars that are always shown take their own width.
                 let gutter = Int(scroll.verticalRulerView?.frame.width ?? 0)
-                let bar = style == .legacy && scroll.verticalScroller?.isHidden == false ? Int(scroll.verticalScroller?.frame.width ?? 0) : 0
+                let bar =
+                    style == .legacy && scroll.verticalScroller?.isHidden == false
+                    ? Int(scroll.verticalScroller?.frame.width ?? 0) : 0
                 check(
                     before.2 == Int(scroll.frame.width) - gutter - bar,
-                    "at \(label) the text area is the pane less the gutter and a scroll bar that takes space: \(before.2) of \(Int(scroll.frame.width)) less \(gutter) and \(bar)")
+                    "at \(label) the text area is the pane less the gutter and a scroll bar that takes space: \(before.2) of \(Int(scroll.frame.width)) less \(gutter) and \(bar)"
+                )
                 check(
                     Set(widths).count == 1 || barsShown.count > 1,
-                    "at \(label) no bar above the text changes the text area's width, unless a scroll bar that takes space came or went: \(widths)")
+                    "at \(label) no bar above the text changes the text area's width, unless a scroll bar that takes space came or went: \(widths)"
+                )
             }
         }
         check(
             follows(editor, 90) && textArea(editor) < 90 * digit && editor.textMarginLeft == plain.0
                 && editor.textMarginRight == plain.1,
-            "at the smallest window the text area (\(textArea(editor))) is narrower than the column (\(90 * digit)) and has the ordinary margins")
+            "at the smallest window the text area (\(textArea(editor))) is narrower than the column (\(90 * digit)) and has the ordinary margins"
+        )
         scroll.scrollerStyle = styleBefore
         window.setContentSize(NSSize(width: 1400, height: 700))
         settle()
         check(
             centered(editor, 90) && (editor.textMarginLeft, editor.textMarginRight, textArea(editor)) == withBars,
-            "back at the first size the column and its margins are as they were: \((editor.textMarginLeft, editor.textMarginRight, textArea(editor))) and \(withBars)")
+            "back at the first size the column and its margins are as they were: \((editor.textMarginLeft, editor.textMarginRight, textArea(editor))) and \(withBars)"
+        )
         bars.changeBars = nil
         try app.settings.save(bars)
         // The gutter gives its width back on the next turn of the run loop, when it is drawn.
         RunLoop.current.run(until: Date().addingTimeInterval(0.2))
         host.window?.display()
-        check(centered(editor, 90) && textArea(editor) > withBars.2, "fixture: change bars off again, and the column recentred in the wider text area")
+        check(
+            centered(editor, 90) && textArea(editor) > withBars.2,
+            "fixture: change bars off again, and the column recentred in the wider text area")
 
         // Zoom, the stored width, a split and the font each move the margins.
         let wide = editor.textMarginLeft
@@ -842,7 +925,8 @@ import EditorBridge
                 && [editor, clone].allSatisfy { view in
                     textArea(view) > 60 * digit + 2 * plain.0 ? centered(view, 60) : view.textMarginLeft == plain.0
                 },
-            "in a split each pane centres the column in its own width, or keeps the ordinary margins when it is narrower")
+            "in a split each pane centres the column in its own width, or keeps the ordinary margins when it is narrower"
+        )
         let splitWidth = textArea(editor)
         tab.closeSplit(nil)
         // The split view gives the pane its full width at the next layout pass.
@@ -851,12 +935,14 @@ import EditorBridge
         RunLoop.current.run(until: Date().addingTimeInterval(0.2))
         check(
             textArea(editor) > splitWidth && centered(editor, 60),
-            "closing the split recentres the one pane (\(splitWidth) to \(textArea(editor)), margins \(editor.textMarginLeft) and \(editor.textMarginRight))")
+            "closing the split recentres the one pane (\(splitWidth) to \(textArea(editor)), margins \(editor.textMarginLeft) and \(editor.textMarginRight))"
+        )
 
         // The Settings rows.
         app.settings.showSettings(nil)
         let form = try requireValue(
-            FormPanel.visible.last { $0.window.identifier?.rawValue == "TextTank.Settings" }, "fixture: Settings window")
+            FormPanel.visible.last { $0.window.identifier?.rawValue == "TextTank.Settings" }, "fixture: Settings window"
+        )
         defer { form.close() }
         let content = try requireValue(form.window.contentView, "fixture: Settings content")
         let box = try requireValue(
@@ -873,10 +959,12 @@ import EditorBridge
             descendants(of: content, as: NSView.self).first { $0.identifier?.rawValue == id + ".row" }
         }
         let appearanceRows = [
-            "settings.showLineEndings", "settings.changeBars", "settings.centeredColumn", "settings.centeredColumn.width"
+            "settings.showLineEndings", "settings.changeBars", "settings.centeredColumn",
+            "settings.centeredColumn.width"
         ].map(rowView)
         check(
-            appearanceRows.allSatisfy { $0 != nil } && Set(appearanceRows.compactMap { $0?.superview }.map(ObjectIdentifier.init)).count == 1,
+            appearanceRows.allSatisfy { $0 != nil }
+                && Set(appearanceRows.compactMap { $0?.superview }.map(ObjectIdentifier.init)).count == 1,
             "the Change Bars, Centered Text Column and width rows are in the Appearance pane with the other rows")
         func commit(_ value: String) {
             field.stringValue = value

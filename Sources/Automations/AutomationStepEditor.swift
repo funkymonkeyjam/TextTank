@@ -25,7 +25,8 @@ extension AutomationDefinition.Step.Kind {
             return
                 "Keeps the first of each identical line and drops later repeats. Leave this rule out when repeated rows should stay. Mixed line endings are refused."
         case .replaceRegex:
-            return "Uses the Find bar’s Boost regular expressions. Use $1, $2 and so on for captured groups. Leave Replace with empty to delete matches."
+            return
+                "Uses the Find bar’s Boost regular expressions. Use $1, $2 and so on for captured groups. Leave Replace with empty to delete matches."
         case .replaceLiteral:
             return
                 "Replaces exact, case-sensitive text. Leave Replace with empty to remove it. Special characters are ordinary text."
@@ -482,7 +483,8 @@ final class AutomationStepEditor: NSObject, NSTableViewDataSource, NSTableViewDe
         let input = sample.string, steps = list.steps
         guard input.utf8.count <= SizePolicy.standard.automationStepPreviewSample else {
             _ = preview.finish(token)
-            status.stringValue = "Use a sample of at most \(SizePolicy.describe(SizePolicy.standard.automationStepPreviewSample))."
+            status.stringValue =
+                "Use a sample of at most \(SizePolicy.describe(SizePolicy.standard.automationStepPreviewSample))."
             return
         }
         let control = AutomationRunControl()

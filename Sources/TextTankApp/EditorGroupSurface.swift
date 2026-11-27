@@ -163,7 +163,9 @@ final class EditorGroupSurface: NSView {
         }
         recentHeading.font = small
         recentHeading.textColor = .secondaryLabelColor
-        ([startIcon, startTitle, emptyPrompt, emptyActions, emptyStatus, shortcutDisclosure] + hintRows + [recentHeading]).forEach { placeholder.addSubview($0) }
+        ([startIcon, startTitle, emptyPrompt, emptyActions, emptyStatus, shortcutDisclosure] + hintRows + [
+            recentHeading
+        ]).forEach { placeholder.addSubview($0) }
         [heading, strip, content].forEach { addSubview($0) }
         content.addSubview(placeholder)
         setAccessibilityElement(true)
@@ -505,8 +507,10 @@ final class EditorGroupSurface: NSView {
         let width = placeholder.bounds.width, gap: CGFloat = 8, rowGap: CGFloat = 3, margin: CGFloat = 8
         let alignment: NSTextAlignment = start ? .center : .natural
         if emptyPrompt.alignment != alignment { emptyPrompt.alignment = alignment }
-        let newTitle = start ? Strings.text("emptyGroup.newDocument", "New Document") : Strings.text("emptyGroup.new", "New")
-        let openTitle = start ? Strings.text("emptyGroup.openFile", "Open File…") : Strings.text("emptyGroup.open", "Open…")
+        let newTitle =
+            start ? Strings.text("emptyGroup.newDocument", "New Document") : Strings.text("emptyGroup.new", "New")
+        let openTitle =
+            start ? Strings.text("emptyGroup.openFile", "Open File…") : Strings.text("emptyGroup.open", "Open…")
         if newButton?.title != newTitle { newButton?.title = newTitle }
         if openButton?.title != openTitle { openButton?.title = openTitle }
         let actionSize: NSControl.ControlSize = start ? .large : .regular
@@ -566,7 +570,9 @@ final class EditorGroupSurface: NSView {
         for (index, button) in recentButtons.enumerated() {
             let entry = (button as NSView, max(20, ceil(button.intrinsicContentSize.height)))
             // The heading appears with the first file or not at all.
-            offer(index == 0 ? [(recentHeading, headingHeight), entry] : [entry], leading: index == 0 ? (start ? 18 : gap) : rowGap)
+            offer(
+                index == 0 ? [(recentHeading, headingHeight), entry] : [entry],
+                leading: index == 0 ? (start ? 18 : gap) : rowGap)
         }
         if start {
             offer([(shortcutDisclosure, ceil(shortcutDisclosure.intrinsicContentSize.height))], leading: 14)

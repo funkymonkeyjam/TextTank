@@ -609,7 +609,8 @@ final class StatusBadgeRow: NSView, NSMenuDelegate {
     @objc private func runFieldCommand(_ sender: Any?) {
         if let button = sender as? StatusButton {
             onCommand?(button.field)
-        } else if let raw = (sender as? NSMenuItem)?.representedObject as? String, let field = StatusField(rawValue: raw)
+        } else if let raw = (sender as? NSMenuItem)?.representedObject as? String,
+            let field = StatusField(rawValue: raw)
         {
             onCommand?(field)
         }

@@ -30,8 +30,8 @@ import AppKit
         openAfterDrag = {
             if let group { host.focusGroup(group) }
             for url in urls {
-                do { _ = try await NSDocumentController.shared.openDocument(withContentsOf: url, display: true) }
-                catch {
+                do { _ = try await NSDocumentController.shared.openDocument(withContentsOf: url, display: true) } catch
+                {
                     let failure = error as NSError
                     if failure.domain != NSCocoaErrorDomain || failure.code != NSUserCancelledError {
                         NSApp.presentError(error)
@@ -500,7 +500,10 @@ final class DocumentTabStrip: NSView {
         func mark(_ view: DocumentTabStateMark) -> (frame: NSRect, toolTip: String?, isAccessibilityElement: Bool)? {
             view.isHidden
                 ? nil
-                : (view.frame, view.toolTip, view.isAccessibilityElement() || view.cell?.isAccessibilityElement() == true)
+                : (
+                    view.frame, view.toolTip,
+                    view.isAccessibilityElement() || view.cell?.isAccessibilityElement() == true
+                )
         }
         return TabAppearance(
             title: c.select.title, toolTip: c.select.toolTip, accessibilityLabel: c.select.accessibilityLabel(),
@@ -687,7 +690,9 @@ final class DocumentTabStrip: NSView {
                     }
                     self.layoutTabs(revealingActive: false)
                 }
-                for (mark, symbol) in [(c.outsideChange, "exclamationmark.triangle"), (c.comparison, "arrow.left.arrow.right")] {
+                for (mark, symbol) in [
+                    (c.outsideChange, "exclamationmark.triangle"), (c.comparison, "arrow.left.arrow.right")
+                ] {
                     mark.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
                     mark.imageScaling = .scaleProportionallyDown
                     // DS-60, DS-61: the label colour, so the symbol has the contrast of the title.
@@ -803,10 +808,11 @@ final class DocumentTabStrip: NSView {
     /// Each tab, then its mark while it is shown, then its close button, in the order they are
     /// drawn. A mark that is hidden is not offered: the tab's own actions and menu reach it.
     private func publishAccessibilityChildren() {
-        let accessible = order.flatMap { id -> [NSView] in
-            guard let c = controls[id] else { return [] }
-            return c.mode.isHidden ? [c.select, c.close] : [c.select, c.mode, c.close]
-        } + (overflow.isHidden ? [] : [overflow])
+        let accessible =
+            order.flatMap { id -> [NSView] in
+                guard let c = controls[id] else { return [] }
+                return c.mode.isHidden ? [c.select, c.close] : [c.select, c.mode, c.close]
+            } + (overflow.isHidden ? [] : [overflow])
         setAccessibilityChildren(accessible)
         setAccessibilityChildrenInNavigationOrder(accessible)
     }
@@ -837,7 +843,8 @@ final class DocumentTabStrip: NSView {
     /// a 130-point tab shows close and at most one of its two symbols, the outside change first;
     /// in Preview or Both it shows close, the eye and the outside change only. What is not drawn
     /// is still in the tab's tooltip, its accessibility label and the list of open tabs.
-    private func layoutMarks(_ c: Controls, id: TabID, width: CGFloat) -> (title: CGFloat, eye: Bool, comparison: Bool) {
+    private func layoutMarks(_ c: Controls, id: TabID, width: CGFloat) -> (title: CGFloat, eye: Bool, comparison: Bool)
+    {
         var title = width - 48
         var eye = c.viewMode != nil && c.viewMode != .source
         if eye { title -= 32 }
@@ -1089,7 +1096,8 @@ final class DocumentTabStrip: NSView {
         let empty = isEmptyStrip(convert(event.locationInWindow, from: nil))
         emptyPair =
             empty && event.clickCount == 2
-            && emptyFirstPress.map { event.timestamp >= $0 && event.timestamp - $0 <= NSEvent.doubleClickInterval } == true
+            && emptyFirstPress.map { event.timestamp >= $0 && event.timestamp - $0 <= NSEvent.doubleClickInterval }
+                == true
         emptyFirstPress = empty && event.clickCount == 1 ? event.timestamp : nil
         // The group still takes the click, which focuses it.
         super.mouseDown(with: event)

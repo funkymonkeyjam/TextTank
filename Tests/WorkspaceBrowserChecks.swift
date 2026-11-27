@@ -65,9 +65,10 @@ import os
                 && shown.filter { $0.title == "beta-recent.txt" }.map(\.accessory) == ["Recent"],
             "an open document is not listed again as the recent file it also is")
         check(
-            !shown.contains { $0.title == "gamma-gone.txt" } && controller.store.state.recent.contains {
-                $0.lastPathComponent == "gamma-gone.txt"
-            },
+            !shown.contains { $0.title == "gamma-gone.txt" }
+                && controller.store.state.recent.contains {
+                    $0.lastPathComponent == "gamma-gone.txt"
+                },
             "a recent file that no longer exists is not listed")
         let untitledRow = shown.first { $0.title == untitledName }
         check(
@@ -123,7 +124,8 @@ import os
                     && host.presentations.count == tabsBefore,
                 "an open document in another group is selected there, not opened again")
             check(
-                controller.quickOpenDocuments().first { $0.name == "alpha-open.txt" }?.group == host.groupLabel(.second),
+                controller.quickOpenDocuments().first { $0.name == "alpha-open.txt" }?.group
+                    == host.groupLabel(.second),
                 "with two groups an open document's row names its group")
             // A file opened by another spelling of its path while its document is in the other
             // group: the same file under a different case, and through a linked folder.
@@ -145,7 +147,8 @@ import os
                     reopened === alpha && host.active?.document === alpha && host.model.focusedGroup == .second
                         && NSDocumentController.shared.documents.count == openBefore
                         && host.presentations.count == tabsBefore,
-                    "opening a file whose document is in the other group selects it there: \(url.lastPathComponent) in \(url.deletingLastPathComponent().lastPathComponent)")
+                    "opening a file whose document is in the other group selects it there: \(url.lastPathComponent) in \(url.deletingLastPathComponent().lastPathComponent)"
+                )
             }
             _ = host.setEditorLayout(.single)
         } else {
@@ -214,7 +217,8 @@ import os
         spelled.add(recent: [alias, shouted, betaURL])
         check(
             spelled.entries.map { "\($0.kind.label) \($0.title)" } == ["Open alpha-open.txt", "Recent beta-recent.txt"],
-            "a link to an open file and its name in another case are the open document, not more rows: \(spelled.entries.map(\.title))")
+            "a link to an open file and its name in another case are the open document, not more rows: \(spelled.entries.map(\.title))"
+        )
         var linkedFirst = QuickOpenList()
         linkedFirst.add(recent: [alias, alphaURL] + (caseBlind ? [shouted] : []))
         check(
@@ -256,7 +260,8 @@ import os
         check(
             refused == [.unknown, .found(betaFile), .unknown] && ProcessInfo.processInfo.systemUptime - began < 2
                 && small.busy == 1,
-            "a volume that let a deadline pass is not known at once and gets no more threads; other paths are answered: \(refused)")
+            "a volume that let a deadline pass is not known at once and gets no more threads; other paths are answered: \(refused)"
+        )
 
         // Five paths on a volume that has stopped answering, with local ones, over repeated uses.
         let alive = OSAllocatedUnfairLock(initialState: false)
@@ -278,7 +283,8 @@ import os
         var uses: [String] = []
         for use in 1...6 {
             began = ProcessInfo.processInfo.systemUptime
-            let outcomes = QuickOpenList.outcomes(recent: mixed, deadline: began + (use == 1 ? 0.4 : 5), pool: shared, probe: flaky)
+            let outcomes = QuickOpenList.outcomes(
+                recent: mixed, deadline: began + (use == 1 ? 0.4 : 5), pool: shared, probe: flaky)
             var list = QuickOpenList()
             list.add(recent: mixed, outcomes: outcomes)
             let took = ProcessInfo.processInfo.systemUptime - began
@@ -290,7 +296,8 @@ import os
         }
         check(
             uses.isEmpty,
-            "with a volume that never answers, local recent files are listed on every use and two threads at most are left with it: \(uses)")
+            "with a volume that never answers, local recent files are listed on every use and two threads at most are left with it: \(uses)"
+        )
         // After the wait the volume would be tried again, but its questions are still out: no more threads.
         spinUntil("the volume's wait to pass") { ProcessInfo.processInfo.systemUptime - began > 2.6 }
         _ = shared.outcomes(for: mixed, until: ProcessInfo.processInfo.systemUptime + 0.3, probe: flaky)
@@ -360,7 +367,8 @@ import os
             open: { _, _ in true }, addFolder: {})
         let boundedPanel = try requireValue(stuck.panel, "fixture: Quick Open with a bound on recent files")
         spinUntil("Quick Open to stop waiting for the recent file at its bound") { stuck.isComplete }
-        let boundedStatus = descendants(boundedPanel.form.window.contentView!).compactMap { $0 as? NSTextField }
+        let boundedStatus =
+            descendants(boundedPanel.form.window.contentView!).compactMap { $0 as? NSTextField }
             .first { $0.identifier?.rawValue == WorkspaceQuickOpen.statusIdentifier }?.stringValue ?? ""
         check(
             boundedPanel.displayedRows.map { "\($0.accessory) \($0.title)" } == [
@@ -423,13 +431,16 @@ import os
         check(
             !EditorSettings.protectedShortcuts.contains("O") && !EditorCommand.defaultShortcuts.values.contains("O")
                 && !EditorCommand.allCases.contains {
-                    $0.extendedMenuShortcut.map { $0.key.lowercased() == "o" && $0.modifiers == [.command, .shift] } == true
+                    $0.extendedMenuShortcut.map { $0.key.lowercased() == "o" && $0.modifiers == [.command, .shift] }
+                        == true
                 },
             "the key is not a protected or default editor shortcut, so saved shortcuts still load")
         var settings = EditorSettings()
         settings.setShortcut("O", for: EditorCommand.upper.rawValue)
         (item as? DefaultShortcutItem)?.applyEditorOverrides(settings)
-        check(item.keyEquivalent.isEmpty, "a person's own Shift-Command-O shortcut is kept, and Quick Open gives up the key")
+        check(
+            item.keyEquivalent.isEmpty,
+            "a person's own Shift-Command-O shortcut is kept, and Quick Open gives up the key")
         (item as? DefaultShortcutItem)?.applyEditorOverrides(EditorSettings())
         check(item.keyEquivalent == "O", "fixture: the default shortcut returns")
     }
@@ -473,17 +484,23 @@ import os
             let quickFiles = ["QuickCapture.swift", "QuarterlyChart.txt", "Notes.md"]
             for name in quickFiles { try Data(name.utf8).write(to: quickNested.appendingPathComponent(name)) }
             let quick = WorkspaceFileIndex.scan([folder, quickRoot, quickNested])
-            check(quick.files.count == Set(quick.files.map { $0.url.standardizedFileURL.absoluteString }).count
-                && !quick.files.contains { $0.url == fifo || $0.url == symlink || $0.url.lastPathComponent.hasPrefix(".") },
+            check(
+                quick.files.count == Set(quick.files.map { $0.url.standardizedFileURL.absoluteString }).count
+                    && !quick.files.contains {
+                        $0.url == fifo || $0.url == symlink || $0.url.lastPathComponent.hasPrefix(".")
+                    },
                 "Quick Open deduplicates overlapping workspace roots and skips hidden, linked and special entries")
-            check(quick.matches("qckcp").map { $0.url.lastPathComponent } == ["QuickCapture.swift"]
-                && quick.matches("QuarterlyChart.txt").first?.url.lastPathComponent == "QuarterlyChart.txt",
+            check(
+                quick.matches("qckcp").map { $0.url.lastPathComponent } == ["QuickCapture.swift"]
+                    && quick.matches("QuarterlyChart.txt").first?.url.lastPathComponent == "QuarterlyChart.txt",
                 "Quick Open fuzzy name matching and exact basename ranking")
-            check(WorkspaceFileIndex.scan([quickRoot], limit: 1).limited
-                && WorkspaceFileIndex.scan([quickRoot], directoryLimit: 1).limited
-                && WorkspaceFileIndex.scan([quickRoot], deadline: 0).limited,
+            check(
+                WorkspaceFileIndex.scan([quickRoot], limit: 1).limited
+                    && WorkspaceFileIndex.scan([quickRoot], directoryLimit: 1).limited
+                    && WorkspaceFileIndex.scan([quickRoot], deadline: 0).limited,
                 "file, directory and elapsed scan limits are observable")
-            check(quick.matches("NoSuchOwnedName").isEmpty && WorkspaceFileIndex.scan([]).files.isEmpty,
+            check(
+                quick.matches("NoSuchOwnedName").isEmpty && WorkspaceFileIndex.scan([]).files.isEmpty,
                 "a missing match and an empty workspace do not select a file")
             // F109: the limit applies to what is shown, after sorting; skipped entries do not use it up.
             let twoShown = try WorkspaceBrowserStore.list(folder, limit: 2)
@@ -772,7 +789,8 @@ import os
             try require(truncate(big.path, off_t(DocumentMonitor.maximumBytes) + 1) == 0, "fixture: sparse large file")
             let tooBig = DocumentMonitor.inspect(big, expected: freshDigest)
             check(
-                tooBig.status == .unavailable("The file is larger than 32 MiB, so its contents are not checked automatically.")
+                tooBig.status
+                    == .unavailable("The file is larger than 32 MiB, so its contents are not checked automatically.")
                     && !tooBig.readFile, "a file over the monitoring limit is reported without being read")
             try FileManager.default.removeItem(at: big)
             check(

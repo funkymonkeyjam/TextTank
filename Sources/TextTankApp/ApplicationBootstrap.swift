@@ -9,8 +9,9 @@ package enum TextTankApplication {
             }
             let file = URL(fileURLWithPath: CommandLine.arguments[2]).standardizedFileURL
             let support: URL
-            do { support = try AppStorage.makeTemporarySupportDirectory() }
-            catch { smokeFailure(error.localizedDescription) }
+            do { support = try AppStorage.makeTemporarySupportDirectory() } catch {
+                smokeFailure(error.localizedDescription)
+            }
             defer { try? FileManager.default.removeItem(at: support) }
             run(smokeFile: file) { error in smokeFailure(error.localizedDescription, cleanup: support) }
             return

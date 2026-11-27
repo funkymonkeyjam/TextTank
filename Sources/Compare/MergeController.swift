@@ -332,7 +332,8 @@ import EditorBridge
                     } else {
                         let bytes = try await UnifiedPatch.write(
                             original: a.snapshot, modified: b.snapshot,
-                            changes: p.changes, policy: allowance.patchPolicy, token: cancellation, hooks: hooks, raw: self.rawComparison)
+                            changes: p.changes, policy: allowance.patchPolicy, token: cancellation, hooks: hooks,
+                            raw: self.rawComparison)
                         try self.validate(comparison, p, stamp: stamp, job: job, a: a, b: b)
                         if command == .copyPatch {
                             guard let text = ReviewUTF8.text(bytes), Data(text.utf8) == bytes else {

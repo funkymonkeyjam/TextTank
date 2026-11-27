@@ -126,8 +126,9 @@ extension AppDelegate {
             representedObject: EditorCommand.selectAll.rawValue)
         edit.addItem(.separator())
         let lines = edit.addSubmenu(titled: "Lines")
-        for value: EditorCommand in [.duplicateLine, .deleteLine, .transposeLine, .moveLineUp, .moveLineDown, .joinLines]
-        { lines.addCommand(value) }
+        for value: EditorCommand in [
+            .duplicateLine, .deleteLine, .transposeLine, .moveLineUp, .moveLineDown, .joinLines
+        ] { lines.addCommand(value) }
         lines.addItem(.separator())
         for value: EditorTransform in [
             .sortAscending, .sortDescending, .sortCaseInsensitive, .sortLocalized, .sortLength

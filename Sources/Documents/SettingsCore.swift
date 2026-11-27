@@ -577,7 +577,8 @@ final package class SettingsStore {
         let accepted = try validated(result)
         try PrivateFileStore.prepareDirectory(url.deletingLastPathComponent())
         try PrivateFileStore.write(
-            result, to: url, maximumBytes: SizePolicy.standard.editorSettings, temporaryPrefix: ".settings-", beforeCommit: requireUnchanged)
+            result, to: url, maximumBytes: SizePolicy.standard.editorSettings, temporaryPrefix: ".settings-",
+            beforeCommit: requireUnchanged)
         diskBytes = result
         value = accepted
     }

@@ -181,19 +181,22 @@ extension DocumentChecks {
                     NSDocumentController.shared.documents.compactMap { $0 as? TextDocument }
                         .first { !previous.contains(ObjectIdentifier($0)) }, "owned untitled help")
                 defer { doc.close() }
-                check(doc.fileURL == nil && doc.displayName == item.title && !doc.isDocumentEdited
-                    && !doc.editor.modified && !doc.editor.readOnly && doc.editor.checkedUTF8Data == bytes,
+                check(
+                    doc.fileURL == nil && doc.displayName == item.title && !doc.isDocumentEdited
+                        && !doc.editor.modified && !doc.editor.readOnly && doc.editor.checkedUTF8Data == bytes,
                     "offline help has exact bundled text and a clean editable untitled identity")
                 check(doc.editor.wrap, "offline help opens wrapped so that its paragraphs are readable")
                 doc.editor.replaceSelection("sample edit")
                 check(doc.isDocumentEdited && doc.editor.checkedUTF8Data != bytes, "typing marks the help draft edited")
                 doc.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
-                check(try doc.editor.checkedUTF8Data == bytes && Data(contentsOf: source) == bytes,
+                check(
+                    try doc.editor.checkedUTF8Data == bytes && Data(contentsOf: source) == bytes,
                     "one Undo restores the original text and bundled help remains untouched")
             }
             let sample = "- green tea\n- milk"
             let bulletRule = AutomationDefinition.Step(kind: .removeListMarkers)
-            check(try AutomationDefinition.testRules([bulletRule], sample: sample) == "green tea\nmilk",
+            check(
+                try AutomationDefinition.testRules([bulletRule], sample: sample) == "green tea\nmilk",
                 "the welcome's worked example yields the documented result with the one rule it names")
             let welcome = try String(
                 contentsOf: TestPaths.resources.appendingPathComponent("TextTank-Welcome.txt"), encoding: .utf8)
@@ -208,7 +211,8 @@ extension DocumentChecks {
             let guide = try String(
                 contentsOf: TestPaths.resources.appendingPathComponent("TextTank-User-Guide.txt"), encoding: .utf8)
             check(
-                guide.contains("A new installation includes one automation, " + AutomationDefinition.remindersExample.name + ",")
+                guide.contains(
+                    "A new installation includes one automation, " + AutomationDefinition.remindersExample.name + ",")
                     && !guide.localizedCaseInsensitiveContains("recipe"),
                 "the user guide names the one automation a new installation has")
             // DS-D4: the help text names commands where the nine-menu bar lists them.
@@ -231,7 +235,8 @@ extension DocumentChecks {
             ].filter { help.contains($0) }
             check(
                 unlisted.isEmpty && unmentioned.isEmpty && former.isEmpty,
-                "the welcome and user guide name menu paths that exist (unlisted: \(unlisted); unmentioned: \(unmentioned); former: \(former))")
+                "the welcome and user guide name menu paths that exist (unlisted: \(unlisted); unmentioned: \(unmentioned); former: \(former))"
+            )
         }
 
         section("command discovery uses ordinary menu validation", #line) {
@@ -241,16 +246,23 @@ extension DocumentChecks {
             // A row shows the command's name, with its menu as secondary text; `path` is both.
             let titles = entries.map(\.path)
             check(Set(entries.map { $0.row.id }).count == entries.count, "palette row identities are unique")
-            check(titles.contains("Edit › Undo") && titles.contains("Tools › Automations › Run Automation…")
-                && titles.contains(where: { $0.hasPrefix("View › Syntax Highlighting › ") && $0.hasSuffix(" › Markdown") })
-                && titles.contains("Tools › Macros › Start Recording")
-                && titles.contains("View › Editor Groups › Editor Group Layout › Two Columns")
-                && titles.contains(where: { $0.hasPrefix("Tools › Run Commands › ") }),
-                "actual editor, language, saved automation chooser, macro, group and Run routes are discoverable at any depth")
+            check(
+                titles.contains("Edit › Undo") && titles.contains("Tools › Automations › Run Automation…")
+                    && titles.contains(where: {
+                        $0.hasPrefix("View › Syntax Highlighting › ") && $0.hasSuffix(" › Markdown")
+                    })
+                    && titles.contains("Tools › Macros › Start Recording")
+                    && titles.contains("View › Editor Groups › Editor Group Layout › Two Columns")
+                    && titles.contains(where: { $0.hasPrefix("Tools › Run Commands › ") }),
+                "actual editor, language, saved automation chooser, macro, group and Run routes are discoverable at any depth"
+            )
             // DS-D4: a person who types where a command used to be, or its old name, still finds it.
-            @MainActor func found(_ query: String) -> [String] { CommandDiscovery.matches(entries, query: query).map(\.path) }
+            @MainActor func found(_ query: String) -> [String] {
+                CommandDiscovery.matches(entries, query: query).map(\.path)
+            }
             let formerPlaces = [
-                ("Search Compare", "Compare › Compare Text…"), ("Encoding Reload", "File › Reload with Encoding › UTF-8…"),
+                ("Search Compare", "Compare › Compare Text…"),
+                ("Encoding Reload", "File › Reload with Encoding › UTF-8…"),
                 ("Reload as Windows-1252", "File › Reload with Encoding › Windows-1252…"),
                 ("Encoding Convert to UTF-16", "File › Convert to Encoding › UTF-16 LE with BOM"),
                 ("Macros Start Recording", "Tools › Macros › Start Recording"),
@@ -278,7 +290,8 @@ extension DocumentChecks {
             let unfound = formerPlaces.filter { !found($0.0).contains($0.1) }.map(\.0)
             check(unfound.isEmpty, "palette finds each command by its former menu or name: \(unfound)")
             check(
-                found("Language Markdown").count == 1 && found("Language Markdown").first?.hasSuffix(" › Markdown") == true,
+                found("Language Markdown").count == 1
+                    && found("Language Markdown").first?.hasSuffix(" › Markdown") == true,
                 "a language is found by the former Language menu, and only that one row")
             check(
                 found("lines sort").contains("Edit › Lines › Sort Lines Ascending")
@@ -293,8 +306,10 @@ extension DocumentChecks {
             @MainActor func detail(_ title: String) -> String? { entries.first { $0.path == title }?.scope }
             check(
                 detail("File › Quick Open…") == "Reads workspace state • Changes windows or tabs"
-                    && detail("Find › Function List…") == "Reads language profiles • Changes editor assistance or settings"
-                    && detail("Edit › Typing › Auto-Indent on Return") == "Reads typing settings • Changes them for every editor"
+                    && detail("Find › Function List…")
+                        == "Reads language profiles • Changes editor assistance or settings"
+                    && detail("Edit › Typing › Auto-Indent on Return")
+                        == "Reads typing settings • Changes them for every editor"
                     && detail("Tools › Run Commands › Configure Command…")
                         == "Reads or manages saved commands and process output"
                     && detail("Tools › Validate JSON") == "Active text, utility results or export"
@@ -350,15 +365,26 @@ extension DocumentChecks {
             check(
                 palette.perform(aliased, in: bar) && sessionDelegate.settings.value.autoIndentEnabled == autoIndent,
                 "fixture: Auto-Indent on Return is put back")
-            check(!titles.contains(where: { $0.contains(" › Services › ") || $0.contains(" › Reopen Recent File › ") || $0.hasSuffix(" › Command Palette…") }),
+            check(
+                !titles.contains(where: {
+                    $0.contains(" › Services › ") || $0.contains(" › Reopen Recent File › ")
+                        || $0.hasSuffix(" › Command Palette…")
+                }),
                 "system services and recursive palette invocation are omitted")
-            check(entries.contains { $0.item.action == NSSelectorFromString("runAction:") && $0.scope.hasPrefix("Reads ") && $0.scope.contains("Writes ") },
+            check(
+                entries.contains {
+                    $0.item.action == NSSelectorFromString("runAction:") && $0.scope.hasPrefix("Reads ")
+                        && $0.scope.contains("Writes ")
+                },
                 "saved workflows identify their actual input and output")
-            check(entries.contains {
-                $0.item.action == #selector(MacroController.playAgain) && $0.scope == "Reads recorded commands • Changes active editor"
-            }, "Play Again declares its recorded input and current editor destination")
+            check(
+                entries.contains {
+                    $0.item.action == #selector(MacroController.playAgain)
+                        && $0.scope == "Reads recorded commands • Changes active editor"
+                }, "Play Again declares its recorded input and current editor destination")
             let menu = NSMenu(), target = PaletteActionFixture(), other = PaletteActionFixture()
-            let item = NSMenuItem(title: "Owned action", action: #selector(PaletteActionFixture.selected(_:)), keyEquivalent: "")
+            let item = NSMenuItem(
+                title: "Owned action", action: #selector(PaletteActionFixture.selected(_:)), keyEquivalent: "")
             item.target = target
             menu.addItem(item)
             let row = try requireValue(palette.commands(in: menu).first, "private menu action")
@@ -366,9 +392,13 @@ extension DocumentChecks {
             check(!palette.perform(row, in: menu) && target.count == 0, "a command disabled after discovery cannot run")
             target.enabled = true
             item.target = other
-            check(!palette.perform(row, in: menu) && other.count == 0, "changed responder cannot receive an earlier selection")
+            check(
+                !palette.perform(row, in: menu) && other.count == 0,
+                "changed responder cannot receive an earlier selection")
             item.target = target
-            check(palette.perform(row, in: menu) && target.count == 1, "deliberate choice dispatches the actual menu action once")
+            check(
+                palette.perform(row, in: menu) && target.count == 1,
+                "deliberate choice dispatches the actual menu action once")
             menu.removeItem(item)
             check(!palette.perform(row, in: menu) && target.count == 1, "a removed command remains unavailable")
         }
@@ -389,7 +419,8 @@ extension DocumentChecks {
                 paths("sort").first == "Edit › Lines › Sort Lines Ascending"
                     && CommandDiscovery.rows(entries, matching: "sort").first?.title == "Sort Lines Ascending"
                     && CommandDiscovery.rows(entries, matching: "sort").first?.detail == "Edit › Lines",
-                "typing sort lists Sort Lines Ascending first, with its menu as secondary text: \(paths("sort").prefix(3))")
+                "typing sort lists Sort Lines Ascending first, with its menu as secondary text: \(paths("sort").prefix(3))"
+            )
             check(
                 CommandDiscovery.rank(name: "Quick Open…", query: " quick  OPEN ") == 0
                     && CommandDiscovery.rank(name: "Sort Lines Ascending", query: "sort") == 1
@@ -412,7 +443,8 @@ extension DocumentChecks {
             @MainActor func submenu(_ title: String, _ names: [String]) -> NSMenu {
                 let menu = NSMenu(title: title)
                 for name in names {
-                    let item = NSMenuItem(title: name, action: #selector(PaletteActionFixture.selected(_:)), keyEquivalent: "")
+                    let item = NSMenuItem(
+                        title: name, action: #selector(PaletteActionFixture.selected(_:)), keyEquivalent: "")
                     item.target = target
                     menu.addItem(item)
                 }
@@ -433,7 +465,8 @@ extension DocumentChecks {
             check(
                 names("sort") == ["Sort…", "Sort Later", "Sort Again", "Quick Sort Now", "Resort", "Apply"],
                 "exact, prefix in menu order, word prefix, inside the name, then the menu path alone: \(names("sort"))")
-            let againID = try identity("Sort Again"), applyID = try identity("Apply"), laterID = try identity("Sort Later")
+            let againID = try identity("Sort Again"), applyID = try identity("Apply"),
+                laterID = try identity("Sort Later")
             check(
                 names("sort", recent: [againID, applyID])
                     == ["Sort…", "Sort Again", "Sort Later", "Quick Sort Now", "Resort", "Apply"],
@@ -510,19 +543,23 @@ extension DocumentChecks {
                     && entries.allSatisfy { $0.row.accessory == (ControlPresentation.shortcut(of: $0.item) ?? "") },
                 "every palette row whose command has a key shows it, and no other row shows one")
             check(
-                key("File › Save") == "⌘S" && key("File › Save All") == "⌥⌘S" && key("View › Preview › Toggle Preview") == "⌃⌘V"
+                key("File › Save") == "⌘S" && key("File › Save All") == "⌥⌘S"
+                    && key("View › Preview › Toggle Preview") == "⌃⌘V"
                     && key("File › Quick Open…") == "⇧⌘O" && key("Window › Next Tab") == "⌃⇥"
                     && key("Edit › Undo") == "⌘Z" && key("Edit › Redo") == "⇧⌘Z"
                     && key("Find › Bookmarks › Toggle Bookmark") == functionKeyTwo
-                    && entries.first { $0.path == "View › Preview › Toggle Preview" }?.row.accessoryLabel == "Shortcut Control-Command-V",
-                "keys read as the menu bar draws them: \(["File › Save All", "Window › Next Tab", "Find › Bookmarks › Toggle Bookmark"].map { key($0) ?? "none" })")
+                    && entries.first { $0.path == "View › Preview › Toggle Preview" }?.row.accessoryLabel
+                        == "Shortcut Control-Command-V",
+                "keys read as the menu bar draws them: \(["File › Save All", "Window › Next Tab", "Find › Bookmarks › Toggle Bookmark"].map { key($0) ?? "none" })"
+            )
             let upper = EditorCommand.upper.rawValue
             let before = sessionDelegate.settings.value
             var custom = before
             custom.setShortcut("J", for: upper)
             try sessionDelegate.settings.save(custom)
             check(
-                palette.commands(in: bar).first { ($0.item.representedObject as? String) == upper }?.row.accessory == "⇧⌘J",
+                palette.commands(in: bar).first { ($0.item.representedObject as? String) == upper }?.row.accessory
+                    == "⇧⌘J",
                 "a shortcut assigned in Settings is the one the palette shows")
             try sessionDelegate.settings.save(before)
             // A default that yields: a person's own Shift-Command-O takes the key from Quick Open,
@@ -547,7 +584,8 @@ extension DocumentChecks {
             // A remembered command the menu bar no longer has: Close Split View became one toggle.
             let real = try requireValue(
                 entries.first { $0.path == "View › Split Tab View" }?.row.id, "palette row for View › Split Tab View")
-            let gone = ["View", "Close Split View", "closeSplitView:", "", "0"].map { "\($0.utf8.count):\($0)" }.joined()
+            let gone = ["View", "Close Split View", "closeSplitView:", "", "0"].map { "\($0.utf8.count):\($0)" }
+                .joined()
             let stale = folder.appendingPathComponent("stale.json")
             try JSONSerialization.data(withJSONObject: ["version": 1, "commands": [gone, real]]).write(to: stale)
             let stalePalette = CommandDiscovery(recentsURL: stale)
@@ -569,11 +607,14 @@ extension DocumentChecks {
                 let once = CommandDiscovery.matches(entries, query: query, recent: remembered).map(\.row.id)
                 return once != CommandDiscovery.matches(entries, query: query, recent: remembered).map(\.row.id)
                     || once != CommandDiscovery.matches(rebuilt, query: query, recent: remembered).map(\.row.id)
-                    || once != CommandDiscovery.matches(entries.reversed().reversed(), query: query, recent: remembered)
+                    || once
+                        != CommandDiscovery.matches(entries.reversed().reversed(), query: query, recent: remembered)
                         .map(\.row.id)
                     || Set(once).count != once.count
             }
-            check(unstable.isEmpty, "ranking is deterministic: the same commands give the same order every time: \(unstable)")
+            check(
+                unstable.isEmpty,
+                "ranking is deterministic: the same commands give the same order every time: \(unstable)")
 
             // The palette itself: the row that says nothing matched, and a retained query.
             FormPanel.visible.filter { $0.window.identifier?.rawValue == "command.palette" }.forEach { $0.close() }
@@ -1078,7 +1119,8 @@ extension DocumentChecks {
                 zoom.title == EditorCommand.zoomIn.title
                     && zoom.keyEquivalent == EditorCommand.zoomIn.defaultMenuShortcut
                     && controller.statusOptionsMenu("font") == nil && controller.statusOptionsMenu("bookmarks") == nil,
-                "DS20 the commands the status row used to list share catalog titles and fixed menu shortcuts in the menu bar")
+                "DS20 the commands the status row used to list share catalog titles and fixed menu shortcuts in the menu bar"
+            )
             let priorSettings = sessionDelegate.settings.value
             var shortcutSettings = priorSettings
             shortcutSettings.setShortcut("k", for: "bookmarkNext")
@@ -1728,8 +1770,11 @@ extension DocumentChecks {
             }
             let replaceMatchButton = try requireValue(
                 barButtons.first { $0.title == "Replace" }, "fixture: Replace button")
-            let nextMatchButton = try requireValue(descendants(try requireValue(controller.findBar, "fixture: Find bar"))
-                .compactMap { $0 as? NSSegmentedControl }.first { $0.segmentCount == 2 && $0.label(forSegment: 1) == "Next" },
+            let nextMatchButton = try requireValue(
+                descendants(try requireValue(controller.findBar, "fixture: Find bar"))
+                    .compactMap { $0 as? NSSegmentedControl }.first {
+                        $0.segmentCount == 2 && $0.label(forSegment: 1) == "Next"
+                    },
                 "fixture: Previous and Next segmented control")
             controller.controlTextDidChange(
                 Notification(name: NSControl.textDidChangeNotification, object: controller.findField))
@@ -1938,18 +1983,21 @@ extension DocumentChecks {
             }
             let previousWord = controller.findOptions.isOn(.wholeWord)
             controller.findOptions.toggle(.wholeWord)
-            check((sessionDelegate.searchController.wordButton.state == .on) == controller.findOptions.isOn(.wholeWord)
+            check(
+                (sessionDelegate.searchController.wordButton.state == .on) == controller.findOptions.isOn(.wholeWord)
                     && controller.findOptions.isOn(.wholeWord) != previousWord,
-                  "a whole-word change uses the same option in the bar and Find window")
+                "a whole-word change uses the same option in the bar and Find window")
             controller.findOptions.toggle(.wholeWord)
             let priorMode = sessionDelegate.searchController.mode.indexOfSelectedItem
             if !controller.findOptions.isOn(.regex) { controller.findOptions.toggle(.regex) }
             controller.findField.stringValue = "["
-            controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: controller.findField))
+            controller.controlTextDidChange(
+                Notification(name: NSControl.textDidChangeNotification, object: controller.findField))
             spinUntil("inline regex error") { !controller.findCount.stringValue.isEmpty }
-            check(controller.findOptions.isOn(.regex) && controller.findCount.stringValue != "No matches"
+            check(
+                controller.findOptions.isOn(.regex) && controller.findCount.stringValue != "No matches"
                     && !controller.findCount.stringValue.contains(" of ") && NSApp.modalWindow == nil,
-                  "a malformed bar regex reports its error in the Find bar")
+                "a malformed bar regex reports its error in the Find bar")
             // DS-45: the field is marked and the whole message is shown, not a clipped count label.
             let malformed = try requireValue(controller.findField.toolTip, "the Find field carries the message")
             check(
@@ -1971,21 +2019,26 @@ extension DocumentChecks {
                 !controller.findFieldIsMarked && controller.findField.accessibilityHelp() == nil,
                 "correcting the expression removes the mark")
             sessionDelegate.searchController.mode.selectItem(at: priorMode)
-            _ = NSApp.sendAction(sessionDelegate.searchController.mode.action!, to: sessionDelegate.searchController,
-                                 from: sessionDelegate.searchController.mode)
+            _ = NSApp.sendAction(
+                sessionDelegate.searchController.mode.action!, to: sessionDelegate.searchController,
+                from: sessionDelegate.searchController.mode)
             controller.hideFind(nil)
             _ = document.editor.setSelectionAnchor(3, caret: 1)
             controller.showFind(nil)
             controller.findField.stringValue = "alpha"
-            controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: controller.findField))
+            controller.controlTextDidChange(
+                Notification(name: NSControl.textDidChangeNotification, object: controller.findField))
             spinUntil("inline count publication") { !controller.findCount.stringValue.isEmpty }
-            check(document.editor.selectedText.lowercased() == "alpha" && !controller.findCount.stringValue.isEmpty,
-                  "live Find publishes a native selection and its count")
-            check(NativeFixtureEnvironment.announcements.contains(controller.findCount.stringValue),
-                  "the live Find count is announced, not only shown (DS-36)")
+            check(
+                document.editor.selectedText.lowercased() == "alpha" && !controller.findCount.stringValue.isEmpty,
+                "live Find publishes a native selection and its count")
+            check(
+                NativeFixtureEnvironment.announcements.contains(controller.findCount.stringValue),
+                "the live Find count is announced, not only shown (DS-36)")
             controller.hideFind(nil)
-            check(document.editor.selectionAnchor == 3 && document.editor.selectionCaret == 1,
-                  "closing an uncommitted live Find restores the reversed opening selection")
+            check(
+                document.editor.selectionAnchor == 3 && document.editor.selectionCaret == 1,
+                "closing an uncommitted live Find restores the reversed opening selection")
             // V3, DS-35: one Find text and one replacement, live in the bar and the Find window.
             let oneFind = sessionDelegate.searchController
             let peerBar = try requireValue(plain.presentation, "fixture: another tab's find bar")
@@ -2161,7 +2214,8 @@ extension DocumentChecks {
                 try requireValue(capturedBar, "fixture: captured inline macro"), on: document.editor)
             check(
                 document.editor.text.utf8.elementsEqual(replayedText.utf8)
-                    && document.editor.selectionAnchor == replayedAnchor && document.editor.selectionCaret == replayedCaret,
+                    && document.editor.selectionAnchor == replayedAnchor
+                    && document.editor.selectionCaret == replayedCaret,
                 "captured bar search steps replay the exact document bytes and final selection")
             document.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(
@@ -2175,12 +2229,14 @@ extension DocumentChecks {
             allController.setReplaceRow(shown: true)
             allController.findField.stringValue = "x"
             allController.replaceField.stringValue = "yy"
-            allController.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: allController.findField))
+            allController.controlTextDidChange(
+                Notification(name: NSControl.textDidChangeNotification, object: allController.findField))
             allController.replaceAllButton.performClick(nil)
             spinUntil("bar Replace All to finish") { !allController.inlineSearchPending }
-            check(allDocument.editor.text == "yy yy yy" && allController.statusText.contains("Replaced 3 matches")
+            check(
+                allDocument.editor.text == "yy yy yy" && allController.statusText.contains("Replaced 3 matches")
                     && document.editor.text == beforeBarRecording,
-                  "bar Replace All counts changed matches and leaves the other open document alone")
+                "bar Replace All counts changed matches and leaves the other open document alone")
             allDocument.editor.executeCommand(TTEditorCommandIdentifier(rawValue: "undo"))
             check(allDocument.editor.text == "x x x", "one Undo restores every inline Replace All edit")
             allDocument.close()
@@ -2351,7 +2407,8 @@ extension DocumentChecks {
                 query: "colour", replacement: "", matches: 3, files: 2, folders: 1)
             check(
                 explanation.hasPrefix("Delete every match of “colour”: 3 matches in 2 files.")
-                    && explanation.contains("private recovery batch in TextTank Application Support") && explanation.contains("Undo in the editor does not")
+                    && explanation.contains("private recovery batch in TextTank Application Support")
+                    && explanation.contains("Undo in the editor does not")
                     && !explanation.contains("root"),
                 "the disk-replace prompt states the change, its size and that editor Undo does not reverse it")
             // N8: saving Settings carries a changed default only to views that still had the old one.

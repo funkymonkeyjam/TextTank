@@ -19,7 +19,8 @@ enum SettingsShortcutValidationChecks {
         commands: [
             "saveDocument:": .init(title: "File › Save", standard: MenuShortcut("s")),
             "saveCopy:": .init(title: "File › Save Copy…"),
-            "toggleDocumentPreview:": .init(title: "View › Toggle Preview", standard: MenuShortcut("v", [.control, .command]), yields: true)
+            "toggleDocumentPreview:": .init(
+                title: "View › Toggle Preview", standard: MenuShortcut("v", [.control, .command]), yields: true)
         ], fixed: [MenuShortcut("\u{f70c}", []).identity: "Tools › Macros › Start Recording"], isComplete: true,
         transientPrefixes: ["RunController.run:/"])
 
@@ -48,7 +49,8 @@ enum SettingsShortcutValidationChecks {
             ("cmd+`", .system, "system shortcut"), ("shift+cmd+`", .system, "system shortcut"),
             ("cmd+f", .system, "system shortcut"), ("cmd+g", .system, "system shortcut"),
             ("shift+cmd+g", .system, "system shortcut"), ("cmd+e", .system, "system shortcut"),
-            ("cmd+z", .editing, "Text fields in every window"), ("shift+cmd+z", .editing, "Text fields in every window"),
+            ("cmd+z", .editing, "Text fields in every window"),
+            ("shift+cmd+z", .editing, "Text fields in every window"),
             ("cmd+x", .editing, "Text fields in every window"), ("cmd+c", .editing, "Text fields in every window"),
             ("cmd+v", .editing, "Text fields in every window"), ("cmd+a", .editing, "Text fields in every window"),
             ("cmd+tab", .macOS, "macOS acts on it before TextTank receives it"),
@@ -73,11 +75,16 @@ enum SettingsShortcutValidationChecks {
         // Every other key with Command or Control is accepted by the policy, whatever has it now.
         let reserved = Set(ShortcutPolicy.reserved.map { $0.shortcut.identity })
         var refused: [String] = []
-        let keys = "abcdefghijklmnopqrstuvwxyz0123456789`-=[]\\;',./ ".map(String.init)
-            + ["\t", "\r", "\u{1b}", "\u{8}", "\u{7f}", "\u{f700}", "\u{f701}", "\u{f702}", "\u{f703}", "\u{f704}", "\u{f70f}"]
+        let keys =
+            "abcdefghijklmnopqrstuvwxyz0123456789`-=[]\\;',./ ".map(String.init)
+            + [
+                "\t", "\r", "\u{1b}", "\u{8}", "\u{7f}", "\u{f700}", "\u{f701}", "\u{f702}", "\u{f703}", "\u{f704}",
+                "\u{f70f}"
+            ]
         let masks: [Set<MenuShortcut.Modifier>] = [
             [.command], [.control], [.command, .shift], [.command, .option], [.command, .control], [.control, .option],
-            [.control, .shift], [.command, .option, .shift], [.command, .control, .shift], [.command, .control, .option],
+            [.control, .shift], [.command, .option, .shift], [.command, .control, .shift],
+            [.command, .control, .option],
             [.control, .option, .shift], [.command, .control, .option, .shift]
         ]
         for key in keys {
@@ -90,9 +97,11 @@ enum SettingsShortcutValidationChecks {
         }
         check(refused.isEmpty, "V8 no other key with Command or Control is refused: \(refused)")
         check(
-            ShortcutPolicy.refusal(for: MenuShortcut(" ")) == nil && ShortcutPolicy.refusal(for: MenuShortcut("s")) == nil
+            ShortcutPolicy.refusal(for: MenuShortcut(" ")) == nil
+                && ShortcutPolicy.refusal(for: MenuShortcut("s")) == nil
                 && ShortcutPolicy.refusal(for: MenuShortcut("n")) == nil,
-            "V8 Command-Space and the keys of ordinary commands (Save, New) are not reserved: they are conflicts to answer")
+            "V8 Command-Space and the keys of ordinary commands (Save, New) are not reserved: they are conflicts to answer"
+        )
     }
 
     /// Item 2. What TextTank at main 1222b98 does with a settings file, copied from that commit's
@@ -197,11 +206,13 @@ enum SettingsShortcutValidationChecks {
         var observed = 0, symbols = 0
         let cases: [(String, NSEvent.ModifierFlags)] = [
             ("\u{3}", .command), ("\r", .command), ("\u{7f}", .command), ("\u{8}", .command), ("\u{f728}", .command),
-            ("\t", .control), ("\u{19}", [.control, .shift]), ("\u{1b}", [.command, .option]), (" ", [.control, .command]),
+            ("\t", .control), ("\u{19}", [.control, .shift]), ("\u{1b}", [.command, .option]),
+            (" ", [.control, .command]),
             ("\u{f700}", [.control, .command]), ("\u{f701}", .command), ("\u{f702}", .option), ("\u{f703}", .command),
             ("\u{f729}", .command), ("\u{f72b}", .command), ("\u{f72c}", .command), ("\u{f72d}", .command),
             ("\u{f704}", []), ("\u{f705}", .shift), ("\u{f70c}", []), ("\u{f70f}", [.command, .shift]), (",", .command),
-            ("k", .command), ("K", .command), ("k", [.control, .option]), ("?", .command), ("+", .command), ("0", .command),
+            ("k", .command), ("K", .command), ("k", [.control, .option]), ("?", .command), ("+", .command),
+            ("0", .command),
             ("/", [.command, .shift, .option, .control])
         ]
         for (key, mask) in cases {
@@ -226,11 +237,13 @@ enum SettingsShortcutValidationChecks {
             }
             check(
                 shortcut.displayText == drawn + symbol,
-                "V8 \(shortcut.spokenText) is shown as the menu item itself draws it: \(shortcut.displayText) and \(drawn + symbol)")
+                "V8 \(shortcut.spokenText) is shown as the menu item itself draws it: \(shortcut.displayText) and \(drawn + symbol)"
+            )
         }
         check(
             observed == cases.count && symbols >= 20,
-            "V8 the menu items' own rendering was observable for every case (\(observed) of \(cases.count), \(symbols) drawn as symbols)")
+            "V8 the menu items' own rendering was observable for every case (\(observed) of \(cases.count), \(symbols) drawn as symbols)"
+        )
         // What a key is called aloud is not something a menu item publishes; the names are the
         // ones on the keys.
         check(
@@ -250,7 +263,8 @@ enum SettingsShortcutValidationChecks {
             (MenuShortcut(up, [.control, .command]), "ctrl+cmd+up", "⌃⌘↑", "Control-Command-Up Arrow"),
             (MenuShortcut("s", [.command, .option]), "opt+cmd+s", "⌥⌘S", "Option-Command-S"),
             (MenuShortcut(" ", [.control, .command]), "ctrl+cmd+space", "⌃⌘Space", "Control-Command-Space"),
-            (MenuShortcut("+"), "+", "⌘+", "Command-Plus"), (MenuShortcut("/", [.control]), "ctrl+/", "⌃/", "Control-/"),
+            (MenuShortcut("+"), "+", "⌘+", "Command-Plus"),
+            (MenuShortcut("/", [.control]), "ctrl+/", "⌃/", "Control-/"),
             (MenuShortcut("\t", [.control, .shift]), "ctrl+shift+tab", "⌃⇧⇥", "Control-Shift-Tab")
         ]
         for (shortcut, text, display, spoken) in forms {
@@ -259,7 +273,8 @@ enum SettingsShortcutValidationChecks {
                 "V8 \(spoken) is stored as “\(text)” and read back as the same key: \(shortcut.storedText)")
             check(
                 shortcut.displayText == display && shortcut.spokenText == spoken,
-                "V8 \(text) is shown as \(display) and said as \(spoken): \(shortcut.displayText) / \(shortcut.spokenText)")
+                "V8 \(text) is shown as \(display) and said as \(spoken): \(shortcut.displayText) / \(shortcut.spokenText)"
+            )
         }
         check(
             MenuShortcut(storedText: "k") == MenuShortcut("k") && MenuShortcut(storedText: "K") == MenuShortcut("K")
@@ -270,9 +285,12 @@ enum SettingsShortcutValidationChecks {
             MenuShortcut("+").identity == MenuShortcut("=", [.command, .shift]).identity
                 && MenuShortcut("{").identity == MenuShortcut("[", [.command, .shift]).identity
                 && MenuShortcut("=").identity != MenuShortcut("+").identity
-                && MenuShortcut("\u{19}", [.control, .shift]).identity == MenuShortcut("\t", [.control, .shift]).identity,
+                && MenuShortcut("\u{19}", [.control, .shift]).identity
+                    == MenuShortcut("\t", [.control, .shift]).identity,
             "V8 two spellings of one key press compare as the same shortcut")
-        for text in ["", "ctrl+", "+k", "cmd+cmd+k", "hyper+k", "ctrl+K", "kk", "ctrl+opt", "ctrl + k", "f21", "ctrl+f0"] {
+        for text in [
+            "", "ctrl+", "+k", "cmd+cmd+k", "hyper+k", "ctrl+K", "kk", "ctrl+opt", "ctrl + k", "f21", "ctrl+f0"
+        ] {
             check(MenuShortcut(storedText: text) == nil, "V8 “\(text)” is not a shortcut")
         }
     }
@@ -281,7 +299,8 @@ enum SettingsShortcutValidationChecks {
         func refused(_ shortcut: MenuShortcut, _ kind: ShortcutRefusal.Kind, _ words: String) {
             let refusal = ShortcutPolicy.refusal(for: shortcut)
             check(
-                refusal?.kind == kind && refusal?.reason.contains(words) == true && refusal?.reason.hasSuffix(".") == true,
+                refusal?.kind == kind && refusal?.reason.contains(words) == true
+                    && refusal?.reason.hasSuffix(".") == true,
                 "V8 \(shortcut.spokenText) is refused with a stated reason: \(refusal?.reason ?? "accepted")")
         }
         refused(MenuShortcut("k", []), .typesText, "would type text")
@@ -336,8 +355,11 @@ enum SettingsShortcutValidationChecks {
         let stillOne = try Data(contentsOf: url)
         check(
             store.value.version == 1 && String(decoding: stillOne, as: UTF8.self).contains("\"version\":1")
-                && stillOne == Data(String(decoding: golden, as: UTF8.self).replacingOccurrences(
-                    of: "\"tabWidth\":8", with: "\"tabWidth\":3").utf8),
+                && stillOne
+                    == Data(
+                        String(decoding: golden, as: UTF8.self).replacingOccurrences(
+                            of: "\"tabWidth\":8", with: "\"tabWidth\":3"
+                        ).utf8),
             "V8 a change that needs nothing new leaves the file at version 1, byte for byte elsewhere")
 
         var assigned = store.value
@@ -353,7 +375,9 @@ enum SettingsShortcutValidationChecks {
             JSONSerialization.jsonObject(with: stillOne) as? [String: Any], "V8 fixture: version-1 file")
         check(
             upgraded["version"] as? Int == 2
-                && upgraded["shortcuts"] as? [String: String] == ["joinLines": "J", "upper": "u", "saveCopy:": "ctrl+opt+k"]
+                && upgraded["shortcuts"] as? [String: String] == [
+                    "joinLines": "J", "upper": "u", "saveCopy:": "ctrl+opt+k"
+                ]
                 && Set(upgraded.keys) == Set(before.keys)
                 && upgraded.keys.filter { $0 != "version" && $0 != "shortcuts" }.allSatisfy {
                     (upgraded[$0] as? NSObject) == (before[$0] as? NSObject)
@@ -426,7 +450,8 @@ enum SettingsShortcutValidationChecks {
             try store.loadError == nil && store.value.tabWidth == 9
                 && store.value.shortcuts == ["deleteLine": "ctrl+opt+k", "RunController.run:/7A0B": "ctrl+opt+r"]
                 && (try Data(contentsOf: url)) == bytes,
-            "V8 usable entries and unrelated settings stay in use and the file is not rewritten: \(store.value.shortcuts)")
+            "V8 usable entries and unrelated settings stay in use and the file is not rewritten: \(store.value.shortcuts)"
+        )
         check(
             reasons == [
                 "retired:": .unavailable, "upper": .reserved, "lower": .invalid, "joinLines": .invalid,
@@ -484,7 +509,8 @@ enum SettingsShortcutValidationChecks {
         deferred.shortcutContext = context
         deferred.reconcileShortcuts(reservedKeys: [])
         check(
-            deferred.ignoredShortcutBindings.map(\.command) == ["retired:"] && deferred.value.shortcuts["retired:"] == nil,
+            deferred.ignoredShortcutBindings.map(\.command) == ["retired:"]
+                && deferred.value.shortcuts["retired:"] == nil,
             "V8 reconciling with the menu bar reports a command that is no longer available")
     }
 
@@ -514,8 +540,10 @@ enum SettingsShortcutValidationChecks {
         let failure = clash.shortcutValidationFailure(context: context)
         check(
             failure?.command == "saveCopy:"
-                && failure?.error == .shortcutClash(first: "File › Save", second: "File › Save Copy…", shortcut: "Command-S")
-                && failure?.localizedDescription.contains("Command-S is assigned to both “File › Save” and “File › Save Copy…”")
+                && failure?.error
+                    == .shortcutClash(first: "File › Save", second: "File › Save Copy…", shortcut: "Command-S")
+                && failure?.localizedDescription.contains(
+                    "Command-S is assigned to both “File › Save” and “File › Save Copy…”")
                     == true,
             "V8 saving two commands on one key is refused, naming both: \(failure?.localizedDescription ?? "accepted")")
         var replaced = settings
@@ -639,12 +667,14 @@ enum SettingsShortcutValidationChecks {
             try fixture.pane.press("?", [.shift], code: 44)
             let typed = fixture.pane.message.stringValue
             check(
-                typed == "? would type text instead of running a command. Add Command or Control, or use a function key."
+                typed
+                    == "? would type text instead of running a command. Add Command or Control, or use a function key."
                     && fixture.refusal(upper, now: "no shortcut")
                     && NativeFixtureEnvironment.announcements.contains(typed),
                 "DS45 invalid: a key that would type text is refused in words on the selected command: \(typed)")
             check(
-                try fixture.window.firstResponder === fixture.pane.recorder && fixture.pane.recorder.title == "Record Shortcut"
+                try fixture.window.firstResponder === fixture.pane.recorder
+                    && fixture.pane.recorder.title == "Record Shortcut"
                     && fixture.pane.text(try fixture.pane.row(upper), 1).isEmpty,
                 "DS45 invalid: the recorder is marked and keeps the keyboard, and the command still shows no key")
             try fixture.pane.press("u", [.option], code: 32)
@@ -675,7 +705,8 @@ enum SettingsShortcutValidationChecks {
                 check(
                     fixture.pane.message.stringValue.hasPrefix(words) && fixture.refusal(upper, now: "no shortcut")
                         && fixture.window.firstResponder === fixture.pane.recorder,
-                    "DS45 reserved: the key is refused with its reason, on the recorder, which keeps the keyboard: \(fixture.pane.message.stringValue)")
+                    "DS45 reserved: the key is refused with its reason, on the recorder, which keeps the keyboard: \(fixture.pane.message.stringValue)"
+                )
             }
             check(
                 fixture.bytes == original && fixture.accepted == 0,
@@ -709,7 +740,8 @@ enum SettingsShortcutValidationChecks {
                 question
                     == "Command-K is already used by “\(delete)”. Replace gives it to “\(upper)” and leaves “\(delete)” without a shortcut. Cancel changes nothing."
                     && fixture.refusal(upper, now: "no shortcut"),
-                "DS45 duplicate: the question names both commands and marks the recorder of the selected one: \(question)")
+                "DS45 duplicate: the question names both commands and marks the recorder of the selected one: \(question)"
+            )
             check(
                 try holder.text == "Custom · Has the key in question" && holder.label == holder.text
                     && holder.help
@@ -753,7 +785,8 @@ enum SettingsShortcutValidationChecks {
             let original = try requireValue(fixture.bytes, "V8 fixture: saved settings")
             try fixture.choose(duplicate, searching: "duplicate line")
             check(
-                fixture.pane.recorder.title == "⌘J" && fixture.pane.recorder.accessibilityValue() as? String == "Command-J",
+                fixture.pane.recorder.title == "⌘J"
+                    && fixture.pane.recorder.accessibilityValue() as? String == "Command-J",
                 "DS45 restored-default fixture: Duplicate Line shows its custom key")
             try fixture.pane.button("default").performClick(nil)
             let holder = try fixture.status(upper)
@@ -761,9 +794,11 @@ enum SettingsShortcutValidationChecks {
                 try fixture.pane.message.stringValue.hasPrefix("Command-D is already used by “\(upper)”.")
                     && fixture.pane.selectedTitle == duplicate
                     && fixture.pane.recorder.accessibilityHelp() == fixture.pane.message.stringValue
-                    && holder.text == "Custom · Has the key in question" && holder.help?.hasPrefix("“\(upper)” has Command-D") == true
+                    && holder.text == "Custom · Has the key in question"
+                    && holder.help?.hasPrefix("“\(upper)” has Command-D") == true
                     && fixture.window.firstResponder === (try fixture.pane.button("cancel")),
-                "DS45 restored-default: Use Default names the command that now has the default key: \(fixture.pane.message.stringValue)")
+                "DS45 restored-default: Use Default names the command that now has the default key: \(fixture.pane.message.stringValue)"
+            )
             try fixture.pane.button("cancel").performClick(nil)
             check(
                 try fixture.bytes == original && fixture.accepted == 0 && fixture.controller.value == initial
@@ -818,7 +853,8 @@ enum SettingsShortcutValidationChecks {
             check(
                 try fixture.accepted == 2 && fixture.shortcuts == ["deleteLine": ""]
                     && pane.text(try pane.row(duplicate), 1) == "⌘D" && pane.text(try pane.row(delete), 1).isEmpty,
-                "DS45 implicit-default: Use Default gives the key back with one more write and the other command has none")
+                "DS45 implicit-default: Use Default gives the key back with one more write and the other command has none"
+            )
             try pane.select(delete)
             try pane.button("default").performClick(nil)
             check(
@@ -833,7 +869,8 @@ enum SettingsShortcutValidationChecks {
             let raw =
                 #"{"version":1,"tabWidth":4,"useTabs":true,"wrap":false,"appearance":"system","shortcuts":{"upper":"q","lower":"u"}}"#
             let fixture = try PaneFixture("ignored", root: root, raw: raw)
-            let issue = try requireValue(fixture.controller.ignoredShortcutBindings.first, "V8 fixture: an ignored binding")
+            let issue = try requireValue(
+                fixture.controller.ignoredShortcutBindings.first, "V8 fixture: an ignored binding")
             let status = try fixture.status(upper)
             check(
                 fixture.controller.ignoredShortcutBindings.map(\.command) == ["upper"]
@@ -851,7 +888,8 @@ enum SettingsShortcutValidationChecks {
                     == "Use Repair Settings to back up the original file before changing these settings."
                     && fixture.refusal(upper, now: "no shortcut") && fixture.bytes == Data(raw.utf8)
                     && fixture.accepted == 0,
-                "DS45 nothing is changed around an ignored binding until it is repaired, and the recorder says so: \(fixture.pane.message.stringValue)")
+                "DS45 nothing is changed around an ignored binding until it is repaired, and the recorder says so: \(fixture.pane.message.stringValue)"
+            )
             try fixture.close()
             check(fixture.bytes == Data(raw.utf8), "DS45 Close leaves the file with the ignored binding byte for byte")
         }

@@ -300,7 +300,8 @@ private final class SettingsKeyEquivalents: NSView {
     }
 }
 
-@MainActor private final class LiveSettingsForm: NSObject, NSTextFieldDelegate, NSWindowDelegate, NSFontChanging,
+@MainActor
+private final class LiveSettingsForm: NSObject, NSTextFieldDelegate, NSWindowDelegate, NSFontChanging,
     NSToolbarDelegate, NSSearchFieldDelegate
 {
     /// Every pane has this content width; only the Shortcuts list can be made larger.
@@ -540,7 +541,8 @@ private final class SettingsKeyEquivalents: NSView {
 
         // Editing
         addRow(
-            "settings.width", .editing, "Tab width", keywords: ["indent", "indentation", "spaces", "columns", "tab size"],
+            "settings.width", .editing, "Tab width",
+            keywords: ["indent", "indentation", "spaces", "columns", "tab size"],
             views: numberViews("Tab width", width, widthStepper, identifier: "settings.width", range: 1...32),
             differs: { $0.tabWidth != standard.tabWidth },
             reset: { [unowned self] in
@@ -592,8 +594,10 @@ private final class SettingsKeyEquivalents: NSView {
             reset: { [unowned self] in try self.write { $0.fontName = nil } })
         if let notice = owner.value.unavailableFontNotice { addNote(notice, to: .appearance) }
         addRow(
-            "settings.font.size", .appearance, "Font size (points)", keywords: ["text size", "typeface", "larger", "smaller"],
-            views: numberViews("Font size (points)", size, sizeStepper, identifier: "settings.font.size", range: 6...72),
+            "settings.font.size", .appearance, "Font size (points)",
+            keywords: ["text size", "typeface", "larger", "smaller"],
+            views: numberViews(
+                "Font size (points)", size, sizeStepper, identifier: "settings.font.size", range: 6...72),
             differs: { $0.basePointSize != standard.basePointSize },
             reset: { [unowned self] in
                 try self.write { $0.fontSize = nil }
@@ -611,7 +615,8 @@ private final class SettingsKeyEquivalents: NSView {
             "settings.indentGuides", .appearance, "Show indentation guides", keywords: ["indent", "vertical lines"],
             \.indentGuides, default: standard.indentGuidesEnabled)
         toggleRow(
-            "settings.currentLineHighlight", .appearance, "Highlight current line", keywords: ["caret", "cursor", "row"],
+            "settings.currentLineHighlight", .appearance, "Highlight current line",
+            keywords: ["caret", "cursor", "row"],
             \.currentLineHighlight, default: standard.currentLineHighlightEnabled)
         toggleRow(
             "settings.braceHighlight", .appearance, "Highlight matching braces",
@@ -722,7 +727,8 @@ private final class SettingsKeyEquivalents: NSView {
         previewOpenMode.action = #selector(selectPreviewOpenMode(_:))
         previewOpenMode.toolTip = Strings.text(
             "settings.preview.openIn.help",
-            "What a document of this format shows when you open it. Tabs that are already open, and tabs reopened from the last session, keep what they show.")
+            "What a document of this format shows when you open it. Tabs that are already open, and tabs reopened from the last session, keep what they show."
+        )
         let formatTitle = Strings.text("settings.preview.format", "Preview format")
         let openTitle = Strings.text("settings.preview.openIn", "Open in")
         let openCaption = caption(openTitle, for: previewOpenMode, identifier: "settings.preview.openIn")
@@ -1168,7 +1174,8 @@ private final class SettingsKeyEquivalents: NSView {
     }
     @objc private func selectPreviewFormat(_ sender: NSPopUpButton) { showPreviewOpenMode(owner.value) }
     @objc private func selectPreviewOpenMode(_ sender: NSPopUpButton) {
-        guard form.acceptsActions, let mode = ControlPresentation.selectedID(sender).flatMap(DocumentViewMode.init(rawValue:))
+        guard form.acceptsActions,
+            let mode = ControlPresentation.selectedID(sender).flatMap(DocumentViewMode.init(rawValue:))
         else { return }
         let format = selectedPreviewFormat, previous = owner.value
         do {

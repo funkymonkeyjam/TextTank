@@ -29,10 +29,15 @@ import CryptoKit
     static func main() async {
         await Checks.run("ReviewCoreChecks") {
             let reviewBoundary = Data(repeating: 97, count: 8 * 1024 * 1024)
-            check(try snapshot(reviewBoundary).bytes == reviewBoundary, "the full historical review input remains admissible")
-            rejects("one extra input byte exceeds the common review ceiling", where: {
-                ($0 as? ReviewRejection) == .budgetExceeded
-            }) { _ = try snapshot(reviewBoundary + Data([98])) }
+            check(
+                try snapshot(reviewBoundary).bytes == reviewBoundary,
+                "the full historical review input remains admissible")
+            rejects(
+                "one extra input byte exceeds the common review ceiling",
+                where: {
+                    ($0 as? ReviewRejection) == .budgetExceeded
+                }
+            ) { _ = try snapshot(reviewBoundary + Data([98])) }
             let doc = DocumentID()
             let target = DocumentTarget(
                 documentID: doc, revision: 7, loadEpoch: 2, byteLength: 6,
@@ -308,13 +313,17 @@ import CryptoKit
                 ReviewPreflight.validate(tooMany, current: many.bytes, target: manyTarget) == .failure(.budgetExceeded),
                 "F0 count10001 rejects before payload")
             let hard = SizePolicy.standard.reviewText
-            check(try ReviewApplyPolicy(maximumExpectedBytes: hard).maximumExpectedBytes == hard,
-                  "the exact review ceiling can be requested explicitly")
+            check(
+                try ReviewApplyPolicy(maximumExpectedBytes: hard).maximumExpectedBytes == hard,
+                "the exact review ceiling can be requested explicitly")
             for invalid in [-1, hard + 1, Int.max] {
-                rejects("invalid expected-byte policy is rejected at construction", where: { $0 is ReviewPolicyError }) {
+                rejects("invalid expected-byte policy is rejected at construction", where: { $0 is ReviewPolicyError })
+                {
                     _ = try ReviewApplyPolicy(maximumExpectedBytes: invalid)
                 }
-                rejects("invalid replacement-byte policy is rejected at construction", where: { $0 is ReviewPolicyError }) {
+                rejects(
+                    "invalid replacement-byte policy is rejected at construction", where: { $0 is ReviewPolicyError }
+                ) {
                     _ = try ReviewApplyPolicy(maximumReplacementBytes: invalid)
                 }
                 rejects("invalid result-byte policy is rejected at construction", where: { $0 is ReviewPolicyError }) {

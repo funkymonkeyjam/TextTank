@@ -8,7 +8,8 @@ package enum AppStorage {
     package enum Location: String {
         case settings = "Settings.json", macros = "Macros.json", automations = "Automations.json"
         case languages = "LanguageProfiles.json", commands = "RunCommands.json", workspace = "WorkspaceBrowser.json"
-        case recovery = "Recovery", reminders = "ReminderExports", pasteThroughChoice = "PasteThroughChoice.json", lastSession = "LastSession.json"
+        case recovery = "Recovery", reminders = "ReminderExports", pasteThroughChoice = "PasteThroughChoice.json",
+            lastSession = "LastSession.json"
         case find = "FindPreferences.json", folderSearch = "FolderSearchPreferences.json"
         case folderReplacements = "FolderReplacements"
         case commandRecents = "CommandPaletteRecents.json"
@@ -33,8 +34,9 @@ package enum AppStorage {
     static package func makeTemporarySupportDirectory() throws -> URL {
         let manager = FileManager.default
         let directory = manager.temporaryDirectory.appendingPathComponent("TextTank-smoke-" + UUID().uuidString)
-        try manager.createDirectory(at: directory, withIntermediateDirectories: false,
-                                    attributes: [.posixPermissions: 0o700])
+        try manager.createDirectory(
+            at: directory, withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700])
         guard setenv(overrideKey, directory.path, 1) == 0 else {
             let code = errno
             try? manager.removeItem(at: directory)
@@ -167,7 +169,8 @@ package enum PrivateFileError: LocalizedError {
         case .unsafeLocation:
             return "This action requires a regular local file in a real directory. The file was not changed."
         case .tooLarge(let limit, let url):
-            return "“\(url.lastPathComponent)” exceeds this action’s limit of \(SizePolicy.describe(limit)). Use less data or choose a smaller file."
+            return
+                "“\(url.lastPathComponent)” exceeds this action’s limit of \(SizePolicy.describe(limit)). Use less data or choose a smaller file."
         }
     }
 }
@@ -720,7 +723,9 @@ final package class LocalHistoryStore: @unchecked Sendable {
         completion: (@Sendable (Result<LocalHistoryChange, Error>) -> Void)? = nil
     ) {
         queue.async { [self] in
-            let result = Result { try recordNow(path, [(replaced, .replaced, replacedFormat), (bytes, .saved, format)]) }
+            let result = Result {
+                try recordNow(path, [(replaced, .replaced, replacedFormat), (bytes, .saved, format)])
+            }
             completion?(result)
         }
     }
@@ -873,7 +878,8 @@ final package class LocalHistoryStore: @unchecked Sendable {
                 digest = WorkspaceStore.fingerprint(bytes)
             }
             found.append(
-                .init(id: id, savedAt: written, byteCount: Int(info.st_size), sha256: digest, kind: .saved, format: nil))
+                .init(id: id, savedAt: written, byteCount: Int(info.st_size), sha256: digest, kind: .saved, format: nil)
+            )
         }
         found.sort { ($0.savedAt, $0.id.uuidString) < ($1.savedAt, $1.id.uuidString) }
         return Loaded(versions: found, manifestPath: nil, matches: false)
@@ -994,7 +1000,9 @@ final package class LocalHistoryStore: @unchecked Sendable {
             }
             let named = Set(entry.state.versions.map { $0.id.uuidString + ".bytes" })
             if let path = entry.state.manifestPath {
-                if changed { try publish(Manifest(version: 1, path: path, versions: entry.state.versions), in: entry.home) }
+                if changed {
+                    try publish(Manifest(version: 1, path: path, versions: entry.state.versions), in: entry.home)
+                }
                 for file in try FileManager.default.contentsOfDirectory(atPath: entry.home.path)
                 where file.hasSuffix(".bytes") && !named.contains(file) {
                     try FileManager.default.removeItem(at: entry.home.appendingPathComponent(file))

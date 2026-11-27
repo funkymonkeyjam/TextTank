@@ -236,7 +236,9 @@ package struct CompareProjection: Sendable {
                         continue
                     }
                     let retained = refinements.count * MemoryLayout<ReviewInlineSpan>.stride
-                    guard retained <= min(SizePolicy.standard.displayOutput, policy.maximumOutputBytes) - estimate - retainedSpanBytes
+                    guard
+                        retained <= min(SizePolicy.standard.displayOutput, policy.maximumOutputBytes) - estimate
+                            - retainedSpanBytes
                     else {
                         spans.append([])
                         limited = true

@@ -225,7 +225,9 @@ package final class FolderReplacementBatch {
             throw FileOperationFailure(errno, operation: "inspect folder replacement manifest", path: manifest.path)
         }
         guard info.st_size >= 0, info.st_size <= Self.maximumManifestBytes - bytes.count else {
-            throw FolderSearchError.invalidRequest("The private recovery manifest exceeds \(SizePolicy.describe(Self.maximumManifestBytes)). Use a smaller replacement batch.")
+            throw FolderSearchError.invalidRequest(
+                "The private recovery manifest exceeds \(SizePolicy.describe(Self.maximumManifestBytes)). Use a smaller replacement batch."
+            )
         }
         do {
             try FolderReplacement.write(bytes, to: stream, path: manifest.path)

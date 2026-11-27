@@ -111,7 +111,8 @@ package enum DocumentActionError: LocalizedError, CustomNSError {
                 "“\(url.path)” is now a symbolic link or its folder was replaced, so TextTank will not read or overwrite it in place. Your editor contents are preserved; use Save As to keep them."
         case .multipleSelections:
             return "This command works on a single selection. Collapse multiple selections and try again."
-        case .selectionTooLarge: return "Select at most \(SizePolicy.describe(SizePolicy.standard.editorTransform)) for this command."
+        case .selectionTooLarge:
+            return "Select at most \(SizePolicy.describe(SizePolicy.standard.editorTransform)) for this command."
         case .changeRejected: return "The document could not be changed."
         case .replacementRejected: return "The replacement text could not be written. Nothing was changed."
         case .lineEndingsRejected: return "Line endings could not be converted. Nothing was changed."

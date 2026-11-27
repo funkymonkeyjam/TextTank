@@ -923,7 +923,8 @@ import Darwin
                     "removeListMarkers", "removeBlankLines", "sortLines", "deduplicateLines", "replaceLiteral",
                     "removeLinesEqualTo", "removeLinesContaining", "removeLinesStartingWith", "trimWhitespace",
                     "removeMatchingLines", "removeMarkdownHeadings", "removeMarkdownFormatting",
-                    "removeCheckboxMarkers", "removeNoteReferences", "keepMarkedListRows", "sortLinesLocalized", "replaceRegex"
+                    "removeCheckboxMarkers", "removeNoteReferences", "keepMarkedListRows", "sortLinesLocalized",
+                    "replaceRegex"
                 ], "F188 every persisted step spelling and its order is unchanged")
             check(
                 AutomationDefinition.Step.Kind.clearLinesEqualTo.rawValue == "removeLinesEqualTo"

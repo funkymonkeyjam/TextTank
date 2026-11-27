@@ -157,7 +157,9 @@ import EditorBridge
         r1.dependencies.beforeQuitHold = { throw POSIXError(.EIO) }
         _ = r2.editor.replaceSelection(" more")
         let grown = try required(r2.editor.checkedUTF8Data)
-        check(second.applicationShouldTerminate(app) == .terminateLater, "V9 a failed flush defers the quit to the review")
+        check(
+            second.applicationShouldTerminate(app) == .terminateLater, "V9 a failed flush defers the quit to the review"
+        )
         guard spinUntil("V9 the review request after a failed flush", { requests == 1 }) else { return }
         check(
             r1.isDocumentEdited && !r1.isHeldForQuit && r1.lastRecoveryError != nil && r2.isHeldForQuit
@@ -176,7 +178,9 @@ import EditorBridge
         r1.dependencies.beforeQuitHold = nil
         _ = rf.editor.replaceSelection("DIRTY ")
         let fileCopy = rf.recoveryID
-        check(second.applicationShouldTerminate(app) == .terminateLater, "V9 an edited file still defers the quit to the review")
+        check(
+            second.applicationShouldTerminate(app) == .terminateLater,
+            "V9 an edited file still defers the quit to the review")
         guard spinUntil("V9 the review request for an edited file", { requests == 2 }) else { return }
         check(
             rf.isDocumentEdited && r1.isHeldForQuit && r2.isHeldForQuit
@@ -198,7 +202,9 @@ import EditorBridge
                 && r1.editor.checkedUTF8Data == bytes[0] && r1.editor.revision == revisionBefore
                 && places(second.workspaceWindow, names) == placed,
             "quit fix 1: the cancelled quit leaves that document open, registered and edited, with nothing changed")
-        check(second.applicationShouldTerminate(app) == .terminateLater, "quit fix 1: fixture: the quit is asked for again")
+        check(
+            second.applicationShouldTerminate(app) == .terminateLater,
+            "quit fix 1: fixture: the quit is asked for again")
         guard spinUntil("quit fix 1: the second review request", { requests == 3 }) else { return }
         r1.close()
         check(r1.isOpen && r1.isHeldForQuit, "quit fix 1: the held document is still open until the quit is certain")
@@ -211,7 +217,8 @@ import EditorBridge
                 && afterReview.files.count == 1,
             "V9 the reviewed quit keeps both untitled documents in the session")
         check(
-            try Data(store.load(id: ids[1]).text.utf8) == grown && Data(contentsOf: fileURL) == Data("file body\nsecond\n".utf8)
+            try Data(store.load(id: ids[1]).text.utf8) == grown
+                && Data(contentsOf: fileURL) == Data("file body\nsecond\n".utf8)
                 && (try? store.load(id: fileCopy)) == nil,
             "V9 the kept copy is the latest text; the file is unchanged and its discarded draft is gone")
 
@@ -237,7 +244,9 @@ import EditorBridge
         let askedID = asked.recoveryID
         third.requestUnsavedReview = { _ in requests += 1 }
         third.replyToTerminate = { replies.append($0) }
-        check(third.applicationShouldTerminate(app) == .terminateLater, "V9 off: an edited untitled document defers the quit")
+        check(
+            third.applicationShouldTerminate(app) == .terminateLater,
+            "V9 off: an edited untitled document defers the quit")
         guard spinUntil("V9 off: the review request", { requests == 4 }) else { return }
         check(asked.isDocumentEdited && !asked.isHeldForQuit, "V9 off: the review asks about the untitled document")
         third.reviewed(controller, didReviewAll: true, contextInfo: nil)
@@ -302,7 +311,9 @@ import EditorBridge
         // Fix round 1, finding 5: a held document that is saved under a name before it closes is
         // a file. Its recovery copy must not bring it back as a second, untitled tab.
         let named = try requireValue(document(extraID), "quit fix 5: fixture: the third untitled document")
-        check(named.isHeldForQuit && (try? store.load(id: extraID)) != nil, "quit fix 5: fixture: it is held, with a verified copy")
+        check(
+            named.isHeldForQuit && (try? store.load(id: extraID)) != nil,
+            "quit fix 5: fixture: it is held, with a verified copy")
         named.fileURL = root.appendingPathComponent("became-a-file.txt")
         fourth.reviewed(controller, didReviewAll: true, contextInfo: nil)
         let afterNaming = try required(LastSessionLayout.read(metadata))
@@ -364,7 +375,8 @@ import EditorBridge
             try store.load(id: keepID).text == "first text" && keep.editor.text == "first text changed"
                 && keep.isDocumentEdited && !keep.isHeldForQuit && !keep.quitCloseDeferred
                 && sixth.workspaceWindow.lastTabMessage == AppDelegate.unkeptTextNotice,
-            "R2 the earlier verified copy still exists, the newer text is in the open tab, and the status line says why")
+            "R2 the earlier verified copy still exists, the newer text is in the open tab, and the status line says why"
+        )
         keep.dependencies.beforeQuitHold = nil
         check(
             try sixth.applicationShouldTerminate(app) == .terminateNow && !keep.isOpen
@@ -408,17 +420,21 @@ import EditorBridge
         eighth.requestUnsavedReview = { _ in requests += 1 }
         eighth.replyToTerminate = { replies.append($0) }
         let askedBefore = requests
-        check(eighth.applicationShouldTerminate(app) == .terminateLater, "R3 fixture: the delegate's review is requested")
+        check(
+            eighth.applicationShouldTerminate(app) == .terminateLater, "R3 fixture: the delegate's review is requested")
         guard spinUntil("R3 the review request", { requests == askedBefore + 1 }) else { return }
         try require(heldLate.isHeldForQuit, "R3 fixture: the untitled document is held with a verified copy")
         controller.didReviewOpenDocuments?(false)
-        try require(!heldLate.isHeldForQuit && heldLate.isDocumentEdited, "R3 fixture: the holds were released during the review")
+        try require(
+            !heldLate.isHeldForQuit && heldLate.isDocumentEdited,
+            "R3 fixture: the holds were released during the review")
         heldLate.dependencies.beforeQuitHold = { throw POSIXError(.EIO) }
         eighth.reviewed(controller, didReviewAll: true, contextInfo: nil)
         check(
             replies.last == false && heldLate.isOpen && dirty.isOpen && controller.documents.contains(heldLate)
                 && controller.documents.contains(dirty) && heldLate.isDocumentEdited && dirty.isDocumentEdited,
-            "R3 a late accepted review does not close an edited untitled document that is not kept: the quit is refused")
+            "R3 a late accepted review does not close an edited untitled document that is not kept: the quit is refused"
+        )
         check(
             try store.load(id: lateID).text == "late text" && heldLate.editor.text == "late text"
                 && eighth.workspaceWindow.lastTabMessage == AppDelegate.unkeptTextNotice,

@@ -375,7 +375,8 @@ extension DocumentChecks {
             opened[0].flushRecovery()
             let firstWrite = try TextDocument.recovery.load(id: named.id)
             check(
-                opened[0].lastRecoveryError == nil && firstWrite.revision > 41 && firstWrite.originalURL == named.originalURL
+                opened[0].lastRecoveryError == nil && firstWrite.revision > 41
+                    && firstWrite.originalURL == named.originalURL
                     && opened[0].fileURL == nil
                     && firstWrite.text == namedText && firstWrite.format == namedFormat,
                 "first flush advances the revision and keeps the original association on an unsaved recovered document"
@@ -395,7 +396,8 @@ extension DocumentChecks {
             let emptyOpened = try sessionDelegate.openRecovered([emptyNamed])
             let emptyWrite = try TextDocument.recovery.load(id: emptyNamed.id)
             check(
-                emptyOpened[0].lastRecoveryError == nil && emptyWrite.revision > 9 && emptyWrite.originalURL == emptyNamed.originalURL
+                emptyOpened[0].lastRecoveryError == nil && emptyWrite.revision > 9
+                    && emptyWrite.originalURL == emptyNamed.originalURL
                     && emptyOpened[0].fileURL == nil && emptyWrite.text.isEmpty
                     && emptyOpened[0].isDocumentEdited,
                 "an empty named snapshot is rewritten at a later revision on recovery, not rejected as stale")
@@ -1070,7 +1072,8 @@ extension DocumentChecks {
                 selectAllItem?.0 == "Edit > Select All" && selectAllItem?.1.keyEquivalent == "a",
                 "DB-R3 Select All is reachable in the menu bar: \(selectAllItem?.0 ?? "missing")")
             check(
-                listed.first { $0.1.action == #selector(EditorWindowController.goToLine(_:)) }?.0 == "Find > Go to Line…"
+                listed.first { $0.1.action == #selector(EditorWindowController.goToLine(_:)) }?.0
+                    == "Find > Go to Line…"
                     && listed.first { $0.1.action == #selector(EditorWindowController.toggleWrap(_:)) }?.0
                         == "View > Wrap Lines"
                     && listed.first { $0.1.representedObject as? String == "zoomIn" }?.0.hasPrefix("View > ") == true
@@ -1087,7 +1090,8 @@ extension DocumentChecks {
                     && controller.statusOptionsMenu("indent")?.items.contains {
                         $0.representedObject as? String == "spaces"
                     } == true,
-                "DB-R3 Clear Selection and the document's indentation are in no menu of the bar and stay in their status fields")
+                "DB-R3 Clear Selection and the document's indentation are in no menu of the bar and stay in their status fields"
+            )
             let menuSnapshot = snapshot(bar)
             var chords = Set<String>(), conflicts: [String] = []
             for (path, item) in walk(bar, "") where !item.keyEquivalent.isEmpty {
@@ -1144,18 +1148,18 @@ extension DocumentChecks {
             let deliberatelyRemoved: [[String: String]] = [
                 [
                     "action": "pasteAction:", "object": retiredRecipeAutomation, "key": "", "modifiers": "1048576",
-                    "target": "explicit",
+                    "target": "explicit"
                 ],
                 [
                     "action": "runAction:", "object": retiredRecipeAutomation, "key": "", "modifiers": "1572864",
-                    "target": "explicit",
-                ],
+                    "target": "explicit"
+                ]
             ]
             // Added with the nine-menu bar: the Source, Preview and Both views of a document.
             let deliberatelyAdded: [[String: String]] = ["source", "preview", "both"].map {
                 [
                     "action": "setDocumentViewMode:", "object": $0, "key": "", "modifiers": "1048576",
-                    "target": "responder",
+                    "target": "responder"
                 ]
             }
             // Added on 23 November 2026: View > Toggle Preview, Control-Command-V since the owner's
@@ -1164,7 +1168,7 @@ extension DocumentChecks {
             let togglePreviewAdded: [[String: String]] = [
                 [
                     "action": "toggleDocumentPreview:", "object": "", "key": "v", "modifiers": "1310720",
-                    "target": "responder",
+                    "target": "responder"
                 ]
             ]
             // Given a key on 23 November 2026: File > Quick Open… is the same command with a default
@@ -1180,19 +1184,19 @@ extension DocumentChecks {
             let localHistoryAdded: [[String: String]] = [
                 [
                     "action": "compareWithEarlierVersion:", "object": "", "key": "", "modifiers": "1048576",
-                    "target": "responder",
+                    "target": "responder"
                 ],
                 [
                     "action": "clearLocalHistory:", "object": "", "key": "", "modifiers": "1048576",
-                    "target": "explicit",
-                ],
+                    "target": "explicit"
+                ]
             ]
             // Added on 23 November 2026 (DS-73): Window > Move Focus > Move Focus to Next Area and
             // Move Focus to Previous Area, F6 and Shift-F6, each listed once more as a hidden item
             // for its second key, Option-Command-` and Shift-Option-Command-`. Nothing was removed.
             let moveFocusAdded: [[String: String]] = [
                 ("moveFocusToNextArea:", "\u{f709}", "0"), ("moveFocusToPreviousArea:", "\u{f709}", "131072"),
-                ("moveFocusToNextArea:", "`", "1572864"), ("moveFocusToPreviousArea:", "~", "1572864"),
+                ("moveFocusToNextArea:", "`", "1572864"), ("moveFocusToPreviousArea:", "~", "1572864")
             ].map { ["action": $0.0, "object": "", "key": $0.1, "modifiers": $0.2, "target": "explicit"] }
             // Merged on 23 November 2026 (DS-D13): View > Close Split View has no row of its own.
             // View > Split Tab View is the one toggle that splits and closes; `closeSplit:` is
@@ -1205,13 +1209,13 @@ extension DocumentChecks {
             let viewRegroupAdded: [[String: String]] = [
                 [
                     "action": "toggleSyncPreviewScrolling:", "object": "", "key": "", "modifiers": "1048576",
-                    "target": "responder",
+                    "target": "responder"
                 ],
                 ["action": "toggleChangeBars:", "object": "", "key": "", "modifiers": "1048576", "target": "explicit"],
                 [
                     "action": "toggleCenteredColumn:", "object": "", "key": "", "modifiers": "1048576",
-                    "target": "explicit",
-                ],
+                    "target": "explicit"
+                ]
             ]
             // Added on 23 November 2026: View > Syntax Highlighting > Choose Language…, the
             // filterable chooser the status bar's language field also opens. Nothing was removed.
@@ -1233,11 +1237,12 @@ extension DocumentChecks {
                 formerCommands.count == 338
                     && removedRowsInFixture == deliberatelyRemoved.count + quickOpenWithoutKey.count
                         + closeSplitMerged.count,
-                "DS-D4 the fixture lists all 338 commands of the fourteen-menu bar, the two rows of the retired recipe automation and Close Split View's row among them")
+                "DS-D4 the fixture lists all 338 commands of the fourteen-menu bar, the two rows of the retired recipe automation and Close Split View's row among them"
+            )
             if !check(
                 current == accounted.sorted(),
-                "DS-D4 every command of the fourteen-menu bar is listed exactly once more in the nine-menu bar, apart from the removals named")
-            {
+                "DS-D4 every command of the fourteen-menu bar is listed exactly once more in the nine-menu bar, apart from the removals named"
+            ) {
                 func show(_ id: String) -> String { id.replacingOccurrences(of: "\u{1F}", with: "|") }
                 var missing = accounted, extra = current
                 for id in current { if let index = missing.firstIndex(of: id) { missing.remove(at: index) } }
@@ -1316,7 +1321,9 @@ extension DocumentChecks {
                 unknown.isEmpty && expectedCommands.count >= 40 && commands.sorted() == expectedCommands,
                 "every editor command menu item names a transform or a command the bridge dispatches")
             {
-                print("NOTE unknown command names: \(unknown); missing: \(Set(expectedCommands).subtracting(commands).sorted()); extra: \(Set(commands).subtracting(expectedCommands).sorted()); actual/expected counts: \(commands.count)/\(expectedCommands.count)")
+                print(
+                    "NOTE unknown command names: \(unknown); missing: \(Set(expectedCommands).subtracting(commands).sorted()); extra: \(Set(commands).subtracting(expectedCommands).sorted()); actual/expected counts: \(commands.count)/\(expectedCommands.count)"
+                )
             }
             check(
                 Set(commands.filter { $0.hasPrefix("transform.") }.map { String($0.dropFirst(10)) })

@@ -48,11 +48,14 @@ import EditorBridge
         try await Task.detached {
             // The same bounded descriptor-anchored no-follow reader, retaining its actual
             // opened-file identity even when unsettled metadata cannot stand in for bytes.
-            let captured = try PrivateFileStore.readSample(url, maximumBytes: SizePolicy.standard.reviewText, parent: .selectedInput)
+            let captured = try PrivateFileStore.readSample(
+                url, maximumBytes: SizePolicy.standard.reviewText, parent: .selectedInput)
             let decoded =
                 try encoding.map { try FileCodec.decode(captured.data, encoding: $0) }
                 ?? FileCodec.decode(captured.data)
-            guard decoded.text.utf8.count <= SizePolicy.standard.reviewText else { throw ReviewRejection.budgetExceeded }
+            guard decoded.text.utf8.count <= SizePolicy.standard.reviewText else {
+                throw ReviewRejection.budgetExceeded
+            }
             return try TextSnapshot(
                 bytes: Data(decoded.text.utf8), source: .file(UUID()), label: url.lastPathComponent,
                 format: decoded.format, capturedFileIdentity: FileSignature(captured.before))

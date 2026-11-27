@@ -111,7 +111,11 @@ import UniformTypeIdentifiers
                     let saved: @MainActor (Error?) -> Void = { [weak self] error in
                         if let self, error == nil, self.isOpen, !self.isDocumentEdited { self.close() }
                     }
-                    if let save = commands.saveHandler { save(self, saved) } else { TabSaveReply.save(self, completion: saved) }
+                    if let save = commands.saveHandler {
+                        save(self, saved)
+                    } else {
+                        TabSaveReply.save(self, completion: saved)
+                    }
                 }
             }
             return
@@ -602,7 +606,8 @@ import UniformTypeIdentifiers
             throw DocumentActionError.unsavedChanges
         }
         let (bytes, sample) = try onDiskFile { try WorkspaceStore.readRegularFileSample($0, maximumBytes: Int.max) }
-        try loadFile(bytes, as: encoding, sample: sample, explicitEncoding: rememberEncoding ? encoding : revertEncoding)
+        try loadFile(
+            bytes, as: encoding, sample: sample, explicitEncoding: rememberEncoding ? encoding : revertEncoding)
         updateChangeCount(.changeCleared)
         flushRecovery()
     }
@@ -727,7 +732,8 @@ import UniformTypeIdentifiers
             status = "Saved"
         }
         if automaticRecoveryPaused {
-            status += " · Automatic recovery paused above \(SizePolicy.describe(SizePolicy.standard.automaticRecovery))."
+            status +=
+                " · Automatic recovery paused above \(SizePolicy.describe(SizePolicy.standard.automaticRecovery))."
                 + (shouldKeepRecoveryCopy ? " Save to keep changes." : "")
         }
         return externalFile.notice.map { status + " — " + $0 } ?? status
@@ -761,7 +767,9 @@ import UniformTypeIdentifiers
         let summary = error is PublishedFileSyncFailure ? "⚠︎ Recovery copy unconfirmed" : "⚠︎ Recovery copy not written"
         let paused = automaticRecoveryPaused
         let message =
-            (paused ? "Automatic recovery paused above \(SizePolicy.describe(SizePolicy.standard.automaticRecovery)). Save to keep changes. " : "")
+            (paused
+                ? "Automatic recovery paused above \(SizePolicy.describe(SizePolicy.standard.automaticRecovery)). Save to keep changes. "
+                : "")
             + summary + ": " + error.localizedDescription
         windowControllers.compactMap { $0 as? EditorWindowController }.forEach {
             $0.showRecoveryStatus(message, failed: true, failureSummary: paused ? "Recovery paused · Save" : summary)
@@ -931,27 +939,34 @@ import UniformTypeIdentifiers
     }
     /// Only a first open of a regular, large UTF-8 file uses a staged native document. Other
     /// formats and all existing editing sessions retain their exact ordinary read/reload paths.
-    func readInitialUTF8IfEligible(from url: URL, signature: FileSignature, ofType type: String,
-                                   isCancelled: () -> Bool = { false }) throws -> Bool {
+    func readInitialUTF8IfEligible(
+        from url: URL, signature: FileSignature, ofType type: String,
+        isCancelled: () -> Bool = { false }
+    ) throws -> Bool {
         guard signature.size >= SizePolicy.standard.streamedImportThreshold, signature.size <= Int32.max,
-              let contentType = UTType(type),
-              contentType.conforms(to: .plainText) || contentType == .json || contentType == .xml,
-              openEncoding == nil || openEncoding == .utf8,
-              !opened, !languageResolved, presentations.isEmpty, editor.byteLength == 0, editor.revision == 0,
-              !editor.readOnly else { return false }
+            let contentType = UTType(type),
+            contentType.conforms(to: .plainText) || contentType == .json || contentType == .xml,
+            openEncoding == nil || openEncoding == .utf8,
+            !opened, !languageResolved, presentations.isEmpty, editor.byteLength == 0, editor.revision == 0,
+            !editor.readOnly
+        else { return false }
         let stream = InitialFileStream(capacity: UInt(signature.size), detectsEncoding: openEncoding == nil)
         do {
-            let sample = try WorkspaceStore.readChunks(of: url, maximumBytes: Int.max, matching: signature,
-                                                       isCancelled: isCancelled) { bytes in
+            let sample = try WorkspaceStore.readChunks(
+                of: url, maximumBytes: Int.max, matching: signature,
+                isCancelled: isCancelled
+            ) { bytes in
                 try autoreleasepool { try stream.consume(Data(bytes)) }
             }
             try stream.finish()
             if isCancelled() { throw CancellationError() }
             guard !opened, !languageResolved, presentations.isEmpty, editor.revision == 0, editor.byteLength == 0,
-                  !editor.readOnly else { throw CocoaError(.userCancelled) }
+                !editor.readOnly
+            else { throw CocoaError(.userCancelled) }
             guard let loader = stream.loader else { throw CocoaError(.fileReadUnknown) }
-            try applyFile(.stream(loader, stream.lineEnding ?? .lf, stream.languageSample),
-                          format: .init(encoding: .utf8, bom: stream.bom), baseline: sample, explicitEncoding: openEncoding)
+            try applyFile(
+                .stream(loader, stream.lineEnding ?? .lf, stream.languageSample),
+                format: .init(encoding: .utf8, bom: stream.bom), baseline: sample, explicitEncoding: openEncoding)
             return true
         } catch InitialFileStream.OrdinaryRead.required {
             return false
@@ -1010,9 +1025,13 @@ import UniformTypeIdentifiers
                     return (cr ?? lf).map { data.startIndex + $0 }
                 }) {
                     let next = data.index(after: i)
-                    if data[i] == 10 { lineEnding = .lf }
-                    else if next == data.endIndex { pendingCR = true }
-                    else { lineEnding = data[next] == 10 ? .crlf : .cr }
+                    if data[i] == 10 {
+                        lineEnding = .lf
+                    } else if next == data.endIndex {
+                        pendingCR = true
+                    } else {
+                        lineEnding = data[next] == 10 ? .crlf : .cr
+                    }
                 }
             }
             guard !sampleComplete else { return }
@@ -1060,9 +1079,10 @@ import UniformTypeIdentifiers
     }
     private func readDataOnMain(from data: Data, ofType typeName: String) throws {
         do {
-            try loadFile(data, as: openEncoding,
-                         sample: capturedSample ?? FileSample(digest: WorkspaceStore.fingerprint(data), signature: nil),
-                         explicitEncoding: openEncoding)
+            try loadFile(
+                data, as: openEncoding,
+                sample: capturedSample ?? FileSample(digest: WorkspaceStore.fingerprint(data), signature: nil),
+                explicitEncoding: openEncoding)
         } catch FileCodecError.unsupportedUTF32 {
             // A UTF-16 LE file with a leading NUL shares this marker. Keep the explicit recovery offer.
             guard openEncoding == nil, let readingURL, data.starts(with: [0xFF, 0xFE, 0, 0]) else {
@@ -1211,8 +1231,10 @@ import UniformTypeIdentifiers
         }
     }
 
-    private func loadFile(_ source: Data, as selected: FileEncoding?, sample: @autoclosure () -> FileSample,
-                          explicitEncoding: FileEncoding?) throws {
+    private func loadFile(
+        _ source: Data, as selected: FileEncoding?, sample: @autoclosure () -> FileSample,
+        explicitEncoding: FileEncoding?
+    ) throws {
         let encoding = try selected ?? FileCodec.detectedEncoding(source)
         let content: FileContent, diskFormat: FileFormat
         if encoding == .utf8 {
@@ -1229,8 +1251,10 @@ import UniformTypeIdentifiers
         }
         try applyFile(content, format: diskFormat, baseline: sample(), explicitEncoding: explicitEncoding)
     }
-    private func applyFile(_ content: FileContent, format diskFormat: FileFormat, baseline: FileSample,
-                           explicitEncoding: FileEncoding?) throws {
+    private func applyFile(
+        _ content: FileContent, format diskFormat: FileFormat, baseline: FileSample,
+        explicitEncoding: FileEncoding?
+    ) throws {
         loading = true
         let locked = editor.readOnly
         if case let .stream(staged, _, _) = content {
@@ -1267,7 +1291,8 @@ import UniformTypeIdentifiers
         let languages = EditorServices.current?.languages
         let detected = languages?.detect(filename: fileURL?.lastPathComponent ?? "", text: content.languageSample)
         if editor.byteLength >= SizePolicy.standard.largeDocumentThreshold
-            || editor.hasLineLongerThan(UInt(SizePolicy.standard.largeLineThreshold)) {
+            || editor.hasLineLongerThan(UInt(SizePolicy.standard.largeLineThreshold))
+        {
             // A newly opened editor has no installed lexer. Keep the detected choice for the opt-in action.
             deferredLargeFileLanguage = detected ?? LanguageProfile.plainTextID
             editor.wrap = false
@@ -1689,7 +1714,9 @@ enum EditorCaptureError: LocalizedError, Equatable {
     /// Nil when Compare with Earlier Version can run for this document; otherwise why not.
     static func unavailableReason(for document: TextDocument) -> String? {
         if !isEnabled { return "Local history is turned off." }
-        if document.diskURL == nil { return "Save the document first. Earlier versions are kept each time a file is saved." }
+        if document.diskURL == nil {
+            return "Save the document first. Earlier versions are kept each time a file is saved."
+        }
         if EditorServices.current?.compare?.hasSavedSource(document) != true {
             return SizePolicy.standard.reviewTextNotice
         }
@@ -1732,7 +1759,8 @@ enum EditorCaptureError: LocalizedError, Equatable {
             var text =
                 "TextTank keeps \(Self.versions(all.versions)) of \(Self.files(all.files)), \(LocalHistory.size(all.bytes)) in all, as private copies on this Mac."
             if offersThisFile, let own, let name {
-                text += " “\(name)” accounts for \(Self.versions(own.versions)), \(LocalHistory.size(own.bytes)) of that."
+                text +=
+                    " “\(name)” accounts for \(Self.versions(own.versions)), \(LocalHistory.size(own.bytes)) of that."
             }
             return text
                 + " Clearing deletes those copies. Your files and open documents are not changed. This cannot be undone."
@@ -1743,7 +1771,8 @@ enum EditorCaptureError: LocalizedError, Equatable {
         }
     }
     /// A sheet on the workspace window, never an app-modal alert (DS-44). Replaced in checks.
-    static var confirmClear: (ClearPrompt, NSWindow, @escaping (ClearChoice) -> Void) -> Void = { prompt, window, reply in
+    static var confirmClear: (ClearPrompt, NSWindow, @escaping (ClearChoice) -> Void) -> Void = {
+        prompt, window, reply in
         let alert = TTAlert()
         alert.alertStyle = .warning
         alert.messageText = prompt.message

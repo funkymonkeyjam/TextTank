@@ -436,7 +436,9 @@ final class WorkspaceBrowserController: NSObject, NSOutlineViewDataSource, NSOut
         keyControls = [mode, outline, open, refresh, add, remove]
         // A closed loop: AppKit's own key-view walk can never leave the sidebar for a stale view.
         // Leaving is `moveKeyboard`, which resolves the text at the key press.
-        for (view, next) in zip(keyControls, Array(keyControls.dropFirst()) + [mode as NSView]) { view.nextKeyView = next }
+        for (view, next) in zip(keyControls, Array(keyControls.dropFirst()) + [mode as NSView]) {
+            view.nextKeyView = next
+        }
         let tab: (NSView, Bool) -> Bool = { [weak self] view, forward in
             self?.moveKeyboard(from: view, forward: forward) ?? false
         }

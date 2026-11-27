@@ -30,8 +30,9 @@ private final class PatchDeadlineClock: @unchecked Sendable {
     private let lock = NSLock()
     private var elapsed = 0.0
     var hooks: ReviewDiffHooks {
-        .init(checkpoint: { _, _ in self.lock.withLock { self.elapsed = 6 } },
-              clock: { self.lock.withLock { self.elapsed } })
+        .init(
+            checkpoint: { _, _ in self.lock.withLock { self.elapsed = 6 } },
+            clock: { self.lock.withLock { self.elapsed } })
     }
 }
 
@@ -61,8 +62,12 @@ private final class PatchDeadlineClock: @unchecked Sendable {
         defer { service.showWindows = showsWindows }
         let before = "old 雪\r\nkeep\r\nold\r\n", after = "new 雪\r\nkeep\r\nnew\r\n"
         let doc = DocumentFactory.makeUntitled(display: false, populate: { _ = $0.editor.loadDocumentText(before) })
-        let other = DocumentFactory.makeUntitled(display: false, populate: { _ = $0.editor.loadDocumentText("neighbor") })
-        defer { doc.close(); other.close() }
+        let other = DocumentFactory.makeUntitled(
+            display: false, populate: { _ = $0.editor.loadDocumentText("neighbor") })
+        defer {
+            doc.close()
+            other.close()
+        }
         var focused = doc.editor
         let automation = AutomationController(editorProvider: { focused }, newDocument: { _ in })
         automation.comparisonService = { service }
@@ -89,40 +94,50 @@ private final class PatchDeadlineClock: @unchecked Sendable {
         }
         doc.editor.resetUndoHistory()
         let review = try await openReview()
-        check(review.merge.destination == .original && review.modified?.snapshot.bytes == Data(after.utf8)
-              && review.original?.snapshot.bytes == Data(before.utf8), "saved workflow captured the original editor and exact transformed result")
+        check(
+            review.merge.destination == .original && review.modified?.snapshot.bytes == Data(after.utf8)
+                && review.original?.snapshot.bytes == Data(before.utf8),
+            "saved workflow captured the original editor and exact transformed result")
         let projection = try requireValue(review.projection, "completed automation diff")
-        check(review.merge.selectedBlocks == Set(projection.changes.blocks.indices) && review.merge.canPerform(.applySelected),
-              "the first presentation selects its changes and allows individual blocks to be unticked")
+        check(
+            review.merge.selectedBlocks == Set(projection.changes.blocks.indices)
+                && review.merge.canPerform(.applySelected),
+            "the first presentation selects its changes and allows individual blocks to be unticked")
         review.merge.applySelected()
         try await settle { !review.merge.isBusy && review.merge.lastOutcome == .applied }
-        check(Data(doc.editor.text.utf8) == Data(after.utf8) && other.editor.text == "neighbor",
-              "all selected changes target the captured document after focus changes")
+        check(
+            Data(doc.editor.text.utf8) == Data(after.utf8) && other.editor.text == "neighbor",
+            "all selected changes target the captured document after focus changes")
         _ = doc.editor.executeCommand(.init(rawValue: "undo"))
         check(Data(doc.editor.text.utf8) == Data(before.utf8), "one Undo restores exact original bytes")
         review.close()
         let cancel = try await openReview()
         cancel.close()
         check(Data(doc.editor.text.utf8) == Data(before.utf8), "closing an unapplied review preserves the editor")
-        check(doc.bulkReceipt?.before == Data(before.utf8) && doc.bulkReceipt?.after == Data(after.utf8),
-              "Applied merge retains the actual before and after snapshots on its destination")
+        check(
+            doc.bulkReceipt?.before == Data(before.utf8) && doc.bulkReceipt?.after == Data(after.utf8),
+            "Applied merge retains the actual before and after snapshots on its destination")
         let stale = try await openReview()
         stale.merge.perform(.selectAllChanges)
         _ = doc.editor.setSelectionAnchor(0, caret: 0)
         _ = doc.editor.replaceSelection("external ")
         stale.merge.applySelected()
         try await settle { !stale.merge.isBusy }
-        check(doc.editor.text == "external " + before && other.editor.text == "neighbor",
-              "stale automation output cannot overwrite a later edit")
-        check(stale.modified?.canRetainForRefresh == false, "a frozen automation result cannot be rebound to a later document")
+        check(
+            doc.editor.text == "external " + before && other.editor.text == "neighbor",
+            "stale automation output cannot overwrite a later edit")
+        check(
+            stale.modified?.canRetainForRefresh == false,
+            "a frozen automation result cannot be rebound to a later document")
         stale.close()
         _ = doc.editor.loadDocumentText("outside old inside old remains")
         _ = doc.editor.setSelectionAnchor(8, caret: 11)
         workflow.input = .selection
         try automation.persistLibrary(AutomationLibrary(workflows: [workflow]))
         let selection = try await openReview()
-        check(selection.modified?.snapshot.bytes == Data("outside new inside old remains".utf8),
-              "selection output compares the projected whole document including unchanged text")
+        check(
+            selection.modified?.snapshot.bytes == Data("outside new inside old remains".utf8),
+            "selection output compares the projected whole document including unchanged text")
         selection.close()
         // A short captured selection avoids allocating a large editable preview control.
         let huge = "old" + String(repeating: "x", count: 8 * 1024 * 1024)
@@ -135,8 +150,11 @@ private final class PatchDeadlineClock: @unchecked Sendable {
             MainActor.assumeIsolated {
                 guard let window = NSApp.modalWindow, let content = window.contentView else { return }
                 let controls = previewViews(content)
-                let explanation = controls.compactMap({ $0 as? NSTextField }).contains(where: { $0.stringValue.contains("8 MiB per side") })
-                guard explanation || Date() > timeout, let cancel = controls.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Cancel" })
+                let explanation = controls.compactMap({ $0 as? NSTextField }).contains(where: {
+                    $0.stringValue.contains("8 MiB per side")
+                })
+                guard explanation || Date() > timeout,
+                    let cancel = controls.compactMap({ $0 as? NSButton }).first(where: { $0.title == "Cancel" })
                 else { return }
                 sawReason = explanation
                 cancel.performClick(nil)
@@ -145,8 +163,9 @@ private final class PatchDeadlineClock: @unchecked Sendable {
         RunLoop.main.add(dismiss, forMode: .modalPanel)
         defer { dismiss.invalidate() }
         try automation.runSavedAutomation(id: workflow.id)
-        check(sawReason && doc.editor.text == huge && service.windows.isEmpty,
-              "over-limit original describes the editable fallback and explicit Cancel preserves the captured editor")
+        check(
+            sawReason && doc.editor.text == huge && service.windows.isEmpty,
+            "over-limit original describes the editable fallback and explicit Cancel preserves the captured editor")
     }
 
     @MainActor static func mergeRecordingChecks(_ delegate: AppDelegate, withoutRegistration: Bool = false) async throws
@@ -230,7 +249,8 @@ private final class PatchDeadlineClock: @unchecked Sendable {
                 let handle = try requireValue(request.issue(edits: []), "Empty proposal")
                 var prepared = false
                 let outcome = handle.apply { editor in
-                    prepared = true; return prepare?(editor)
+                    prepared = true
+                    return prepare?(editor)
                 }
                 check(
                     outcome == .noChange && !prepared && handle.bridgeInvocations == 0
@@ -254,7 +274,9 @@ private final class PatchDeadlineClock: @unchecked Sendable {
                 let previousChange = target.onChange
                 var reentered = false, provisionallyMarked = false
                 defer {
-                    target.onChange = previousChange; target.readOnly = false; service.prepareSelectedChange = prepare
+                    target.onChange = previousChange
+                    target.readOnly = false
+                    service.prepareSelectedChange = prepare
                 }
                 if scenario == .reentrant {
                     target.onChange = {
@@ -273,8 +295,14 @@ private final class PatchDeadlineClock: @unchecked Sendable {
                         return finish
                     }
                 }
-                if scenario == .stale { try insertReturn(in: recordingView); comparison.pollSources() }
-                if scenario == .readOnly { target.readOnly = true; comparison.pollSources() }
+                if scenario == .stale {
+                    try insertReturn(in: recordingView)
+                    comparison.pollSources()
+                }
+                if scenario == .readOnly {
+                    target.readOnly = true
+                    comparison.pollSources()
+                }
                 check(
                     comparison.validateToolbarItem(item) == (scenario != .readOnly && scenario != .stale),
                     "Apply Selected validation \(scenario)")
@@ -468,7 +496,8 @@ private final class PatchDeadlineClock: @unchecked Sendable {
                 check(false, "D2 stale destination access")
             } catch {
                 let mode = try fm.attributesOfItem(atPath: output.path)[.posixPermissions] as? NSNumber
-                check(try Data(contentsOf: output) == patchBytes && mode?.intValue == 0o644,
+                check(
+                    try Data(contentsOf: output) == patchBytes && mode?.intValue == 0o644,
                     "D2 changed destination access and bytes survive stale export")
             }
             do {
@@ -564,7 +593,9 @@ private final class PatchDeadlineClock: @unchecked Sendable {
             // D2 native controller contract, added test-first after headless Gate A.
             var comparisonServices: [CompareService] = []
             defer { comparisonServices.flatMap(\.windows).forEach { $0.window?.close() } }
-            @MainActor func comparison(_ a: CompareInput, _ b: CompareInput, visible: Bool = false) async throws -> CompareController {
+            @MainActor func comparison(_ a: CompareInput, _ b: CompareInput, visible: Bool = false) async throws
+                -> CompareController
+            {
                 let service = CompareService()
                 service.showWindows = visible
                 comparisonServices.append(service)
@@ -705,8 +736,10 @@ private final class PatchDeadlineClock: @unchecked Sendable {
             copy.merge.workHooks = PatchDeadlineClock().hooks
             copy.retryButton.performClick(nil)
             try await ready(copy)
-            check(copy.retryButton.isHidden && copies == 2 && Data((board.string(forType: .string) ?? "").utf8) == expectedPatch,
-                  "explicit longer retry publishes exactly one complete patch")
+            check(
+                copy.retryButton.isHidden && copies == 2
+                    && Data((board.string(forType: .string) ?? "").utf8) == expectedPatch,
+                "explicit longer retry publishes exactly one complete patch")
             copy.merge.workHooks = ReviewDiffHooks()
             let special = try await comparison(value("\u{feff}a\0\n"), value("\u{feff}b\0\n"))
             special.merge.publishClipboard = { text in

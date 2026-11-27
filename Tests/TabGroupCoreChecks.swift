@@ -164,7 +164,8 @@ import Foundation
                     == TabGroupExtent(width: 641, height: 401)
                     && TabGroupGeometry.minimumContent(.twoRows, normal: .zero, divider: 1)
                         == TabGroupExtent(width: 320, height: 401),
-                "T3 pure Grid and Two Rows minimums are the panes and their divider: no row above the tab strips is reserved (DS-D12)")
+                "T3 pure Grid and Two Rows minimums are the panes and their divider: no row above the tab strips is reserved (DS-D12)"
+            )
             check(
                 TabGroupGeometry.minimumContent(.single) == TabGroupExtent(width: 800, height: 500),
                 "T3 normal Single minimum preserved")

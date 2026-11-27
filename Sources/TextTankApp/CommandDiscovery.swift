@@ -38,7 +38,7 @@ struct CommandRecents: Equatable {
             let data = try PrivateFileStore.read(self.url, maximumBytes: Self.maximumBytes)
             guard let file = try? JSONDecoder().decode(File.self, from: data) else { return }
             if file.version == 1 { recents = CommandRecents(file.commands) } else { replaceable = false }
-        } catch where error.isFileNotFound {} catch {
+        } catch  where error.isFileNotFound {} catch {
             // Too large, not a regular file or not readable: do not write over what is there.
             replaceable = false
         }
@@ -279,7 +279,9 @@ struct CommandRecents: Equatable {
                 let route = path + [item.title]
                 if let child = item.submenu {
                     // Recently opened file names are documents, not commands.
-                    if !(child.delegate is RecentDocumentsMenu) && item.title != WorkspaceBrowserController.recentFilesTitle {
+                    if !(child.delegate is RecentDocumentsMenu)
+                        && item.title != WorkspaceBrowserController.recentFilesTitle
+                    {
                         collect(child, path: route)
                     }
                     continue
