@@ -51,6 +51,41 @@ private final class LatestProgress: @unchecked Sendable {
     }
 }
 
+/// The worker can finish one range and start the wrapped range before the UI runs.
+/// Keep that boundary and the newest report. The stream coalesces wakeups only.
+final class InlineSearchProgress: @unchecked Sendable {
+    typealias Step = (done: Int, total: Int)
+    private let lock = NSLock()
+    private var completedPass: Step?
+    private var latest: Step?
+    private let signal = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+
+    func report(_ done: Int, _ total: Int) {
+        lock.withLock {
+            if let latest, latest.done == latest.total, latest.total > 0 {
+                completedPass = latest
+            }
+            latest = (done, total)
+        }
+        signal.continuation.yield(())
+    }
+
+    func finish() { signal.continuation.finish() }
+
+    @MainActor func deliver(to display: (Int, Int) -> Void) async {
+        for await _ in signal.stream {
+            let steps = lock.withLock {
+                let steps = (completedPass, latest)
+                completedPass = nil
+                latest = nil
+                return steps
+            }
+            if let first = steps.0 { display(first.done, first.total) }
+            if let last = steps.1 { display(last.done, last.total) }
+        }
+    }
+}
+
 /// Native snapshot search. Workers never access TTEditor; results are revision checked.
 final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate,
     NSComboBoxDelegate
@@ -1445,22 +1480,17 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
         let window = editor.window
         Task { @MainActor [weak self, weak editor, weak window] in
             do {
-                // Drain real worker progress on the UI actor before delivering the result. A slow
-                // row needs only the newest report, and a small document has no progress stream.
-                let updates =
-                    large != nil && progress != nil
-                    ? AsyncStream<(Int, Int)>.makeStream(bufferingPolicy: .bufferingNewest(1)) : nil
-                let sink = updates?.continuation
+                let updates = large != nil && progress != nil ? InlineSearchProgress() : nil
                 let worker = Task.detached(priority: .userInitiated) { () throws -> InlineFound in
-                    defer { sink?.finish() }
+                    defer { updates?.finish() }
                     if let large {
                         return .bytes(
                             try SearchSession.planBytes(
                                 large, options: options, action: action, selection: selection,
                                 search: SearchSession.ByteSearch(
                                     chunkBytes: chunk, cancellation: cancellation,
-                                    progress: sink.map { sink in
-                                        { @Sendable done, total in _ = sink.yield((done, total)) }
+                                    progress: updates.map { updates in
+                                        { @Sendable done, total in updates.report(done, total) }
                                     })))
                     }
                     return .report(
@@ -1469,8 +1499,8 @@ final class SearchController: NSWindowController, NSWindowDelegate, NSTableViewD
                             purpose: action == "replaceAll" ? .allMatches : .navigation))
                 }
                 if let updates, let progress {
-                    for await (done, total) in updates.stream where !cancellation.cancelled {
-                        progress(done, total)
+                    await updates.deliver { done, total in
+                        if !cancellation.cancelled { progress(done, total) }
                     }
                 }
                 let found = try await worker.value

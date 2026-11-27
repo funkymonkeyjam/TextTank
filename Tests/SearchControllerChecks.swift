@@ -702,6 +702,18 @@ final class ProgressTicks: @unchecked Sendable {
         check(
             controller.lastOutcome == .staleResult && editor.text == text,
             "a replacement is not applied after the selection moved while the search ran")
+        // A worker can reach the wrap boundary before the UI receives its first wakeup.
+        let pending = InlineSearchProgress()
+        pending.report(32, 64)
+        pending.report(64, 64)
+        pending.report(32, 160)
+        pending.report(96, 160)
+        pending.finish()
+        var delivered: [InlineSearchProgress.Step] = []
+        await pending.deliver { delivered.append(($0, $1)) }
+        check(
+            delivered.map(\.done) == [64, 96] && delivered.map(\.total) == [64, 160],
+            "a busy find bar receives the completed pass before progress in the wrapped range")
         // The find bar's path: the same planner through performInline, with progress.
         var inlineResult: InlineSearchOutcome?
         let ticks = ProgressTicks()
