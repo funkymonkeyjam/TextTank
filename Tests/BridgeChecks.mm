@@ -536,6 +536,63 @@ static void currentLineAndGuideChecks() {
         "view changes preserve read-only text, caret, selection, Undo, search decoration and bookmark");
 }
 
+static void longLineCellChecks() {
+    const NSRect frame = NSMakeRect(0, 0, 520, 180);
+    NSString *line = [@"" stringByPaddingToLength:1024 * 1024 + 19
+                                      withString:@"Window fit 0123456789 " startingAtIndex:0];
+    TTEditor *candidate = [[TTEditor alloc] initWithFrame:frame];
+    TTEditor *reference = [[TTEditor alloc] initWithFrame:frame];
+    ScintillaView *ordinary = (ScintillaView *)reference.subviews.firstObject;
+    // An unused printable representation selects normal layout without changing any displayed glyph.
+    [ordinary message:SCI_SETREPRESENTATION wParam:(uptr_t)"@" lParam:(sptr_t)"AT"];
+    NSMutableArray<NSWindow *> *windows = [NSMutableArray array];
+    for (TTEditor *editor in @[candidate, reference]) {
+        NSWindow *window = [[NSWindow alloc] initWithContentRect:frame styleMask:NSWindowStyleMaskBorderless
+                                                        backing:NSBackingStoreBuffered defer:NO];
+        [windows addObject:window];
+        window.contentView = editor;
+        editor.wrap = NO;
+        editor.lineNumbersVisible = NO;
+        [editor loadDocumentText:line];
+        [editor layoutSubtreeIfNeeded];
+        [(ScintillaView *)editor.subviews.firstObject message:SCI_SETCARETSTYLE wParam:CARETSTYLE_INVISIBLE];
+    }
+    auto widths = [&](TTEditor *editor, NSInteger position) {
+        ScintillaView *view = (ScintillaView *)editor.subviews.firstObject;
+        const sptr_t origin = [view message:SCI_POINTXFROMPOSITION wParam:0 lParam:0];
+        return [view message:SCI_POINTXFROMPOSITION wParam:0 lParam:position] - origin;
+    };
+    for (NSInteger position : { NSInteger(20), NSInteger(line.length / 2), NSInteger(line.length - 20) }) {
+        const sptr_t offset = widths(reference, position);
+        check(widths(candidate, position) == offset, "the long-line caret agrees with normal measured glyph positions");
+        auto image = [&](TTEditor *editor) {
+            ScintillaView *view = (ScintillaView *)editor.subviews.firstObject;
+            [editor setSelectionAnchor:position caret:position + 8];
+            editor.horizontalScrollOffset = MAX(0, offset - 60);
+            NSRect rect = view.content.visibleRect;
+            rect.size = NSMakeSize(MIN(rect.size.width, 360), MIN(rect.size.height, 32));
+            NSBitmapImageRep *rep = [view.content bitmapImageRepForCachingDisplayInRect:rect];
+            [view.content cacheDisplayInRect:rect toBitmapImageRep:rep];
+            return [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+        };
+        NSData *actual = image(candidate);
+        check(actual.length && [actual isEqual:image(reference)],
+              "visible glyphs and selection match ordinary painting at the start, middle and end");
+    }
+    for (TTEditor *editor in @[candidate, reference]) {
+        [editor setSelectionAnchor:12 caret:12];
+        [editor replaceSelection:@"\t😀"];
+    }
+    check(widths(candidate, 40) == widths(reference, 40) && [candidate.checkedUTF8Data isEqual:reference.checkedUTF8Data],
+          "a tab and multibyte edit restore full shaping on the formerly uniform line");
+    for (TTEditor *editor in @[candidate, reference]) {
+        [editor executeCommand:@"undo"];
+        [editor setBaseFontName:@"Georgia" size:14];
+    }
+    check([candidate.text isEqual:line] && widths(candidate, 123) == widths(reference, 123),
+          "Undo preserves the long line and a proportional font uses ordinary glyph advances");
+}
+
 static void baseFontMetricsChecks() {
     TTEditor *editor = [[TTEditor alloc] initWithFrame:NSMakeRect(0, 0, 550, 300)];
     ScintillaView *engine = (ScintillaView *)editor.subviews.firstObject;
@@ -727,6 +784,7 @@ int main(int argc, char **argv) {
         ttchecks::section("Return indentation", returnIndentChecks);
         ttchecks::section("Current line and indentation guides", currentLineAndGuideChecks);
         ttchecks::section("Base font metrics", baseFontMetricsChecks);
+        ttchecks::section("Long-line layout", longLineCellChecks);
         ttchecks::section("Live brace feedback", braceHighlightChecks);
         ttchecks::section("D1 comparison drop and gutter isolation", [&] {
             TTEditor *renderer=[[TTEditor alloc] initWithFrame:NSMakeRect(0,0,400,240)];
