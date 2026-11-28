@@ -213,22 +213,21 @@ static char TTPairCloser(NSString *text) {
 @implementation TTContentView {
     NSRect _lastDrawnViewport;
 }
-// Give Core Graphics the bounds of the exposed strip when AppKit replays the
-// scroll. The native context retains its backing resolution and colour handling.
+// Record the exposed strip as a native clip. A transparency group needs a
+// separate render target when Core Animation commits the scroll.
 - (BOOL)drawScrollRect:(NSRect)rect inContext:(CGContextRef)destination {
     if (!destination) return NO;
     const CGAffineTransform device = CGContextGetUserSpaceToDeviceSpaceTransform(destination);
     if (device.a <= 0 || device.d == 0 || device.b != 0 || device.c != 0) return NO;
     const CGRect pixels = CGRectApplyAffineTransform(rect, device);
     const CGFloat area = pixels.size.width * pixels.size.height;
-    // Bound temporary drawing and keep fractional-edge antialiasing on the direct path.
+    // Keep large updates and fractional-edge antialiasing on the ordinary drawing path.
     if (!std::isfinite(area) || area < 1 || area > 1024 * 1024 || !CGRectEqualToRect(pixels, CGRectIntegral(pixels))) return NO;
     CGContextSaveGState(destination);
-    CGContextBeginTransparencyLayerWithRect(destination, rect, nullptr);
+    CGContextClipToRect(destination, rect);
     @try {
         [super drawRect:rect];
     } @finally {
-        CGContextEndTransparencyLayer(destination);
         CGContextRestoreGState(destination);
     }
     return YES;

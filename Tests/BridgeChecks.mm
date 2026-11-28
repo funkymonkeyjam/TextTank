@@ -103,7 +103,7 @@ static void scrollSurfaceChecks() {
     [engine message:SCI_SETFIRSTVISIBLELINE wParam:10];
     SCIContentView *content = engine.content;
     const BOOL supported = [content respondsToSelector:@selector(drawScrollRect:inContext:)];
-    check(supported, "scrolling can isolate an exposed strip before the backing layer presents the viewport");
+    check(supported, "scrolling can bound the exposed text before the backing layer presents the viewport");
     if (!supported) return;
     NSRect viewport = engine.scrollView.contentView.bounds;
 
@@ -142,7 +142,7 @@ static void scrollSurfaceChecks() {
                 if (direct[i+3] == 255) { dark += direct[i] < 100; light += direct[i] > 200; }
                 if (memcmp(&direct[i], &flattened[i], 4) != 0) ++different;
             }
-            check(rendered == (inset == 0 || scale == 2), "only device-aligned scroll strips use a bounded layer");
+            check(rendered == (inset == 0 || scale == 2), "only device-aligned scroll strips use an explicit clip");
             if (opacity < 1) {
                 check(dark > 0 && different == 0, "a scroll strip over existing pixels preserves native per-glyph opacity");
                 continue;
