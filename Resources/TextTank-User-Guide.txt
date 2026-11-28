@@ -5,6 +5,8 @@ The menu bar has nine menus. File opens, saves and re-encodes documents. Edit ch
 
 Drop a file from Finder onto the workspace, choose File → Open…, or create a blank tab with File → New. When no files are open, you can also choose a recent file from the start screen. Use File → Save to choose a destination for a new document. A document with unsaved edits remains open when you cancel a close review. Help → Welcome to TextTank opens an editable tutorial.
 
+When a large text file takes time to open, the editor’s status row shows progress and offers Cancel. If you open a file from Finder before an editor window is visible, progress appears in a temporary window. Cancel leaves your other documents open.
+
 Finding a command or file
 Press Shift-Command-P, or choose Help → Command Palette…, to search commands. Type the words of a command in any order, or the menu you remember it in. The best match for the name comes first. Each row shows the menu that holds the command and its keyboard shortcut, if it has one. Before you type, the five commands you ran from the palette most recently are listed first. Unavailable actions depend on the current document or comparison. Use File → Quick Open… (Shift-Command-O) to find a document by name: open documents are listed first, then recent files, then the files under the folders you selected for your workspace. Choosing an open document shows its tab; it is never opened a second time.
 

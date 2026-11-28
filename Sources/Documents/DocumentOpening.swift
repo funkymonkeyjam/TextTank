@@ -219,8 +219,8 @@ final class TextDocumentController: NSDocumentController {
             completionHandler(nil, false, CocoaError(.userCancelled))
             return
         }
+        if beginLargeOpen(url, display: displayDocument, completion: completionHandler) { return }
         let delivery = OpenDelivery(self, url: url, display: displayDocument, completion: completionHandler)
-        if beginLargeOpen(url, display: displayDocument, completion: delivery.receive) { return }
         super.openDocument(withContentsOf: url, display: displayDocument) { document, alreadyOpen, error in
             delivery.receive(document, alreadyOpen, error)
         }

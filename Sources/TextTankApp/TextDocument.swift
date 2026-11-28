@@ -921,7 +921,7 @@ import UniformTypeIdentifiers
         try MainActor.assumeIsolated { try readURLOnMain(from: url, ofType: typeName) }
     }
     private func readURLOnMain(from url: URL, ofType typeName: String) throws {
-        if let staged = Self.preparedForNativeOpen, staged.url == url.standardizedFileURL {
+        if let staged = Self.preparedForNativeOpen, staged.url == Self.canonicalDiskURL(url) {
             Self.preparedForNativeOpen = nil
             try adoptPreparedOpen(staged.content)
             return
@@ -995,7 +995,7 @@ import UniformTypeIdentifiers
         makeDocument: () throws -> NSDocument
     ) throws -> NSDocument {
         let prior = preparedForNativeOpen
-        preparedForNativeOpen = (url.standardizedFileURL, prepared)
+        preparedForNativeOpen = (canonicalDiskURL(url), prepared)
         defer { preparedForNativeOpen = prior }
         return try makeDocument()
     }

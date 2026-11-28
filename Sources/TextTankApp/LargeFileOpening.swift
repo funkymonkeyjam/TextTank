@@ -23,6 +23,7 @@ private final class CoordinatedOpenRead: @unchecked Sendable {
 @MainActor final class LargeFileOpening: NSObject {
     typealias Completion = (NSDocument?, Bool, Error?) -> Void
     private let url: URL
+    let diskURL: URL
     private let type: String
     private let signature: FileSignature
     private let progress: Progress
@@ -37,8 +38,9 @@ private final class CoordinatedOpenRead: @unchecked Sendable {
     private var alreadyOpen = false
     private var finished = false
 
-    init(url: URL, type: String, signature: FileSignature, controller: TextDocumentController) {
+    init(url: URL, diskURL: URL, type: String, signature: FileSignature, controller: TextDocumentController) {
         self.url = url
+        self.diskURL = diskURL
         self.type = type
         self.signature = signature
         self.controller = controller
@@ -62,10 +64,10 @@ private final class CoordinatedOpenRead: @unchecked Sendable {
             MainActor.assumeIsolated { self?.updateDisplay() }
         }
         updateDisplay()
-        let url = url, type = type, signature = signature, progress = progress, reader = reader
+        let diskURL = diskURL, type = type, signature = signature, progress = progress, reader = reader
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                try reader.read(url) { coordinatedURL in
+                try reader.read(diskURL) { coordinatedURL in
                     if progress.isCancelled { throw CancellationError() }
                     let prepared = try TextDocument.prepareLargeOpen(
                         coordinatedURL, type: type,
@@ -88,7 +90,8 @@ private final class CoordinatedOpenRead: @unchecked Sendable {
             return
         }
         guard try WorkspaceStore.signature(ofRegularFileAt: coordinatedURL, maximumBytes: Int.max) == signature,
-            try WorkspaceStore.signature(ofRegularFileAt: url, maximumBytes: Int.max) == signature
+            TextDocument.canonicalDiskURL(url) == diskURL,
+            try WorkspaceStore.signature(ofRegularFileAt: diskURL, maximumBytes: Int.max) == signature
         else { throw CocoaError(.fileReadUnknown) }
         let doc = try TextDocument.withPreparedOpen(prepared, at: url) {
             try controller.makeDocument(withContentsOf: url, ofType: type)
@@ -112,7 +115,7 @@ private final class CoordinatedOpenRead: @unchecked Sendable {
         timer?.invalidate()
         if let operation { StatusOperationCenter.shared.end(operation) }
         panel?.orderOut(nil)
-        controller.largeOpenFinished(self, at: url)
+        controller.largeOpenFinished(self)
         let document = committed
         if let document {
             document.makeWindowControllers()
@@ -120,15 +123,20 @@ private final class CoordinatedOpenRead: @unchecked Sendable {
         }
         let callbacks = completions
         completions.removeAll()
-        for (index, completion) in callbacks.enumerated() {
-            completion(document, document != nil && (alreadyOpen || index > 0), document == nil ? error : nil)
+        controller.finishOpen(url, display: true, document, alreadyOpen, document == nil ? error : nil) {
+            opened, existing, failure in
+            for (index, completion) in callbacks.enumerated() {
+                completion(opened, opened != nil && (existing || index > 0), failure)
+            }
         }
     }
 
     private func updateDisplay() {
         guard let operation, !finished else { return }
         let center = StatusOperationCenter.shared
-        center.update(operation, done: Int(progress.completedUnitCount), total: Int(signature.size))
+        let bytes = progress.completedUnitCount
+        let finalizing = bytes >= signature.size
+        center.update(operation, done: Int(bytes), total: finalizing ? 0 : Int(signature.size))
         guard !finished, center.operation(for: [])?.id == operation else { return }
         let hasEditor = controller.documents.contains {
             ($0 as? TextDocument)?.presentation?.hostWindow?.isVisible == true
@@ -138,7 +146,8 @@ private final class CoordinatedOpenRead: @unchecked Sendable {
             return
         }
         if panel == nil { makePanel() }
-        indicator?.doubleValue = progress.fractionCompleted
+        indicator?.isIndeterminate = finalizing
+        if finalizing { indicator?.startAnimation(nil) } else { indicator?.doubleValue = progress.fractionCompleted }
         if panel?.isVisible == false { panel?.makeKeyAndOrderFront(nil) }
     }
 
@@ -178,26 +187,26 @@ private final class CoordinatedOpenRead: @unchecked Sendable {
 extension TextDocumentController {
     func beginLargeOpen(_ url: URL, display: Bool, completion: @escaping LargeFileOpening.Completion) -> Bool {
         guard url.isFileURL else { return false }
-        let key = url.standardizedFileURL
+        let key = TextDocument.canonicalDiskURL(url)
         if let active = largeOpens[key] {
             active.join(completion)
             return true
         }
         guard display, document(for: url) == nil,
-            let signature = try? WorkspaceStore.signature(ofRegularFileAt: url, maximumBytes: Int(Int32.max)),
+            let signature = try? WorkspaceStore.signature(ofRegularFileAt: key, maximumBytes: Int(Int32.max)),
             signature.size >= SizePolicy.standard.streamedImportThreshold,
             let type = try? typeForContents(of: url), let contentType = UTType(type),
             contentType.conforms(to: .plainText) || contentType == .json || contentType == .xml
         else { return false }
-        let opening = LargeFileOpening(url: url, type: type, signature: signature, controller: self)
+        let opening = LargeFileOpening(url: url, diskURL: key, type: type, signature: signature, controller: self)
         largeOpens[key] = opening
         opening.join(completion)
         opening.start()
         return true
     }
 
-    func largeOpenFinished(_ opening: LargeFileOpening, at url: URL) {
-        let key = url.standardizedFileURL
+    func largeOpenFinished(_ opening: LargeFileOpening) {
+        let key = opening.diskURL
         if largeOpens[key] === opening { largeOpens.removeValue(forKey: key) }
     }
 }

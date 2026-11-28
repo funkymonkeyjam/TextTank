@@ -244,6 +244,15 @@ import Darwin
             outcome = error
             delivered = true
         }
+        let panel = NSApp.windows.compactMap { $0 as? NSPanel }.first {
+            $0.isVisible && $0.title.contains(url.lastPathComponent)
+        }
+        let controls = panel?.contentView.map(DocumentChecks.descendants) ?? []
+        let cancel = controls.compactMap { $0 as? NSButton }.first { $0.keyEquivalent == "\u{1b}" }
+        check(
+            panel != nil && NSApp.modalWindow == nil && cancel?.accessibilityLabel() == "Cancel opening the document"
+                && controls.contains { $0 is NSProgressIndicator },
+            "Finder open without an editor presents modeless named progress and keyboard Cancel")
         guard spinUntil("large open completes or reports cancellation", { delivered }) else { return }
         check(requested, "a displayed large open exposes a cancellable workspace status operation")
         check(
@@ -251,6 +260,43 @@ import Darwin
             "cancelling a large open completes as cancelled without publishing a document")
         check(center.operations.isEmpty, "a completed large open releases its progress")
         opened?.close()
+        check(panel?.isVisible == false, "cancelling dismisses the first-window progress panel")
+        NotificationCenter.default.removeObserver(observer)
+
+        let neighbor = DocumentFactory.makeUntitled()
+        neighbor.editor.replaceSelection("kept draft")
+        defer { neighbor.close() }
+        var replies: [(NSDocument?, Bool, Error?)] = []
+        for _ in 0..<2 {
+            controller.openDocument(withContentsOf: url, display: true) { replies.append(($0, $1, $2)) }
+        }
+        check(
+            center.operation(for: [neighbor.editor]) != nil
+                && !NSApp.windows.contains {
+                    $0 is NSPanel && $0.isVisible && $0.title.contains(url.lastPathComponent)
+                },
+            "an existing editor uses the status row for overlapping large opens")
+        guard spinUntil(timeout: 30, "both displayed opens complete", { replies.count == 2 }),
+            let doc = replies[0].0 as? TextDocument
+        else {
+            check(false, "large file was published")
+            return
+        }
+        defer { doc.close() }
+        check(
+            replies[0].2 == nil && replies[1].2 == nil && !replies[0].1 && replies[1].1
+                && replies[1].0 === doc && controller.document(for: url) === doc,
+            "two concurrent opens publish one native document and report which request already had it")
+        let expected = try WorkspaceStore.fingerprint(ofRegularFileAt: url, maximumBytes: Int.max)
+        check(
+            doc.originalDiskFingerprint == expected
+                && WorkspaceStore.fingerprint(doc.editor.checkedUTF8Data) == expected
+                && !doc.isDocumentEdited && doc.fileModificationDate != nil
+                && NSFileCoordinator.filePresenters.contains { ($0 as AnyObject) === doc },
+            "the fully read bytes, modification date and native file presenter survive opening")
+        check(
+            neighbor.editor.text == "kept draft" && neighbor.isDocumentEdited && center.operations.isEmpty,
+            "opening a large file preserves an unrelated unsaved document and clears progress")
     }
 
     static func run(root: URL) throws {

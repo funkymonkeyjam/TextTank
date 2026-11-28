@@ -1,6 +1,50 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "common.cancel": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancel"
+          }
+        }
+      }
+    },
+    "open.large.cancel": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancel opening the document"
+          }
+        }
+      }
+    },
+    "open.large.progress": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opening the document"
+          }
+        }
+      }
+    },
+    "open.large.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opening “%@”"
+          }
+        }
+      }
+    },
     "automation.advanced.help": {
       "extractionState": "manual",
       "localizations": {
