@@ -921,7 +921,11 @@ import UniformTypeIdentifiers
         try MainActor.assumeIsolated { try readURLOnMain(from: url, ofType: typeName) }
     }
     private func readURLOnMain(from url: URL, ofType typeName: String) throws {
-        if let staged = Self.preparedForNativeOpen, staged.url == Self.canonicalDiskURL(url) {
+        if let staged = Self.preparedForNativeOpen,
+            staged.requestURL == url.standardizedFileURL || staged.diskURL == url.standardizedFileURL
+        {
+            guard staged.diskURL == Self.canonicalDiskURL(url), diskURL == nil || diskURL == staged.diskURL
+            else { throw CocoaError(.fileReadUnknown) }
             Self.preparedForNativeOpen = nil
             try adoptPreparedOpen(staged.content)
             return
@@ -989,15 +993,19 @@ import UniformTypeIdentifiers
 
     /// Only visible during the synchronous native makeDocument call on main. AppKit retains
     /// responsibility for fileURL, the native file type, modification date and file access.
-    private static var preparedForNativeOpen: (url: URL, content: PreparedOpen)?
+    private static var preparedForNativeOpen: (requestURL: URL, diskURL: URL, content: PreparedOpen)?
     static func withPreparedOpen(
-        _ prepared: PreparedOpen, at url: URL,
+        _ prepared: PreparedOpen, at url: URL, diskURL: URL,
         makeDocument: () throws -> NSDocument
     ) throws -> NSDocument {
         let prior = preparedForNativeOpen
-        preparedForNativeOpen = (canonicalDiskURL(url), prepared)
+        preparedForNativeOpen = (url.standardizedFileURL, diskURL, prepared)
         defer { preparedForNativeOpen = prior }
-        return try makeDocument()
+        let document = try makeDocument()
+        guard preparedForNativeOpen == nil, let text = document as? TextDocument,
+            text.diskURL == diskURL, canonicalDiskURL(url) == diskURL
+        else { throw CocoaError(.fileReadUnknown) }
+        return document
     }
 
     @MainActor private func adoptPreparedOpen(_ prepared: PreparedOpen) throws {

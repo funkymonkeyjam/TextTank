@@ -83,7 +83,7 @@ private final class CoordinatedOpenRead: @unchecked Sendable {
 
     /// Register the document and file presenter during the coordinated read, as a stock NSDocument open does.
     private func publish(_ prepared: TextDocument.PreparedOpen, from coordinatedURL: URL) throws {
-        guard !finished, !progress.isCancelled else { throw CocoaError(.userCancelled) }
+        guard !finished, !progress.isCancelled, !TextDocument.quitIsCertain else { throw CocoaError(.userCancelled) }
         if let existing = controller.document(for: url) {
             alreadyOpen = true
             committed = existing
@@ -93,7 +93,7 @@ private final class CoordinatedOpenRead: @unchecked Sendable {
             TextDocument.canonicalDiskURL(url) == diskURL,
             try WorkspaceStore.signature(ofRegularFileAt: diskURL, maximumBytes: Int.max) == signature
         else { throw CocoaError(.fileReadUnknown) }
-        let doc = try TextDocument.withPreparedOpen(prepared, at: url) {
+        let doc = try TextDocument.withPreparedOpen(prepared, at: url, diskURL: diskURL) {
             try controller.makeDocument(withContentsOf: url, ofType: type)
         }
         committed = doc
@@ -116,14 +116,18 @@ private final class CoordinatedOpenRead: @unchecked Sendable {
         if let operation { StatusOperationCenter.shared.end(operation) }
         panel?.orderOut(nil)
         controller.largeOpenFinished(self)
-        let document = committed
+        // A closing window or a confirmed Quit may have retired the document since registration.
+        let document = committed.flatMap { candidate in
+            !TextDocument.quitIsCertain && controller.documents.contains { $0 === candidate } ? candidate : nil
+        }
+        let failure = document == nil ? (error ?? CocoaError(.userCancelled)) : nil
         if let document {
             document.makeWindowControllers()
             document.showWindows()
         }
         let callbacks = completions
         completions.removeAll()
-        controller.finishOpen(url, display: true, document, alreadyOpen, document == nil ? error : nil) {
+        controller.finishOpen(url, display: true, document, alreadyOpen, failure) {
             opened, existing, failure in
             for (index, completion) in callbacks.enumerated() {
                 completion(opened, opened != nil && (existing || index > 0), failure)
@@ -186,7 +190,7 @@ private final class CoordinatedOpenRead: @unchecked Sendable {
 
 extension TextDocumentController {
     func beginLargeOpen(_ url: URL, display: Bool, completion: @escaping LargeFileOpening.Completion) -> Bool {
-        guard url.isFileURL else { return false }
+        guard url.isFileURL, display || !largeOpens.isEmpty else { return false }
         let key = TextDocument.canonicalDiskURL(url)
         if let active = largeOpens[key] {
             active.join(completion)
