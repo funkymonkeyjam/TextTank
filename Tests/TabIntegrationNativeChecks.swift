@@ -290,7 +290,7 @@ import Darwin
         let expected = try WorkspaceStore.fingerprint(ofRegularFileAt: url, maximumBytes: Int.max)
         check(
             doc.originalDiskFingerprint == expected
-                && WorkspaceStore.fingerprint(doc.editor.checkedUTF8Data) == expected
+                && doc.editor.checkedUTF8Data.map { WorkspaceStore.fingerprint($0) } == expected
                 && !doc.isDocumentEdited && doc.fileModificationDate != nil
                 && NSFileCoordinator.filePresenters.contains { ($0 as AnyObject) === doc },
             "the fully read bytes, modification date and native file presenter survive opening")
