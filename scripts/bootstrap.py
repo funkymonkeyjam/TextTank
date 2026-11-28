@@ -123,6 +123,7 @@ def scintilla_plan(root):
         'scripts/dependency-patches/scintilla-loader-styles.patch',
         'scripts/dependency-patches/scintilla-cocoa-bidi.patch',
         'scripts/dependency-patches/scintilla-long-bidi-runs.patch',
+        'scripts/dependency-patches/scintilla-long-line-layout.patch',
     )
     if tuple(item.get('path') for item in patches) != allowed[:len(patches)]:
         raise ValueError('Unsupported Scintilla patch path or order')

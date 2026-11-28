@@ -63,6 +63,15 @@
         "src/PositionCache.cxx": "9501f076f0146f42840d124d7b26453bf3c4d2d0302b792898c1ac59a2066916",
         "src/PositionCache.h": "5714997b6edfb830bfc4fac8836efda76d66bcf722f65f550383d964a4d90f90"
       }
+    },
+    {
+      "dependency": "scintilla",
+      "path": "scripts/dependency-patches/scintilla-long-line-layout.patch",
+      "sha256": "08e01fbdfe597ced53a8c00ed49d7354c18f0c6cb0ec7c31a92951d054b310e5",
+      "files": {
+        "src/EditView.cxx": "4e282421c86282430729fe2144041380955d29b1d98ef36e392f8aa4935a5ef2",
+        "src/PositionCache.h": "9de36e76accdc6f36b8e6bc2d7a434548fbf472a4f0839c8b122f46758495c9a"
+      }
     }
   ],
   "architecture": "arm64",
