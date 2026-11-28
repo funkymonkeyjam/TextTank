@@ -297,6 +297,32 @@ import Darwin
         check(
             neighbor.editor.text == "kept draft" && neighbor.isDocumentEdited && center.operations.isEmpty,
             "opening a large file preserves an unrelated unsaved document and clears progress")
+
+        // The large-file path also preserves the ordinary strict UTF-16 codec and its disk format.
+        let utf16URL = root.appendingPathComponent("large-open-utf16.txt")
+        var encoded = Data([0xFF, 0xFE])
+        var words = Data(repeating: 0, count: 1024 * 1024)
+        for position in stride(from: 0, to: words.count, by: 2) {
+            words[position] = position % 256 == 254 ? 10 : 65
+        }
+        for _ in 0..<32 { encoded.append(words) }
+        try encoded.write(to: utf16URL)
+        var encodedReply: (NSDocument?, Error?)?
+        controller.openDocument(withContentsOf: utf16URL, display: true) { document, _, error in
+            encodedReply = (document, error)
+        }
+        guard spinUntil(timeout: 45, "large UTF-16 open completes", { encodedReply != nil }),
+            let decoded = encodedReply?.0 as? TextDocument
+        else {
+            check(false, "the normal UTF-16 opening path publishes its document")
+            return
+        }
+        defer { decoded.close() }
+        check(
+            encodedReply?.1 == nil && decoded.format == FileFormat(encoding: .utf16LE, bom: true)
+                && decoded.editor.byteLength == 16 * 1024 * 1024 && !decoded.isDocumentEdited
+                && decoded.originalDiskFingerprint == WorkspaceStore.fingerprint(encoded),
+            "large UTF-16 opening retains the BOM, encoding, decoded length and original-byte fingerprint")
     }
 
     static func run(root: URL) throws {
