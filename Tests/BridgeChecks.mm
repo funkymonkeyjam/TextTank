@@ -110,7 +110,7 @@ static void scrollSurfaceChecks() {
     check(NSMinY(viewport) > 0, "strip fixture is scrolled to nonzero document coordinates");
     const auto nativeDraw = reinterpret_cast<void (*)(id, SEL, NSRect)>(
         class_getMethodImplementation(SCIContentView.class, @selector(drawRect:)));
-    auto checkScale = [&](int scale, bool flippedCTM) {
+    auto checkScale = [&](int scale, bool flippedCTM, CGFloat opacity) {
         for (CGFloat inset : {0.0, 0.5}) {
             NSRect dirty = NSMakeRect(NSMinX(viewport) + 5 + inset, NSMinY(viewport) + 3 + inset, 190, 47);
             const size_t width = 220 * scale, height = 60 * scale;
@@ -124,6 +124,12 @@ static void scrollSurfaceChecks() {
                 CGContextScaleCTM(ctx, scale, flippedCTM ? -scale : scale);
                 CGContextTranslateCTM(ctx, -NSMinX(viewport), -NSMinY(viewport));
                 CGContextClipToRect(ctx, dirty);
+                // A native composited draw can already have opacity and a painted destination.
+                if (opacity < 1) {
+                    CGContextSetRGBFillColor(ctx, 0.12, 0.19, 0.28, 1);
+                    CGContextFillRect(ctx, dirty);
+                    CGContextSetAlpha(ctx, opacity);
+                }
                 [NSGraphicsContext saveGraphicsState];
                 NSGraphicsContext.currentContext = [NSGraphicsContext graphicsContextWithCGContext:ctx flipped:YES];
                 if (useStrip) rendered = [content drawScrollRect:dirty inContext:ctx];
@@ -137,14 +143,19 @@ static void scrollSurfaceChecks() {
                 if (memcmp(&direct[i], &flattened[i], 4) != 0) ++different;
             }
             check(rendered == (inset == 0 || scale == 2), "only device-aligned scroll strips use a bounded layer");
+            if (opacity < 1) {
+                check(dark > 0 && different == 0, "a scroll strip over existing pixels preserves native per-glyph opacity");
+                continue;
+            }
             check(dark > 0 && light > 0 && different == 0,
                   scale == 1 ? "one-times scroll strip preserves native glyphs, position and dirty clip" :
                                "Retina scroll strip preserves native glyphs, position and dirty clip");
         }
     };
     for (int scale : {1, 2}) {
-        checkScale(scale, true);
-        checkScale(scale, false);
+        checkScale(scale, true, 1);
+        checkScale(scale, false, 1);
+        checkScale(scale, true, 0.75);
     }
 }
 
