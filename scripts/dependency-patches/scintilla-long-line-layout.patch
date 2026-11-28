@@ -12,8 +12,8 @@
 +	if (length < 1024 * 1024 || ll.bidiText)
 +		return 0;
 +	const Style &style = vs.styles[ll.styles[0]];
-+	if (!style.monospaceASCII || !style.visible || style.italic || style.hotspot ||
-+		static_cast<XWidth>(style.spaceWidth) != static_cast<XWidth>(style.monospaceCharacterWidth))
++	if (style.longLineASCIIAdvance <= 0 || !style.visible || style.italic || style.hotspot ||
++		static_cast<XWidth>(style.spaceWidth) != static_cast<XWidth>(style.longLineASCIIAdvance))
 +		return 0;
 +	for (unsigned char ch = ' '; ch <= '~'; ++ch) {
 +		if (representations.MayContain(ch))
@@ -26,7 +26,7 @@
 +		if (ch < ' ' || ch > '~')
 +			return 0;
 +	}
-+	return static_cast<XWidth>(style.monospaceCharacterWidth);
++	return static_cast<XWidth>(style.longLineASCIIAdvance);
 +}
 +
 +// A style-clock change can request verification even when the bytes are untouched.
@@ -204,7 +204,7 @@
  			paintRange(ForwardRange(lineRange.First()+first,lineRange.First()+last));
  	} else {
 -		paintRange(lineRange);
-+		paintRange(VisibleASCIICells(*ll, lineRange, Interval(rcLine.left, rcLine.right), horizontalOffset, vsDraw));
++		paintRange(VisibleASCIICells(*ll, lineRange, HorizontalBounds(rcLine), horizontalOffset, vsDraw));
  	}
  }
  
@@ -213,7 +213,7 @@
  			paintRange(ForwardRange(lineRange.First()+first,lineRange.First()+last));
  	} else {
 -		paintRange(lineRange);
-+		paintRange(VisibleASCIICells(*ll, lineRange, Interval(rcLine.left, rcLine.right), horizontalOffset, vsDraw));
++		paintRange(VisibleASCIICells(*ll, lineRange, HorizontalBounds(rcLine), horizontalOffset, vsDraw));
  	}
  }
  
@@ -228,3 +228,38 @@
  	enum class ValidLevel { invalid, checkTextAndStyle, positions, lines };
  	ValidLevel validity = ValidLevel::invalid;
  	int xHighlightGuide = 0;
+--- a/src/Style.h
++++ b/src/Style.h
+@@ -38,6 +38,7 @@
+ 	XYPOSITION monospaceCharacterWidth = 1;
+ 	XYPOSITION spaceWidth = 1;
+ 	bool monospaceASCII = false;
++	XYPOSITION longLineASCIIAdvance = 0;
+ 	int sizeZoomed = 2;
+ };
+ 
+--- a/src/ViewStyle.cxx
++++ b/src/ViewStyle.cxx
+@@ -84,7 +84,10 @@
+ 	measurements.monospaceCharacterWidth = measurements.aveCharWidth;
+ 	measurements.spaceWidth = surface.WidthText(font.get(), " ");
+ 
+-	if (fs.checkMonospaced) {
++	// Test the actual zoomed face before allowing uniform positions on a long Menlo line.
++	const bool checkLongLine = std::strcmp(fs.fontName, "Menlo") == 0;
++	measurements.longLineASCIIAdvance = 0;
++	if (fs.checkMonospaced || checkLongLine) {
+ 		// "Ay" is normally strongly kerned and "fi" may be a ligature
+ 		constexpr std::string_view allASCIIGraphic("Ayfi"
+ 		// python: ''.join(chr(ch) for ch in range(32, 127))
+@@ -97,7 +100,9 @@
+ 		const XYPOSITION variance = maxWidth - minWidth;
+ 		constexpr XYPOSITION monospaceWidthEpsilon = 0.000001;	// May need tweaking if monospace fonts vary more
+ 		const XYPOSITION scaledVariance = monospaceWidthEpsilon * minWidth;
+-		measurements.monospaceASCII = variance < scaledVariance;
++		const bool uniform = variance < scaledVariance;
++		measurements.longLineASCIIAdvance = (uniform && checkLongLine) ? minWidth : 0;
++		measurements.monospaceASCII = uniform && fs.checkMonospaced;
+ 		measurements.monospaceCharacterWidth = minWidth;
+ 	} else {
+ 		measurements.monospaceASCII = false;

@@ -911,8 +911,6 @@ struct TTLineNumberState { sptr_t lines, rows, top, rowHeight, margin; };
     [_engine message:SCI_STYLESETFORE wParam:STYLE_DEFAULT lParam:foreground];
     [_engine message:SCI_STYLESETBACK wParam:STYLE_DEFAULT lParam:background];
     [_engine message:SCI_STYLECLEARALL];
-    // Let Scintilla test the plain editor face at its actual zoom before using fixed ASCII advances.
-    [_engine message:SCI_STYLESETCHECKMONOSPACED wParam:0 lParam:[_baseFontName isEqualToString:@"Menlo"]];
     [_engine message:SCI_STYLESETFORE wParam:STYLE_LINENUMBER lParam:dark ? 0xAAB8B3 : 0x59645F];
     [_engine message:SCI_STYLESETBACK wParam:STYLE_LINENUMBER lParam:dark ? 0x222A25 : 0xE3E9E5];
     [_engine message:SCI_SETFOLDMARGINCOLOUR wParam:1 lParam:background];[_engine message:SCI_SETFOLDMARGINHICOLOUR wParam:1 lParam:background];
