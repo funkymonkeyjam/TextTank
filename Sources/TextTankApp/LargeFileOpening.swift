@@ -3,6 +3,22 @@ import AppKit
 import TextTankCore
 import UniformTypeIdentifiers
 
+/// Foundation confines coordinate() to one reader thread and explicitly permits cancel() from any thread.
+private final class CoordinatedOpenRead: @unchecked Sendable {
+    private let coordinator = NSFileCoordinator(filePresenter: nil)
+
+    func read(_ url: URL, using access: (URL) throws -> Void) throws {
+        var failure: Error?
+        var coordinationError: NSError?
+        coordinator.coordinate(readingItemAt: url, options: [], error: &coordinationError) { coordinatedURL in
+            do { try access(coordinatedURL) } catch { failure = error }
+        }
+        if let error = failure ?? coordinationError { throw error }
+    }
+
+    func cancel() { coordinator.cancel() }
+}
+
 /// One displayed large open, including subsequent callers waiting on the same file.
 @MainActor final class LargeFileOpening: NSObject {
     typealias Completion = (NSDocument?, Bool, Error?) -> Void
@@ -10,7 +26,7 @@ import UniformTypeIdentifiers
     private let type: String
     private let signature: FileSignature
     private let progress: Progress
-    private let coordinator = NSFileCoordinator(filePresenter: nil)
+    private let reader = CoordinatedOpenRead()
     private let controller: TextDocumentController
     private var completions: [Completion] = []
     private var operation: UUID?
@@ -38,25 +54,28 @@ import UniformTypeIdentifiers
             cancelLabel:
                 Strings.text("open.large.cancel", "Cancel opening the document")
         ) { [weak self] in self?.cancel() }
+        if finished {
+            if let operation { center.end(operation) }
+            return
+        }
         timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.updateDisplay() }
         }
         updateDisplay()
-        let url = url, type = type, signature = signature, progress = progress, coordinator = coordinator
+        let url = url, type = type, signature = signature, progress = progress, reader = reader
         DispatchQueue.global(qos: .userInitiated).async {
-            var failure: Error?
-            var coordinationError: NSError?
-            coordinator.coordinate(readingItemAt: url, options: [], error: &coordinationError) { coordinatedURL in
-                do {
+            do {
+                try reader.read(url) { coordinatedURL in
                     if progress.isCancelled { throw CancellationError() }
                     let prepared = try TextDocument.prepareLargeOpen(
                         coordinatedURL, type: type,
                         signature: signature, progress: progress)
                     try DispatchQueue.main.sync { try self.publish(prepared, from: coordinatedURL) }
-                } catch { failure = error }
+                }
+                DispatchQueue.main.async { self.finish(error: nil) }
+            } catch {
+                DispatchQueue.main.async { self.finish(error: error) }
             }
-            let error = failure ?? coordinationError
-            DispatchQueue.main.async { self.finish(error: error) }
         }
     }
 
@@ -71,13 +90,9 @@ import UniformTypeIdentifiers
         guard try WorkspaceStore.signature(ofRegularFileAt: coordinatedURL, maximumBytes: Int.max) == signature,
             try WorkspaceStore.signature(ofRegularFileAt: url, maximumBytes: Int.max) == signature
         else { throw CocoaError(.fileReadUnknown) }
-        let doc = TextDocument()
-        doc.fileURL = url
-        doc.fileType = type
-        try doc.adoptPreparedOpen(prepared)
-        doc.fileModificationDate = Date(
-            timeIntervalSince1970: Double(signature.modifiedSeconds)
-                + Double(signature.modifiedNanoseconds) / 1_000_000_000)
+        let doc = try TextDocument.withPreparedOpen(prepared, at: url) {
+            try controller.makeDocument(withContentsOf: url, ofType: type)
+        }
         committed = doc
         controller.addDocument(doc)
         NSFileCoordinator.addFilePresenter(doc)
@@ -87,7 +102,7 @@ import UniformTypeIdentifiers
     @objc private func cancel() {
         guard committed == nil, !finished else { return }
         progress.cancel()
-        coordinator.cancel()
+        reader.cancel()
         finish(error: CocoaError(.userCancelled))
     }
 
@@ -114,7 +129,7 @@ import UniformTypeIdentifiers
         guard let operation, !finished else { return }
         let center = StatusOperationCenter.shared
         center.update(operation, done: Int(progress.completedUnitCount), total: Int(signature.size))
-        guard center.operation(for: [])?.id == operation else { return }
+        guard !finished, center.operation(for: [])?.id == operation else { return }
         let hasEditor = controller.documents.contains {
             ($0 as? TextDocument)?.presentation?.hostWindow?.isVisible == true
         }
@@ -124,7 +139,7 @@ import UniformTypeIdentifiers
         }
         if panel == nil { makePanel() }
         indicator?.doubleValue = progress.fractionCompleted
-        if panel?.isVisible == false { panel?.orderFront(nil) }
+        if panel?.isVisible == false { panel?.makeKeyAndOrderFront(nil) }
     }
 
     private func makePanel() {

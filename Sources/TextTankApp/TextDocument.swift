@@ -921,6 +921,11 @@ import UniformTypeIdentifiers
         try MainActor.assumeIsolated { try readURLOnMain(from: url, ofType: typeName) }
     }
     private func readURLOnMain(from url: URL, ofType typeName: String) throws {
+        if let staged = Self.preparedForNativeOpen, staged.url == url.standardizedFileURL {
+            Self.preparedForNativeOpen = nil
+            try adoptPreparedOpen(staged.content)
+            return
+        }
         readingURL = url
         defer { readingURL = nil }
         // AppKit reads the file itself. Settled metadata that is the same on both sides of
@@ -982,7 +987,20 @@ import UniformTypeIdentifiers
         let sample: FileSample
     }
 
-    @MainActor func adoptPreparedOpen(_ prepared: PreparedOpen) throws {
+    /// Only visible during the synchronous native makeDocument call on main. AppKit retains
+    /// responsibility for fileURL, the native file type, modification date and file access.
+    private static var preparedForNativeOpen: (url: URL, content: PreparedOpen)?
+    static func withPreparedOpen(
+        _ prepared: PreparedOpen, at url: URL,
+        makeDocument: () throws -> NSDocument
+    ) throws -> NSDocument {
+        let prior = preparedForNativeOpen
+        preparedForNativeOpen = (url.standardizedFileURL, prepared)
+        defer { preparedForNativeOpen = prior }
+        return try makeDocument()
+    }
+
+    @MainActor private func adoptPreparedOpen(_ prepared: PreparedOpen) throws {
         guard !opened, !languageResolved, presentations.isEmpty, editor.byteLength == 0, editor.revision == 0,
             !editor.readOnly
         else { throw CocoaError(.userCancelled) }
