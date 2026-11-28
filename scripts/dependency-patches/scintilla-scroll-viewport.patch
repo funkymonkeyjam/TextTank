@@ -1,0 +1,25 @@
+--- a/cocoa/ScintillaCocoa.mm
++++ b/cocoa/ScintillaCocoa.mm
+@@ -1013,6 +1013,13 @@
+  * Start a fine-grained timer.
+  */
+ void ScintillaCocoa::FineTickerStart(TickReason reason, int millis, int tolerance) {
++	// Width tracking still records every wider line. While it fits the clip there
++	// is no native scroll range to update when the delayed widen timer fires.
++	if (reason == TickReason::widen && !Wrapping()) {
++		const CGFloat clipWidth = ScrollContainer().contentView.bounds.size.width;
++		if (scrollWidth <= clipWidth && ContentView().frame.size.width == clipWidth)
++			return;
++	}
+ 	FineTickerCancel(reason);
+ 	NSTimer *fineTimer = [NSTimer timerWithTimeInterval: millis / 1000.0
+ 						     target: timerTarget
+@@ -2061,7 +2068,7 @@
+ 			docHeight = clipRect.size.height;
+ 		const bool showHorizontalScroll = horizontalScrollBarVisible &&
+ 					    !Wrapping();
+-		const CGFloat docWidth = Wrapping() ? clipRect.size.width : scrollWidth;
++		const CGFloat docWidth = Wrapping() ? clipRect.size.width : std::max(clipRect.size.width, static_cast<CGFloat>(scrollWidth));
+ 		const NSRect contentRect = NSMakeRect(0, 0, docWidth, docHeight);
+ 		changes = !CGSizeEqualToSize(contentRect.size, inner.frame.size);
+ 		if (changes) {
