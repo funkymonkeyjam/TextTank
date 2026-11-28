@@ -30,6 +30,46 @@ static void within(double measured,double budget,NSString *what,const char *unit
  NSString *label=[NSString stringWithFormat:@"%@ stays within its budget",what];
  if(!check(measured<=budget,label.UTF8String)) printf("NOTE %s measured %.6f %s against a budget of %.6f %s\n",what.UTF8String,measured,unit,budget,unit);
 }
+// The editor must lay out the new caret and paint real text, even after a one-byte edit
+// invalidates a very long line. Loading the bytes alone does not exercise either path.
+static void checkLongLineInteraction(TTEditor *editor, NSString *original) {
+    editor.wrap = NO;
+    NSWindow *window = [[NSWindow alloc] initWithContentRect:editor.bounds styleMask:NSWindowStyleMaskBorderless
+                                                    backing:NSBackingStoreBuffered defer:NO];
+    window.contentView = editor;
+    [editor layoutSubtreeIfNeeded];
+    ScintillaView *view = (ScintillaView *)editor.subviews.firstObject;
+    auto paint = [&] {
+        NSBitmapImageRep *bitmap = [editor bitmapImageRepForCachingDisplayInRect:editor.bounds];
+        [editor cacheDisplayInRect:editor.bounds toBitmapImageRep:bitmap];
+    };
+    const NSInteger caret = 20;
+    [editor setSelectionAnchor:caret caret:caret];
+    paint();
+    double edits[3], redraws[3];
+    BOOL exact = YES;
+    for (int sample = 0; sample < 3; ++sample) {
+        const double start = seconds();
+        [editor replaceSelection:@"x"];
+        const sptr_t x = [view message:SCI_POINTXFROMPOSITION wParam:0 lParam:caret + 1];
+        paint();
+        edits[sample] = seconds() - start;
+        const double drawn = seconds();
+        paint();
+        redraws[sample] = seconds() - drawn;
+        exact = exact && x > 0 && editor.selectionCaret == caret + 1 &&
+                editor.byteLength == (NSInteger)original.length + 1 &&
+                [view message:SCI_GETCHARAT wParam:caret] == 'x';
+        [editor executeCommand:@"undo"];
+        [editor setSelectionAnchor:caret caret:caret];
+    }
+    std::sort(edits, edits + 3);
+    std::sort(redraws, redraws + 3);
+    check(exact && [editor.text isEqual:original], "each long-line edit paints its caret and Undo restores the exact source");
+    printf("longline_interaction,10,median_edit_and_paint=%.6f,median_unchanged_paint=%.6f\n", edits[1], redraws[1]);
+    within(edits[1], 0.10, @"editing and painting a 10 MiB unwrapped line", "s");
+    within(redraws[1], 1.0/60, @"redrawing an unchanged 10 MiB unwrapped line", "s");
+}
 int main(int argc,char **argv){@autoreleasepool{
  [NSApplication sharedApplication];
  const bool full=argc>1 && strcmp(argv[1],"full")==0;
@@ -126,5 +166,6 @@ int main(int argc,char **argv){@autoreleasepool{
  check([longLine.text isEqual:line],"10 MiB single line loads exactly");
  printf("longline,10,%.6f,0,0,0,0\n",longLoad);
  within(longLoad,0.35,@"10 MiB single line load","s");
+ checkLongLineInteraction(longLine,line);
  return ttchecks::finish("PerformanceChecks",full?"full tier to 100 MiB; synthetic editor load/find/replace/Undo; no physical scrolling claim":"gated tier to 10 MiB; synthetic editor load/find/replace/Undo; no physical scrolling claim");
 }}
