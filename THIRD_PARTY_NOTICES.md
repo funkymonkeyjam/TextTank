@@ -2,7 +2,7 @@
 
 TextTank project code is GPL-3.0-or-later. LICENSE retains the upstream Notepad++ notice and GPL text. Notepad++ reference metadata and research are attributed in docs/research; TextTank is an independent project.
 
-- Scintilla 5.6.9: copyright Neil Hodgson and contributors; permissive license in Resources/scintilla-License.txt. Dependencies.lock.json lists the local streamed-loader and Cocoa bidirectional-layout patches and the file hashes produced by each.
+- Scintilla 5.6.9: copyright Neil Hodgson and contributors; permissive license in Resources/scintilla-License.txt. Dependencies.lock.json lists the local streamed-loader, Cocoa bidirectional-layout and ruler-layout patches and the file hashes produced by each.
 - Lexilla 5.5.5: copyright Neil Hodgson and contributors; permissive license in Resources/lexilla-License.txt.
 - Boost.Regex 1.90.0 headers from the frozen official Notepad++ source: Boost Software License 1.0, retained in Resources/boost-License.txt and Sources/Search/Boost/LICENSE_1_0.txt; per-file hashes in Sources/Search/Boost/PROVENANCE.json.
 - Notepad++ LexUser port and UDL constants: original GPL-2.0-or-later notice retained, distributed in the combined GPL-3.0-or-later application. Port changes and source hashes are in Sources/Languages/LexUserPort/PROVENANCE.json. The pinned upstream engines are unchanged.

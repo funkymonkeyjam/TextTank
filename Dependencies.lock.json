@@ -63,6 +63,17 @@
         "src/PositionCache.cxx": "9501f076f0146f42840d124d7b26453bf3c4d2d0302b792898c1ac59a2066916",
         "src/PositionCache.h": "5714997b6edfb830bfc4fac8836efda76d66bcf722f65f550383d964a4d90f90"
       }
+    },
+    {
+      "dependency": "scintilla",
+      "path": "scripts/dependency-patches/scintilla-ruler-layout.patch",
+      "sha256": "92bb76f7294de41fda8e757a81cb8dc30e5a13de665cf74ba95be3b55e387646",
+      "files": {
+        "cocoa/PlatCocoa.h": "64d2376e43278e7364833d3e59d33a4717eee19e69cd57db77fcf7fb1b66944f",
+        "cocoa/PlatCocoa.mm": "6ee71f0505a9550fbe7df55008f58a23e01dd5395e885d97c9433a5cdc6bdc3f",
+        "src/MarginView.cxx": "7587ea8065e6643a3c312412f63168245b55d30a04902c4c6ca0eea721e2cafe",
+        "src/Platform.h": "196f238f9ead5e148b0ca9e8825a990e17bc7585cb03e3b7e5aa8d2d45188aa3"
+      }
     }
   ],
   "architecture": "arm64",

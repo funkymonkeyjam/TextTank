@@ -1,0 +1,94 @@
+--- a/cocoa/PlatCocoa.h
++++ b/cocoa/PlatCocoa.h
+@@ -114,6 +114,8 @@
+ 
+ 	void DrawTextNoClip(PRectangle rc, const Font *font_, XYPOSITION ybase, std::string_view text, ColourRGBA fore,
+ 			    ColourRGBA back) override;
++	void DrawTextRightAligned(PRectangle rc, const Font *font_, XYPOSITION ybase, std::string_view text,
++			ColourRGBA fore, ColourRGBA back, XYPOSITION padding) override;
+ 	void DrawTextClipped(PRectangle rc, const Font *font_, XYPOSITION ybase, std::string_view text, ColourRGBA fore,
+ 			     ColourRGBA back) override;
+ 	void DrawTextTransparent(PRectangle rc, const Font *font_, XYPOSITION ybase, std::string_view text, ColourRGBA fore) override;
+--- a/cocoa/PlatCocoa.mm
++++ b/cocoa/PlatCocoa.mm
+@@ -1468,6 +1468,31 @@
+ 	}
+ }
+ 
++static void SetTextForeground(QuartzTextStyle *style, ColourRGBA fore) {
++	CGColorRef color = CGColorCreateGenericRGB(fore.GetRedComponent(),
++						   fore.GetGreenComponent(),
++						   fore.GetBlueComponent(),
++						   fore.GetAlphaComponent());
++
++	style->setCTStyleColour(color);
++
++	CGColorRelease(color);
++}
++
++void SurfaceImpl::DrawTextRightAligned(PRectangle rc, const Font *font_, XYPOSITION ybase, std::string_view text,
++        ColourRGBA fore, ColourRGBA back, XYPOSITION padding) {
++	QuartzTextStyle *style = TextStyleFromFont(font_);
++	if (!style) {
++		Surface::DrawTextRightAligned(rc, font_, ybase, text, fore, back, padding);
++		return;
++	}
++	SetTextForeground(style, fore);
++	QuartzTextLayout layout(text, EncodingFromCharacterSet(UnicodeMode(), style->getCharacterSet()), style);
++	rc.left = rc.right - layout.MeasureStringWidth() - padding;
++	FillRectangleAligned(rc, back);
++	layout.draw(gc, rc.left, ybase);
++}
++
+ void SurfaceImpl::DrawTextTransparent(PRectangle rc, const Font *font_, XYPOSITION ybase, std::string_view text,
+ 				      ColourRGBA fore) {
+ 	QuartzTextStyle *style = TextStyleFromFont(font_);
+@@ -1476,14 +1501,7 @@
+ 	}
+ 	CFStringEncoding encoding = EncodingFromCharacterSet(UnicodeMode(), style->getCharacterSet());
+ 
+-	CGColorRef color = CGColorCreateGenericRGB(fore.GetRedComponent(),
+-						   fore.GetGreenComponent(),
+-						   fore.GetBlueComponent(),
+-						   fore.GetAlphaComponent());
+-
+-	style->setCTStyleColour(color);
+-
+-	CGColorRelease(color);
++	SetTextForeground(style, fore);
+ 
+ 	QuartzTextLayout layoutDraw(text, encoding, style);
+ 	layoutDraw.draw(gc, rc.left, ybase);
+--- a/src/MarginView.cxx
++++ b/src/MarginView.cxx
+@@ -388,13 +388,9 @@
+ 					}
+ 					sNumber = number;
+ 				}
+-				PRectangle rcNumber = rcMarker;
+-				// Right justify
+-				const XYPOSITION width = surface->WidthText(vs.styles[StyleLineNumber].font.get(), sNumber);
+-				const XYPOSITION xpos = rcNumber.right - width - vs.marginNumberPadding;
+-				rcNumber.left = xpos;
+-				DrawTextNoClipPhase(surface, rcNumber, vs.styles[StyleLineNumber],
+-					rcNumber.top + vs.maxAscent, sNumber, DrawPhase::all);
++				const Style &style = vs.styles[StyleLineNumber];
++				surface->DrawTextRightAligned(rcMarker, style.font.get(), rcMarker.top + vs.maxAscent,
++					sNumber, style.fore, style.back, vs.marginNumberPadding);
+ 			} else if (FlagSet(vs.wrap.visualFlags, WrapVisualFlag::Margin)) {
+ 				PRectangle rcWrapMarker = rcMarker;
+ 				rcWrapMarker.right -= wrapMarkerPaddingRight;
+--- a/src/Platform.h
++++ b/src/Platform.h
+@@ -252,6 +252,11 @@
+ 	virtual std::unique_ptr<IScreenLineLayout> Layout(const IScreenLine *screenLine) = 0;
+ 
+ 	virtual void DrawTextNoClip(PRectangle rc, const Font *font_, XYPOSITION ybase, std::string_view text, ColourRGBA fore, ColourRGBA back) = 0;
++	virtual void DrawTextRightAligned(PRectangle rc, const Font *font, XYPOSITION ybase, std::string_view text,
++			ColourRGBA fore, ColourRGBA back, XYPOSITION padding) {
++		rc.left = rc.right - WidthText(font, text) - padding;
++		DrawTextNoClip(rc, font, ybase, text, fore, back);
++	}
+ 	virtual void DrawTextClipped(PRectangle rc, const Font *font_, XYPOSITION ybase, std::string_view text, ColourRGBA fore, ColourRGBA back) = 0;
+ 	virtual void DrawTextTransparent(PRectangle rc, const Font *font_, XYPOSITION ybase, std::string_view text, ColourRGBA fore) = 0;
+ 	virtual void MeasureWidths(const Font *font_, std::string_view text, XYPOSITION *positions) = 0;
