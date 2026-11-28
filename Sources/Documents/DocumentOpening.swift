@@ -90,6 +90,7 @@ enum EncodingChoice {
 /// the stock controller cannot do there. Create it before anything touches
 /// `NSDocumentController.shared`.
 final class TextDocumentController: NSDocumentController {
+    var largeOpens: [URL: LargeFileOpening] = [:]
     var willReviewOpenDocuments: (() -> Void)?
     var didReviewOpenDocuments: ((Bool) -> Void)?
     var didRegisterDocument: (() -> Void)?
@@ -219,6 +220,7 @@ final class TextDocumentController: NSDocumentController {
             return
         }
         let delivery = OpenDelivery(self, url: url, display: displayDocument, completion: completionHandler)
+        if beginLargeOpen(url, display: displayDocument, completion: delivery.receive) { return }
         super.openDocument(withContentsOf: url, display: displayDocument) { document, alreadyOpen, error in
             delivery.receive(document, alreadyOpen, error)
         }
