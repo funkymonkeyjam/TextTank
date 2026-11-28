@@ -117,7 +117,9 @@ import NativeSearch
             editor.displayIfNeeded()
         }
         var eventNumber = 0
-        func click(_ location: NSPoint, draggingTo end: NSPoint? = nil) throws {
+        @discardableResult func click(_ location: NSPoint, draggingTo end: NSPoint? = nil) throws -> (
+            down: NSEvent, up: NSEvent
+        ) {
             eventNumber += 1
             func mouse(_ type: NSEvent.EventType, _ point: NSPoint) throws -> NSEvent {
                 try requireValue(
@@ -143,6 +145,7 @@ import NativeSearch
             {
                 NSApp.sendEvent(owned)
             }
+            return (down, up)
         }
         func settle() { RunLoop.main.run(until: Date(timeIntervalSinceNow: NSEvent.doubleClickInterval + 0.08)) }
         prepare()
@@ -153,17 +156,50 @@ import NativeSearch
                 && border.hitTest(border.convert(edge, from: nil)) === border,
             "final glyph right half under native resize frame")
         try click(edge)
-        settle()
+        NativeWindowEvents.wait("the deferred stationary frame click is delivered") {
+            editor.selectionCaret == byteAfter
+        }
         check(
             editor.selectionRanges.first?.caret == byteAfter, "stationary frame click places caret after final period")
         prepare()
         let left = point(0.22)
+        check(
+            editor.characterByte(atWindowPoint: left, inTextView: view) == byteAfter - 1,
+            "the left-half click starts on the displayed final period")
         try click(left)
         settle()
         check(
             editor.selectionRanges.first?.caret == byteAfter - 1,
             "left half places caret before final period: caret \(String(describing: editor.selectionRanges.first?.caret)), anchor \(editor.selectionAnchor), expected \(byteAfter - 1)"
         )
+        // Two distinct single clicks can be delivered together after the main loop was busy.
+        // The second click belongs to the glyph where it was displayed before the first
+        // click's deferred caret scrolling has run.
+        prepare()
+        let secondLeft = point(0.22)
+        let earlier = try click(point(0.78))
+        let later = try click(secondLeft)
+        settle()
+        check(
+            editor.selectionAnchor == byteAfter - 1 && editor.selectionCaret == byteAfter - 1,
+            "a second single click places the caret on the displayed left half while a frame click is pending")
+        // AppKit can forward the very same down and up after the frame fallback and a newer press.
+        // Exercise this ordering even on a Mac where the frame recognizer consumes the pair.
+        _ = editor.setSelectionAnchor(2, caret: 2)
+        let beforeDuplicate = editor.horizontalScrollOffset
+        view.mouseDown(with: earlier.down)
+        view.mouseUp(with: earlier.up)
+        check(
+            editor.selectionAnchor == 2 && editor.selectionCaret == 2
+                && editor.horizontalScrollOffset == beforeDuplicate,
+            "delayed native delivery of a completed frame gesture preserves a newer selection and scroll position")
+        // The later click reached the native view first. A fallback for the same pair
+        // must also leave the newer selection alone in this delivery order.
+        editor.completeFrameClick(down: later.down, up: later.up, in: view)
+        check(
+            editor.selectionAnchor == 2 && editor.selectionCaret == 2
+                && editor.horizontalScrollOffset == beforeDuplicate,
+            "frame fallback after native delivery preserves the newer selection and scroll position")
         prepare()
         let dragOrigin = point(0.78), originalFrame = window.frame
         try click(dragOrigin, draggingTo: NSPoint(x: dragOrigin.x - 32, y: dragOrigin.y))

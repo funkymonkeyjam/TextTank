@@ -206,7 +206,35 @@ static char TTPairCloser(NSString *text) {
         default: return 0;
     }
 }
-@interface TTContentView : SCIContentView
+// The frame recognizer can deliver the original single click to the content view after
+// the workspace completed it, even after a later press. Keep only scalar event identities.
+struct TTMouseEventStamp {
+    NSInteger windowNumber = 0;
+    NSInteger eventNumber = 0;
+    NSTimeInterval timestamp = 0;
+    bool covers(NSEvent *event) const {
+        return windowNumber != 0 && windowNumber == event.windowNumber &&
+            (event.timestamp < timestamp || (event.timestamp == timestamp && event.eventNumber == eventNumber));
+    }
+    void record(NSEvent *event) {
+        if (!covers(event)) *this = {event.windowNumber, event.eventNumber, event.timestamp};
+    }
+};
+
+struct TTFrameMousePhase {
+    TTMouseEventStamp native, completed;
+    bool accept(NSEvent *event, bool fallback) {
+        if (event.clickCount != 1 || event.timestamp <= 0) return true;
+        const bool deliver = !completed.covers(event) && !(fallback && native.covers(event));
+        if (fallback) completed.record(event); else native.record(event);
+        return deliver;
+    }
+};
+
+@interface TTContentView : SCIContentView {
+    TTFrameMousePhase _frameDown, _frameUp;
+}
+- (void)completeFrameDown:(NSEvent *)down up:(NSEvent *)up;
 @property(nonatomic, weak) TTEditor *editor;
 @property(nonatomic, copy) NSString *directPairKey;
 @end
@@ -299,16 +327,21 @@ static char TTPairCloser(NSString *text) {
     [NSMenu popUpContextMenu:menu withEvent:event forView:self];
     return YES;
 }
-// super always runs, so every Scintilla mouse behaviour is kept; a click that changes nothing
-// (the caret's own position, a window-activating click) leaves a recording alone.
-- (void)mouseDown:(NSEvent *)event {
-    TTAroundUnrecordedInteraction(^{ [super mouseDown:event]; });
+// Deliver each phase through Scintilla's ordinary selection and macro handling.
+- (void)deliverMouseDown:(NSEvent *)event fallback:(BOOL)fallback {
+    if (_frameDown.accept(event, fallback)) TTAroundUnrecordedInteraction(^{ [super mouseDown:event]; });
 }
+- (void)mouseDown:(NSEvent *)event { [self deliverMouseDown:event fallback:NO]; }
 - (void)mouseDragged:(NSEvent *)event {
     TTAroundUnrecordedInteraction(^{ [super mouseDragged:event]; });
 }
-- (void)mouseUp:(NSEvent *)event {
-    TTAroundUnrecordedInteraction(^{ [super mouseUp:event]; });
+- (void)deliverMouseUp:(NSEvent *)event fallback:(BOOL)fallback {
+    if (_frameUp.accept(event, fallback)) TTAroundUnrecordedInteraction(^{ [super mouseUp:event]; });
+}
+- (void)mouseUp:(NSEvent *)event { [self deliverMouseUp:event fallback:NO]; }
+- (void)completeFrameDown:(NSEvent *)down up:(NSEvent *)up {
+    [self deliverMouseDown:down fallback:YES];
+    [self deliverMouseUp:up fallback:YES];
 }
 // A file dragged from Finder opens as a document, as it does when dropped on the Dock icon. The
 // engine would accept the drop and then do nothing with it. Dragged text is still the engine's.
@@ -1768,6 +1801,13 @@ static constexpr int TTNamedHistoryBase = 0x54540000;
     if (byte < 0 || byte >= [_engine message:SCI_GETLENGTH]) return NSNotFound;
     const sptr_t ch = [_engine message:SCI_GETCHARAT wParam:byte];
     return ch == '\r' || ch == '\n' ? NSNotFound : byte;
+}
+- (void)completeFrameClickWithDown:(NSEvent *)down up:(NSEvent *)up inTextView:(NSView *)view {
+    [self assertThread];
+    if (view == _engine.content && [view isKindOfClass:TTContentView.class] &&
+        self.window && down.window == self.window && up.window == self.window) {
+        [(TTContentView *)view completeFrameDown:down up:up];
+    }
 }
 - (NSInteger)horizontalScrollOffset { [self assertThread]; return [_engine message:SCI_GETXOFFSET]; }
 - (void)setHorizontalScrollOffset:(NSInteger)offset {
