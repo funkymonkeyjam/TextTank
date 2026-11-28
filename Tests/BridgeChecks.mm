@@ -570,9 +570,21 @@ static void longLineCellChecks() {
             [editor setSelectionAnchor:position caret:position + 8];
             editor.horizontalScrollOffset = MAX(0, offset - 60);
             NSRect rect = view.content.visibleRect;
-            rect.size = NSMakeSize(MIN(rect.size.width, 360), MIN(rect.size.height, 32));
+            rect.size.height = MIN(rect.size.height, 32);
             NSBitmapImageRep *rep = [view.content bitmapImageRepForCachingDisplayInRect:rect];
             [view.content cacheDisplayInRect:rect toBitmapImageRep:rep];
+            const sptr_t x = [view message:SCI_POINTXFROMPOSITION wParam:0 lParam:position];
+            check(x >= 0 && x < NSWidth(rect), "the selected long-line byte is inside the captured viewport");
+            const NSInteger stride = rep.bitsPerPixel / 8;
+            BOOL ink = NO;
+            if (stride >= 3) {
+                for (NSInteger y = 0; y < rep.pixelsHigh && !ink; ++y) {
+                    const unsigned char *row = rep.bitmapData + y * rep.bytesPerRow;
+                    for (NSInteger xPixel = 1; xPixel < rep.pixelsWide && !ink; ++xPixel)
+                        ink = memcmp(row, row + xPixel * stride, stride) != 0;
+                }
+            }
+            check(ink, "the sampled long-line row contains nonuniform pixels");
             return [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
         };
         NSData *actual = image(candidate);
