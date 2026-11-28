@@ -61,6 +61,8 @@
 }
 @end
 
+extern "C" unsigned TTCountRulerLayouts(CFStringRef label, void (^paint)(void));
+
 static void gutterScrollingChecks() {
     TTEditor *editor = [[TTEditor alloc] initWithFrame:NSMakeRect(0, 0, 480, 240)];
     NSWindow *window = [[NSWindow alloc] initWithContentRect:editor.frame styleMask:NSWindowStyleMaskBorderless
@@ -80,6 +82,16 @@ static void gutterScrollingChecks() {
         return [engine message:SCI_GETFIRSTVISIBLELINE] == top;
     };
     check(scrollTo(0) && NSHeight(filler.bounds) > 0, "scroll fixture has a visible ruler at the start of a long document");
+    NSRulerView *ruler = engine.scrollView.verticalRulerView;
+    NSBitmapImageRep *bitmap = [ruler bitmapImageRepForCachingDisplayInRect:ruler.bounds];
+    require(bitmap != nil, "line-number fixture has an offscreen drawing destination");
+    [NSGraphicsContext saveGraphicsState];
+    NSGraphicsContext.currentContext = [NSGraphicsContext graphicsContextWithBitmapImageRep:bitmap];
+    unsigned layouts = TTCountRulerLayouts(CFSTR("3"), ^{
+        [ruler drawHashMarksAndLabelsInRect:ruler.bounds];
+    });
+    [NSGraphicsContext restoreGraphicsState];
+    check(layouts == 1, "one native ruler paint shapes each visible number once for measurement and drawing");
     check(scrollTo(20) && observer.requests == 0, "scrolling inside the document leaves the blank number extension clean");
     check(scrollTo(199) && observer.requests > 0, "scrolling into the final rows repaints the newly visible filler numbers");
     check(scrollTo(20) && observer.requests > 0, "scrolling away from the end clears the old filler numbers");

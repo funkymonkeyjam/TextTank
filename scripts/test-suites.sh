@@ -19,7 +19,8 @@ suite_build "automation-checks" swiftc "${SWIFT_BASE[@]}" -o build/tests/automat
 suite_run automation-checks harness/logs/automation-checks.log build/tests/automation-checks
 suite_build "reminder-checks" swiftc "${SWIFT_BASE[@]}" -o build/tests/reminder-checks "$SUITE_SUPPORT" Tests/ReminderChecks.swift
 suite_run reminder-checks harness/logs/reminder-checks.log build/tests/reminder-checks
-suite_build "bridge-checks" clang++ "${CXX_BASE[@]}" -I Tests/Support -I Sources/EditorBridge -I Vendor/scintilla/cocoa -I Vendor/scintilla/include -I Vendor/lexilla/include -F "$VENDOR_BUILD" -framework Scintilla -framework Cocoa -Xlinker "$NATIVE_BRIDGE_LIBRARY" -Xlinker "$NATIVE_SEARCH_LIBRARY" Tests/BridgeChecks.mm -Wl,-rpath,"$VENDOR_BUILD" -o build/tests/bridge-checks
+suite_build "bridge-checks" clang++ "${CXX_BASE[@]}" -dynamiclib Tests/Support/RulerLayoutProbe.mm -framework CoreText -framework CoreFoundation -install_name @loader_path/ruler-layout-probe.dylib -o build/tests/ruler-layout-probe.dylib
+suite_build "bridge-checks" clang++ "${CXX_BASE[@]}" -I Tests/Support -I Sources/EditorBridge -I Vendor/scintilla/cocoa -I Vendor/scintilla/include -I Vendor/lexilla/include -F "$VENDOR_BUILD" -framework Scintilla -framework Cocoa -Xlinker "$NATIVE_BRIDGE_LIBRARY" -Xlinker "$NATIVE_SEARCH_LIBRARY" Tests/BridgeChecks.mm build/tests/ruler-layout-probe.dylib -Wl,-rpath,"$VENDOR_BUILD" -o build/tests/bridge-checks
 suite_run bridge-checks harness/logs/bridge-checks.log build/tests/bridge-checks
 
 suite_build "module-contract-checks" swiftc "${SWIFT_BASE[@]}" "$SUITE_SUPPORT" Tests/ModuleContractChecks.swift -o build/tests/module-contract-checks
