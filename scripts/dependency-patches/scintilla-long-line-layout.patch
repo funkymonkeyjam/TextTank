@@ -240,19 +240,20 @@
  
 --- a/src/ViewStyle.cxx
 +++ b/src/ViewStyle.cxx
-@@ -84,7 +84,10 @@
+@@ -84,7 +84,11 @@
  	measurements.monospaceCharacterWidth = measurements.aveCharWidth;
  	measurements.spaceWidth = surface.WidthText(font.get(), " ");
  
 -	if (fs.checkMonospaced) {
 +	// Test the actual zoomed face before allowing uniform positions on a long Menlo line.
-+	const bool checkLongLine = std::strcmp(fs.fontName, "Menlo") == 0;
++	const std::string_view face(fs.fontName);
++	const bool checkLongLine = face == "Menlo" || face == "Menlo-Regular";
 +	measurements.longLineASCIIAdvance = 0;
 +	if (fs.checkMonospaced || checkLongLine) {
  		// "Ay" is normally strongly kerned and "fi" may be a ligature
  		constexpr std::string_view allASCIIGraphic("Ayfi"
  		// python: ''.join(chr(ch) for ch in range(32, 127))
-@@ -97,7 +100,9 @@
+@@ -97,7 +101,9 @@
  		const XYPOSITION variance = maxWidth - minWidth;
  		constexpr XYPOSITION monospaceWidthEpsilon = 0.000001;	// May need tweaking if monospace fonts vary more
  		const XYPOSITION scaledVariance = monospaceWidthEpsilon * minWidth;

@@ -67,12 +67,12 @@
     {
       "dependency": "scintilla",
       "path": "scripts/dependency-patches/scintilla-long-line-layout.patch",
-      "sha256": "50e084cb3494372bfbc4cf544916638245a742a161ab2b406e04cbaba113a9e8",
+      "sha256": "78b0c7eec852bbb76b88d5aebee3e6cbb946fe72c4b176b7fd616d693dfeb8f6",
       "files": {
         "src/EditView.cxx": "62a80016378ae233aec30d665b4997f5e5e48bfc987272c87e0738b0e4471c06",
         "src/PositionCache.h": "9de36e76accdc6f36b8e6bc2d7a434548fbf472a4f0839c8b122f46758495c9a",
         "src/Style.h": "c9ac48e8d829dcdd317f02dd83d5b267426102dd43484e19366fa1002cd26893",
-        "src/ViewStyle.cxx": "b7a84067e82c11ce512fc841b74d6cb1cd8db90cc3afb5347e92e9aefe345a89"
+        "src/ViewStyle.cxx": "0e2a77ca1994e417e50cf67ce806cf153e48d4d7505af40d10f5045a2f3e0300"
       }
     }
   ],
