@@ -204,6 +204,55 @@ import Darwin
             "empty transformed output leaves the selected range and clipboard intact")
     }
 
+    /// File > Open must leave the workspace available to cancel before it publishes a large file.
+    private static func cancelLargeOpen(root: URL) throws {
+        let controller = NSDocumentController.shared
+        let center = StatusOperationCenter.shared
+        let previousDelay = center.revealDelay
+        center.revealDelay = 0
+        defer { center.revealDelay = previousDelay }
+        let url = root.appendingPathComponent("large-open-progress.txt")
+        var block = Data(repeating: 65, count: 1024 * 1024)
+        for index in stride(from: 79, to: block.count, by: 80) { block[index] = 10 }
+        try block.write(to: url)
+        let handle = try FileHandle(forWritingTo: url)
+        do {
+            try handle.seekToEnd()
+            for _ in 1..<64 { try handle.write(contentsOf: block) }
+            try handle.close()
+        } catch {
+            try? handle.close()
+            throw error
+        }
+        var requested = false
+        var delivered = false
+        var outcome: Error?
+        var opened: NSDocument?
+        let observer = NotificationCenter.default.addObserver(
+            forName: StatusOperationCenter.didChange, object: center, queue: nil
+        ) { _ in
+            MainActor.assumeIsolated {
+                guard !requested, !delivered, let operation = center.operation(for: []) else { return }
+                requested = true
+                // The user's next input must be able to run between showing progress and finishing the open.
+                DispatchQueue.main.async { center.cancel(operation.id) }
+            }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        controller.openDocument(withContentsOf: url, display: true) { document, _, error in
+            opened = document
+            outcome = error
+            delivered = true
+        }
+        guard spinUntil("large open completes or reports cancellation", { delivered }) else { return }
+        check(requested, "a displayed large open exposes a cancellable workspace status operation")
+        check(
+            (outcome as? CocoaError)?.code == .userCancelled && opened == nil && controller.document(for: url) == nil,
+            "cancelling a large open completes as cancelled without publishing a document")
+        check(center.operations.isEmpty, "a completed large open releases its progress")
+        opened?.close()
+    }
+
     static func run(root: URL) throws {
         try pasteThroughChecks()
         let priorDelegate = NSApp.delegate, priorServices = EditorServices.current,
@@ -222,6 +271,7 @@ import Darwin
             NSApp.delegate = priorDelegate
             front?.activate(options: [.activateAllWindows])
         }
+        try cancelLargeOpen(root: root)
         func reset() {
             commands.isTerminating = true
             NSDocumentController.shared.documents.forEach { $0.close() }
