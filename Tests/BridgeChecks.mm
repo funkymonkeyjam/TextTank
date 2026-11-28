@@ -1385,6 +1385,19 @@ int main(int argc, char **argv) {
         check([sv message:SCI_GETSCROLLWIDTHTRACKING]==1 && range()<=0, "an empty document has no horizontal scroll range");
         ed.text=@"short\nlines\n"; paint();
         check(range()<=0, "a document narrower than its view has no horizontal scroll range");
+        // Scintilla tracks the natural width even when Cocoa has no horizontal distance to scroll.
+        const CGFloat clipWidth = NSWidth(sv.scrollView.contentView.bounds);
+        require(clipWidth > 160, "unwrapped typing fixture has room to grow inside its viewport");
+        [sv message:SCI_SETSCROLLWIDTH wParam:80];
+        const CGFloat narrowWidth = NSWidth(sv.content.frame);
+        [sv message:SCI_SETSCROLLWIDTH wParam:160];
+        check([sv message:SCI_GETSCROLLWIDTH] == 160 && narrowWidth == clipWidth
+              && NSWidth(sv.content.frame) == narrowWidth && sv.scrollView.hasHorizontalScroller,
+              "growing a short unwrapped line preserves tracking without resizing the native text view");
+        [sv message:SCI_SETSCROLLWIDTH wParam:(uptr_t)ceil(clipWidth + 80)];
+        check(range() >= 80, "the native horizontal range grows as soon as a line exceeds the viewport");
+        [sv message:SCI_SETSCROLLWIDTH wParam:160];
+        check(range() == 0, "a tracked width back inside the viewport leaves no blank horizontal scroll range");
         ed.horizontalScrollOffset=300; paint();
         check(ed.horizontalScrollOffset==0, "a document with nothing to scroll sideways refuses a horizontal offset");
         NSString *wide=[@"" stringByPaddingToLength:4000 withString:@"0123456789" startingAtIndex:0];
