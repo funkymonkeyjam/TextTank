@@ -33,7 +33,7 @@ static void within(double measured,double budget,NSString *what,const char *unit
 // The editor must lay out the new caret and paint real text, even after a one-byte edit
 // invalidates a very long line. Loading the bytes alone does not exercise either path.
 static void checkLongLineInteraction(TTEditor *editor, NSString *original) {
-    NSFont *font = [NSFont fontWithName:@"Menlo" size:editor.basePointSize];
+    NSFont *font = [NSFont fontWithName:@"Menlo" size:14];
     check(font && [editor setBaseFontName:font.fontName size:font.pointSize],
           "long-line fixture applies the resolved editor settings face");
     editor.wrap = NO;
