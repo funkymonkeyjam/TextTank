@@ -1166,7 +1166,10 @@ import EditorBridge
             let prepared = target.prepareForDragOperation(dragInfo)
             let accepted = target.performDragOperation(dragInfo)
             target.concludeDragOperation(dragInfo)
-            target.draggingEnded(dragInfo)
+            // AppKit sends the optional end notification only to destinations that implement it.
+            if target.responds(to: #selector(NSDraggingDestination.draggingEnded(_:))) {
+                target.draggingEnded(dragInfo)
+            }
             check(
                 operation == .copy && prepared && accepted,
                 "the native drop destination opens a file from " + NSStringFromClass(type(of: hit)))
