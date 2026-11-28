@@ -204,6 +204,127 @@ import Darwin
             "empty transformed output leaves the selected range and clipboard intact")
     }
 
+    /// File > Open must leave the workspace available to cancel before it publishes a large file.
+    private static func cancelLargeOpen(root: URL) throws {
+        let controller = NSDocumentController.shared
+        let center = StatusOperationCenter.shared
+        let previousDelay = center.revealDelay
+        center.revealDelay = 0
+        defer { center.revealDelay = previousDelay }
+        let url = root.appendingPathComponent("large-open-progress.txt")
+        var block = Data(repeating: 65, count: 1024 * 1024)
+        for index in stride(from: 79, to: block.count, by: 80) { block[index] = 10 }
+        try block.write(to: url)
+        let handle = try FileHandle(forWritingTo: url)
+        do {
+            try handle.seekToEnd()
+            for _ in 1..<64 { try handle.write(contentsOf: block) }
+            try handle.close()
+        } catch {
+            try? handle.close()
+            throw error
+        }
+        var requested = false
+        var delivered = false
+        var outcome: Error?
+        var opened: NSDocument?
+        let observer = NotificationCenter.default.addObserver(
+            forName: StatusOperationCenter.didChange, object: center, queue: nil
+        ) { _ in
+            MainActor.assumeIsolated {
+                guard !requested, !delivered, let operation = center.operation(for: []) else { return }
+                requested = true
+                // The user's next input must be able to run between showing progress and finishing the open.
+                DispatchQueue.main.async { center.cancel(operation.id) }
+            }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        controller.openDocument(withContentsOf: url, display: true) { document, _, error in
+            opened = document
+            outcome = error
+            delivered = true
+        }
+        let panel = NSApp.windows.compactMap { $0 as? NSPanel }.first {
+            $0.isVisible && $0.title.contains(url.lastPathComponent)
+        }
+        let controls = panel?.contentView.map(DocumentChecks.descendants) ?? []
+        let cancel = controls.compactMap { $0 as? NSButton }.first { $0.keyEquivalent == "\u{1b}" }
+        check(
+            panel != nil && NSApp.modalWindow == nil && cancel?.accessibilityLabel() == "Cancel opening the document"
+                && controls.contains { $0 is NSProgressIndicator },
+            "Finder open without an editor presents modeless named progress and keyboard Cancel")
+        guard spinUntil("large open completes or reports cancellation", { delivered }) else { return }
+        check(requested, "a displayed large open exposes a cancellable workspace status operation")
+        check(
+            (outcome as? CocoaError)?.code == .userCancelled && opened == nil && controller.document(for: url) == nil,
+            "cancelling a large open completes as cancelled without publishing a document")
+        check(center.operations.isEmpty, "a completed large open releases its progress")
+        opened?.close()
+        check(panel?.isVisible == false, "cancelling dismisses the first-window progress panel")
+        NotificationCenter.default.removeObserver(observer)
+
+        let neighbor = DocumentFactory.makeUntitled()
+        neighbor.editor.replaceSelection("kept draft")
+        defer { neighbor.close() }
+        var replies: [(NSDocument?, Bool, Error?)] = []
+        for _ in 0..<2 {
+            controller.openDocument(withContentsOf: url, display: true) { replies.append(($0, $1, $2)) }
+        }
+        check(
+            center.operation(for: [neighbor.editor]) != nil
+                && !NSApp.windows.contains {
+                    $0 is NSPanel && $0.isVisible && $0.title.contains(url.lastPathComponent)
+                },
+            "an existing editor uses the status row for overlapping large opens")
+        guard spinUntil(timeout: 30, "both displayed opens complete", { replies.count == 2 }),
+            let doc = replies[0].0 as? TextDocument
+        else {
+            check(false, "large file was published")
+            return
+        }
+        defer { doc.close() }
+        check(
+            replies[0].2 == nil && replies[1].2 == nil && !replies[0].1 && replies[1].1
+                && replies[1].0 === doc && controller.document(for: url) === doc,
+            "two concurrent opens publish one native document and report which request already had it")
+        let expected = try WorkspaceStore.fingerprint(ofRegularFileAt: url, maximumBytes: Int.max)
+        check(
+            doc.originalDiskFingerprint == expected
+                && doc.editor.checkedUTF8Data.map { WorkspaceStore.fingerprint($0) } == expected
+                && !doc.isDocumentEdited && doc.fileModificationDate != nil
+                && NSFileCoordinator.filePresenters.contains { ($0 as AnyObject) === doc },
+            "the fully read bytes, modification date and native file presenter survive opening")
+        check(
+            neighbor.editor.text == "kept draft" && neighbor.isDocumentEdited && center.operations.isEmpty,
+            "opening a large file preserves an unrelated unsaved document and clears progress")
+
+        // The large-file path also preserves the ordinary strict UTF-16 codec and its disk format.
+        let utf16URL = root.appendingPathComponent("large-open-utf16.txt")
+        var encoded = Data([0xFF, 0xFE])
+        var words = Data(repeating: 0, count: 1024 * 1024)
+        for position in stride(from: 0, to: words.count, by: 2) {
+            words[position] = position % 256 == 254 ? 10 : 65
+        }
+        for _ in 0..<32 { encoded.append(words) }
+        try encoded.write(to: utf16URL)
+        var encodedReply: (NSDocument?, Error?)?
+        controller.openDocument(withContentsOf: utf16URL, display: true) { document, _, error in
+            encodedReply = (document, error)
+        }
+        guard spinUntil(timeout: 45, "large UTF-16 open completes", { encodedReply != nil }),
+            let decoded = encodedReply?.0 as? TextDocument
+        else {
+            check(false, "the normal UTF-16 opening path publishes its document")
+            return
+        }
+        defer { decoded.close() }
+        check(
+            encodedReply?.1 == nil && decoded.format == FileFormat(encoding: .utf16LE, bom: true)
+                && decoded.editor.byteLength == 16 * 1024 * 1024 && !decoded.isDocumentEdited
+                && decoded.originalDiskFingerprint == WorkspaceStore.fingerprint(encoded),
+            "large UTF-16 opening retains the BOM, encoding, decoded length and original-byte fingerprint")
+    }
+
     static func run(root: URL) throws {
         try pasteThroughChecks()
         let priorDelegate = NSApp.delegate, priorServices = EditorServices.current,
@@ -222,6 +343,7 @@ import Darwin
             NSApp.delegate = priorDelegate
             front?.activate(options: [.activateAllWindows])
         }
+        try cancelLargeOpen(root: root)
         func reset() {
             commands.isTerminating = true
             NSDocumentController.shared.documents.forEach { $0.close() }

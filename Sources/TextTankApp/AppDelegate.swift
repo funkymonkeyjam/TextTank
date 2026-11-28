@@ -487,7 +487,10 @@ import AppKit
             }
         }
         review(originals)
-        if createUntitledIfEmpty, NSDocumentController.shared.documents.isEmpty {
+        let controller = NSDocumentController.shared
+        if createUntitledIfEmpty, controller.documents.isEmpty,
+            (controller as? TextDocumentController)?.largeOpens.isEmpty != false
+        {
             if welcomeIfEmpty {
                 do { try openHelpDocument(welcome: true) } catch {
                     newDocument(nil)

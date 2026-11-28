@@ -921,6 +921,15 @@ import UniformTypeIdentifiers
         try MainActor.assumeIsolated { try readURLOnMain(from: url, ofType: typeName) }
     }
     private func readURLOnMain(from url: URL, ofType typeName: String) throws {
+        if let staged = Self.preparedForNativeOpen,
+            staged.requestURL == url.standardizedFileURL || staged.diskURL == url.standardizedFileURL
+        {
+            guard staged.diskURL == Self.canonicalDiskURL(url), diskURL == nil || diskURL == staged.diskURL
+            else { throw CocoaError(.fileReadUnknown) }
+            Self.preparedForNativeOpen = nil
+            try adoptPreparedOpen(staged.content)
+            return
+        }
         readingURL = url
         defer { readingURL = nil }
         // AppKit reads the file itself. Settled metadata that is the same on both sides of
@@ -973,6 +982,102 @@ import UniformTypeIdentifiers
         }
     }
 
+    /// The worker owns the unattached Scintilla loader until this completed transfer to the main actor.
+    struct PreparedOpen: @unchecked Sendable {
+        let loader: TTInitialUTF8Load
+        let ending: LineEnding
+        let languageSample: String
+        let format: FileFormat
+        let sample: FileSample
+    }
+
+    /// Only visible during the synchronous native makeDocument call on main. AppKit retains
+    /// responsibility for fileURL, the native file type, modification date and file access.
+    private static var preparedForNativeOpen: (requestURL: URL, diskURL: URL, content: PreparedOpen)?
+    static func withPreparedOpen(
+        _ prepared: PreparedOpen, at url: URL, diskURL: URL,
+        makeDocument: () throws -> NSDocument
+    ) throws -> NSDocument {
+        let prior = preparedForNativeOpen
+        preparedForNativeOpen = (url.standardizedFileURL, diskURL, prepared)
+        defer { preparedForNativeOpen = prior }
+        let document = try makeDocument()
+        guard preparedForNativeOpen == nil, let text = document as? TextDocument,
+            text.diskURL == diskURL, canonicalDiskURL(url) == diskURL
+        else { throw CocoaError(.fileReadUnknown) }
+        return document
+    }
+
+    @MainActor private func adoptPreparedOpen(_ prepared: PreparedOpen) throws {
+        guard !opened, !languageResolved, presentations.isEmpty, editor.byteLength == 0, editor.revision == 0,
+            !editor.readOnly
+        else { throw CocoaError(.userCancelled) }
+        try applyFile(
+            .stream(prepared.loader, prepared.ending, prepared.languageSample),
+            format: prepared.format, baseline: prepared.sample, explicitEncoding: nil)
+    }
+
+    /// Called inside a coordinated read. Only construction of the loader's private NSView needs AppKit.
+    nonisolated static func prepareLargeOpen(
+        _ url: URL, type: String, signature: FileSignature,
+        progress: Progress
+    ) throws -> PreparedOpen {
+        func makeLoader(_ count: UInt) -> TTInitialUTF8Load? {
+            DispatchQueue.main.sync { TTInitialUTF8Load(byteCount: count) }
+        }
+        func read(_ consume: (Data) throws -> Void) throws -> FileSample {
+            var total = 0
+            return try WorkspaceStore.readChunks(
+                of: url, maximumBytes: Int.max, matching: signature,
+                isCancelled: { progress.isCancelled }
+            ) { bytes in
+                try autoreleasepool { try consume(Data(bytes)) }
+                total += bytes.count
+                progress.completedUnitCount = Int64(total)
+            }
+        }
+        let stream = InitialFileStream(capacity: UInt(signature.size), detectsEncoding: true, makeLoader: makeLoader)
+        do {
+            let sample = try read(stream.consume)
+            try stream.finish()
+            guard let loader = stream.loader else { throw CocoaError(.fileReadUnknown) }
+            return PreparedOpen(
+                loader: loader, ending: stream.lineEnding ?? .lf, languageSample: stream.languageSample,
+                format: .init(encoding: .utf8, bom: stream.bom), sample: sample)
+        } catch InitialFileStream.OrdinaryRead.required {
+            // Other encodings use the same strict codec as an ordinary open. Stage its result off main too.
+            var data = Data()
+            let sample = try read { data.append($0) }
+            if progress.isCancelled { throw CancellationError() }
+            let decoded: DecodedFile
+            do {
+                decoded = try FileCodec.decode(data)
+            } catch FileCodecError.unsupportedUTF32 where data.starts(with: [0xFF, 0xFE, 0, 0]) {
+                throw ExplicitEncodingOpener(url: url, typeName: type, encoding: .utf16LE).error()
+            }
+            data = Data()
+            var text = decoded.text
+            let ending = LineEnding.detect(in: text)
+            let language = text.hasPrefix("#!") ? String(text.prefix(513)) : ""
+            let loader = try text.withUTF8 { bytes -> TTInitialUTF8Load in
+                guard let loader = makeLoader(UInt(bytes.count)) else { throw CocoaError(.fileReadUnknown) }
+                var start = 0
+                while start < bytes.count {
+                    if progress.isCancelled { throw CancellationError() }
+                    var end = start + min(bytes.count - start, 1024 * 1024)
+                    while end < bytes.count, bytes[end] & 0xC0 == 0x80 { end -= 1 }
+                    guard let content = TTDocumentUTF8(data: Data(bytes[start..<end])), loader.appendContent(content)
+                    else { throw CocoaError(.fileReadUnknown) }
+                    start = end
+                }
+                return loader
+            }
+            return PreparedOpen(
+                loader: loader, ending: ending, languageSample: language,
+                format: decoded.format, sample: sample)
+        }
+    }
+
     private final class InitialFileStream {
         enum OrdinaryRead: Error { case required }
         private(set) var loader: TTInitialUTF8Load?
@@ -985,7 +1090,12 @@ import UniformTypeIdentifiers
         private(set) var bom = false
         private(set) var lineEnding: LineEnding?
         private(set) var languageSample = ""
-        init(capacity: UInt, detectsEncoding: Bool) {
+        let makeLoader: (UInt) -> TTInitialUTF8Load?
+        init(
+            capacity: UInt, detectsEncoding: Bool,
+            makeLoader: @escaping (UInt) -> TTInitialUTF8Load? = { TTInitialUTF8Load(byteCount: $0) }
+        ) {
+            self.makeLoader = makeLoader
             self.capacity = capacity
             self.detectsEncoding = detectsEncoding
         }
@@ -996,7 +1106,7 @@ import UniformTypeIdentifiers
                 if detectsEncoding, (try? FileCodec.detectedEncoding(pending)) != .utf8 { throw OrdinaryRead.required }
                 bom = pending.starts(with: [0xEF, 0xBB, 0xBF])
                 if bom { pending.removeFirst(3) }
-                loader = TTInitialUTF8Load(byteCount: capacity - (bom ? 3 : 0))
+                loader = makeLoader(capacity - (bom ? 3 : 0))
                 guard loader != nil else { throw CocoaError(.fileReadUnknown) }
                 started = true
             }
